@@ -31,6 +31,7 @@ import {
   buildSilverSpringsCurrentMonthIncomeStatementSnapshot,
   buildSilverSpringsYtdIncomeStatementSnapshot,
 } from "@/lib/reporting/seeds/silver-springs-income-statement-seed";
+import type { FsGroupProjection, FsGroupProjectionRow } from "@/lib/reporting/fs-group-projection";
 
 /** Kind of row in the Statement of Activities table.
  *
@@ -77,7 +78,17 @@ export type StatementOfActivitiesV2RowKind =
   | "capital-intro"
   | "capital-total"
   | "net-combined"
-  | "commentary";
+  | "commentary"
+  // REPORT-PRESENTATION-1 §6-10 (2026-10-05) — FS-Group presentation.
+  // The Board-facing Statement defaults to FS-Group rows (e.g. one
+  // "Membership Dues" row aggregating 54 natural dues accounts). Each
+  // FS-Group row carries a `groupKey` + the aggregated 7-column
+  // numerics; the React surface renders a chevron disclosure control
+  // that reveals the child natural-account rows underneath. The
+  // builder emits BOTH the parent row AND every child row; the UI
+  // filters children by expanded `groupKey` set.
+  | "fs-group"
+  | "fs-group-child";
 
 /** Numeric value cells for any row that ships them. `null` reads
  *  as the em-dash neutral display ("—") at render time. */
@@ -115,6 +126,19 @@ export type StatementOfActivitiesV2Row = {
   /** Optional full-width italic explanatory text. Used by
    *  kind="commentary" and kind="capital-intro" rows. */
   text?: string;
+  // REPORT-PRESENTATION-1 §7-10 — expand/collapse metadata. Only
+  // populated on `fs-group` + `fs-group-child` rows; absent elsewhere.
+  /** FS-Group key this row belongs to (e.g. "IS_MEMBERSHIP_DUES").
+   *  On `fs-group` rows: identifier for the chevron state. On
+   *  `fs-group-child` rows: the parent group to roll up to. */
+  groupKey?: string;
+  /** True when this group has ≥ 1 child account — enables the chevron
+   *  disclosure control. Groups with 0 children (edge case) render
+   *  as plain rows without expand affordance. */
+  isExpandable?: boolean;
+  /** Natural-account number for child rows (e.g. "4000"). Rendered
+   *  as a muted monospace prefix beside the account name. */
+  accountNumber?: string;
 };
 
 export type StatementOfActivitiesV2CfoBullet = {
@@ -1333,6 +1357,344 @@ export const SILVER_SPRINGS_SOA_AUXILIARY_INPUTS: SoAAuxiliaryInputs = {
     },
   },
 };
+
+// =============================================================================
+// REPORT-PRESENTATION-1 (2026-10-05) — FS-Group Statement of Activities
+// =============================================================================
+//
+// Board-facing default: ONE row per FS Group (e.g. "Membership Dues"
+// aggregating 54 natural accounts); the natural-account rows render
+// only when the FS-Group row is expanded in the UI.
+//
+// Parent / child invariant (directive §15):
+//   Σ child.cmActual   === parent.cmActual   (within $0.01)
+//   Σ child.cmBudget   === parent.cmBudget
+//   Σ child.ytdActual  === parent.ytdActual
+//   Σ child.ytdBudget  === parent.ytdBudget
+//
+// Totals + section totals continue to come from the canonical
+// projection — parent/child aggregation is a presentation rollup,
+// not a parallel calculation.
+
+/** Build the Statement of Activities row dataset directly from the
+ *  canonical FS-Group projection. Replaces the per-natural-account
+ *  default rendering with FS-Group rows that expand to natural
+ *  accounts.
+ *
+ *  Period-aware: all period labels come from `ReportingPeriod`. */
+export function buildStatementOfActivitiesFromFsGroupProjection(args: {
+  clubName: string;
+  period: ReportingPeriod;
+  projection: FsGroupProjection;
+}): StatementOfActivitiesV2 {
+  const { projection } = args;
+
+  // -- Operating revenue section --
+  const operatingRows: StatementOfActivitiesV2Row[] = [];
+  operatingRows.push({
+    key: "band-operating-revenue",
+    kind: "section-band",
+    label: "Operating Revenue",
+  });
+  for (const g of projection.operatingRevenue) {
+    operatingRows.push(buildFsGroupRow({ g, isRevenue: true, isCapital: false }));
+    for (const a of g.accounts) {
+      operatingRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: true }));
+    }
+  }
+  // Total Operating Revenue
+  operatingRows.push({
+    key: "total-operating-revenue",
+    kind: "total",
+    label: "Total Operating Revenue",
+    values: {
+      currentBudget: projection.totals.operatingRevenue.cmBudget,
+      currentActual: projection.totals.operatingRevenue.cmActual,
+      currentVariance: projection.totals.operatingRevenue.cmActual - projection.totals.operatingRevenue.cmBudget,
+      ytdBudget: projection.totals.operatingRevenue.ytdBudget,
+      ytdActual: projection.totals.operatingRevenue.ytdActual,
+      ytdVariance: projection.totals.operatingRevenue.ytdActual - projection.totals.operatingRevenue.ytdBudget,
+      variancePct: projection.totals.operatingRevenue.ytdBudget !== 0
+        ? (projection.totals.operatingRevenue.ytdActual - projection.totals.operatingRevenue.ytdBudget) / Math.abs(projection.totals.operatingRevenue.ytdBudget)
+        : null,
+    },
+  });
+
+  // -- Operating expense section (depreciation carved out) --
+  operatingRows.push({
+    key: "band-operating-expense",
+    kind: "section-band",
+    label: "Operating Expenses",
+  });
+  for (const g of projection.operatingExpense) {
+    operatingRows.push(buildFsGroupRow({ g, isRevenue: false, isCapital: false }));
+    for (const a of g.accounts) {
+      operatingRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: false }));
+    }
+  }
+
+  // -- NOI Before Depreciation band --
+  const noiBefore = projection.totals.noiBeforeDep;
+  operatingRows.push({
+    key: "noi-before-dep",
+    kind: "noi-band",
+    label: "Net Operating Income Before Depreciation",
+    values: {
+      currentBudget: noiBefore.cmBudget,
+      currentActual: noiBefore.cmActual,
+      currentVariance: noiBefore.cmActual - noiBefore.cmBudget,
+      ytdBudget: noiBefore.ytdBudget,
+      ytdActual: noiBefore.ytdActual,
+      ytdVariance: noiBefore.ytdActual - noiBefore.ytdBudget,
+      variancePct: noiBefore.ytdBudget !== 0
+        ? (noiBefore.ytdActual - noiBefore.ytdBudget) / Math.abs(noiBefore.ytdBudget)
+        : null,
+    },
+  });
+
+  // -- Depreciation row (expense convention: budget − actual positive = favourable) --
+  const depTotal = projection.totals.depreciation;
+  operatingRows.push({
+    key: "depreciation",
+    kind: "depreciation",
+    label: "Depreciation",
+    values: {
+      currentBudget: -depTotal.cmBudget,
+      currentActual: -depTotal.cmActual,
+      currentVariance: depTotal.cmBudget - depTotal.cmActual,
+      ytdBudget: -depTotal.ytdBudget,
+      ytdActual: -depTotal.ytdActual,
+      ytdVariance: depTotal.ytdBudget - depTotal.ytdActual,
+      variancePct: depTotal.ytdBudget !== 0
+        ? (depTotal.ytdBudget - depTotal.ytdActual) / Math.abs(depTotal.ytdBudget)
+        : null,
+    },
+  });
+
+  // -- NOI After Depreciation --
+  const noiAfterCmActual = noiBefore.cmActual - depTotal.cmActual;
+  const noiAfterCmBudget = noiBefore.cmBudget - depTotal.cmBudget;
+  const noiAfterYtdActual = noiBefore.ytdActual - depTotal.ytdActual;
+  const noiAfterYtdBudget = noiBefore.ytdBudget - depTotal.ytdBudget;
+  operatingRows.push({
+    key: "noi-after-dep",
+    kind: "noi-after",
+    label: "Net Operating Income (Loss) After Depreciation",
+    values: {
+      currentBudget: noiAfterCmBudget,
+      currentActual: noiAfterCmActual,
+      currentVariance: noiAfterCmActual - noiAfterCmBudget,
+      ytdBudget: noiAfterYtdBudget,
+      ytdActual: noiAfterYtdActual,
+      ytdVariance: noiAfterYtdActual - noiAfterYtdBudget,
+      variancePct: noiAfterYtdBudget !== 0
+        ? (noiAfterYtdActual - noiAfterYtdBudget) / Math.abs(noiAfterYtdBudget)
+        : null,
+    },
+  });
+
+  // -- Capital section --
+  const capitalRows: StatementOfActivitiesV2Row[] = [
+    {
+      key: "capital-divider",
+      kind: "capital-divider",
+      label: "Capital Fund & Non-Operating — Below This Line",
+    },
+    {
+      key: "capital-intro",
+      kind: "capital-intro",
+      text:
+        "Initiation fees, capital dues, and investment income are capital governance revenues — not operating income. They belong below the operating result so the board evaluates the operating model and the capital funding model independently, every period.",
+    },
+  ];
+
+  if (projection.capitalRevenue.length > 0) {
+    capitalRows.push({ key: "band-capital-rev", kind: "capital-band", label: "Capital Revenue" });
+    for (const g of projection.capitalRevenue) {
+      capitalRows.push(buildFsGroupRow({ g, isRevenue: true, isCapital: true }));
+      for (const a of g.accounts) {
+        capitalRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: true }));
+      }
+    }
+  }
+  if (projection.capitalExpense.length > 0) {
+    capitalRows.push({ key: "band-capital-exp", kind: "capital-band", label: "Capital Fund Expenses" });
+    for (const g of projection.capitalExpense) {
+      // Capital expense rows render as negative amounts (consistent
+      // with the demo-era SoA convention).
+      const negatedParent: FsGroupProjectionRow = {
+        ...g,
+        cmActual: -g.cmActual,
+        cmBudget: -g.cmBudget,
+        ytdActual: -g.ytdActual,
+        ytdBudget: -g.ytdBudget,
+      };
+      capitalRows.push(buildFsGroupRow({ g: negatedParent, isRevenue: true, isCapital: true }));
+      for (const a of g.accounts) {
+        capitalRows.push(buildFsGroupChildRow({
+          parent: g,
+          acct: { ...a, cmActual: -a.cmActual, cmBudget: -a.cmBudget, ytdActual: -a.ytdActual, ytdBudget: -a.ytdBudget },
+          isRevenue: true,
+        }));
+      }
+    }
+  }
+
+  // Total Capital Fund Activity (Net) — capital revenue minus capital expense.
+  const capRevTot = projection.totals.capitalRevenue;
+  const capExpTot = projection.totals.capitalExpense;
+  const capNetCmActual = capRevTot.cmActual - capExpTot.cmActual;
+  const capNetCmBudget = capRevTot.cmBudget - capExpTot.cmBudget;
+  const capNetYtdActual = capRevTot.ytdActual - capExpTot.ytdActual;
+  const capNetYtdBudget = capRevTot.ytdBudget - capExpTot.ytdBudget;
+  capitalRows.push({
+    key: "total-capital",
+    kind: "capital-total",
+    label: "Total Capital Fund Activity (Net)",
+    values: {
+      currentBudget: capNetCmBudget,
+      currentActual: capNetCmActual,
+      currentVariance: capNetCmActual - capNetCmBudget,
+      ytdBudget: capNetYtdBudget,
+      ytdActual: capNetYtdActual,
+      ytdVariance: capNetYtdActual - capNetYtdBudget,
+      variancePct: capNetYtdBudget !== 0
+        ? (capNetYtdActual - capNetYtdBudget) / Math.abs(capNetYtdBudget)
+        : null,
+    },
+  });
+
+  // Net Income Combined — NOI After Dep + Capital Net.
+  capitalRows.push({
+    key: "net-combined",
+    kind: "net-combined",
+    label: "Net Income (Loss) — Combined",
+    values: {
+      currentBudget: noiAfterCmBudget + capNetCmBudget,
+      currentActual: noiAfterCmActual + capNetCmActual,
+      currentVariance: (noiAfterCmActual + capNetCmActual) - (noiAfterCmBudget + capNetCmBudget),
+      ytdBudget: noiAfterYtdBudget + capNetYtdBudget,
+      ytdActual: noiAfterYtdActual + capNetYtdActual,
+      ytdVariance: (noiAfterYtdActual + capNetYtdActual) - (noiAfterYtdBudget + capNetYtdBudget),
+      variancePct: (noiAfterYtdBudget + capNetYtdBudget) !== 0
+        ? ((noiAfterYtdActual + capNetYtdActual) - (noiAfterYtdBudget + capNetYtdBudget)) / Math.abs(noiAfterYtdBudget + capNetYtdBudget)
+        : null,
+    },
+  });
+
+  // Reactive CFO Commentary — reuse the same generator with inputs
+  // from the FS-Group projection. Payroll + capital-dues data come
+  // from the FS Groups themselves.
+  const payrollRow = projection.operatingExpense.find((g) => g.fsGroupKey === "IS_PAYROLL");
+  const payrollYtdActual = payrollRow?.ytdActual ?? 0;
+  const payrollYtdBudget = payrollRow?.ytdBudget ?? 0;
+  const otherOpexYtdActual = projection.operatingExpense
+    .filter((g) => g.fsGroupKey !== "IS_PAYROLL")
+    .reduce((s, g) => s + g.ytdActual, 0);
+  const otherOpexYtdBudget = projection.operatingExpense
+    .filter((g) => g.fsGroupKey !== "IS_PAYROLL")
+    .reduce((s, g) => s + g.ytdBudget, 0);
+  const capitalDuesActual = projection.capitalRevenue
+    .flatMap((g) => g.accounts)
+    .filter((a) => /capital dues|capital improvement dues/i.test(a.accountName))
+    .reduce((s, a) => s + a.ytdActual, 0);
+  const initiationFeesActual = projection.capitalRevenue
+    .flatMap((g) => g.accounts)
+    .filter((a) => /initiation/i.test(a.accountName))
+    .reduce((s, a) => s + a.ytdActual, 0);
+  const cfo = buildCfoCommentary({
+    noiBudget: noiBefore.ytdBudget,
+    noiActual: noiBefore.ytdActual,
+    noiVariance: noiBefore.ytdActual - noiBefore.ytdBudget,
+    noiVariancePct: noiBefore.ytdBudget !== 0
+      ? (noiBefore.ytdActual - noiBefore.ytdBudget) / Math.abs(noiBefore.ytdBudget)
+      : 0,
+    revenueVariance: projection.totals.operatingRevenue.ytdActual - projection.totals.operatingRevenue.ytdBudget,
+    payrollVariance: payrollYtdBudget - payrollYtdActual,
+    otherOpExpVariance: otherOpexYtdBudget - otherOpexYtdActual,
+    memberRoundsYoyPct: 0,
+    initiationFeesYtd: initiationFeesActual,
+    initiationFeesAnnualForecast: 0,
+    capitalDuesBudget: 0,
+    capitalDuesActual,
+    periodLabel: args.period.periodLabel,
+  });
+
+  return {
+    dataSource: "live",
+    eyebrow: `${args.clubName} · Financial Statement`,
+    title: "Statement of Activities — Two-Fund Format",
+    periodLabel: args.period.statementHeaderLabel,
+    introNote:
+      "Operating revenues and expenses above the NOI line. Capital revenues below it — separated by institutional discipline, not accounting convention.",
+    statementNumber: "Statement 04 of 14",
+    documentChip: "Financial Statement",
+    preparedFor: "Finance Committee",
+    columnHeaders: args.period.columnLabels,
+    operatingRows,
+    capitalRows,
+    cfoCommentary: cfo,
+  };
+}
+
+/** Build a parent FS-Group row (collapsible). The 7-column values are
+ *  the FS-Group aggregates. For revenue groups: variance = actual −
+ *  budget (positive = favourable). For expense groups: variance =
+ *  budget − actual (positive = favourable). */
+function buildFsGroupRow(args: {
+  g: FsGroupProjectionRow;
+  isRevenue: boolean;
+  isCapital: boolean;
+}): StatementOfActivitiesV2Row {
+  const { g, isRevenue } = args;
+  const key = g.fsGroupKey ?? `unassigned-${g.fsGroupName}`;
+  const cmVariance = isRevenue ? (g.cmActual - g.cmBudget) : (g.cmBudget - g.cmActual);
+  const ytdVariance = isRevenue ? (g.ytdActual - g.ytdBudget) : (g.ytdBudget - g.ytdActual);
+  return {
+    key: `fsg-${key}`,
+    kind: "fs-group",
+    label: g.fsGroupName,
+    groupKey: key,
+    isExpandable: g.accounts.length >= 1,
+    values: {
+      currentBudget: g.cmBudget,
+      currentActual: g.cmActual,
+      currentVariance: cmVariance,
+      ytdBudget: g.ytdBudget,
+      ytdActual: g.ytdActual,
+      ytdVariance: ytdVariance,
+      variancePct: g.ytdBudget !== 0 ? ytdVariance / Math.abs(g.ytdBudget) : null,
+    },
+  };
+}
+
+/** Build a child natural-account row (indented under its parent). */
+function buildFsGroupChildRow(args: {
+  parent: FsGroupProjectionRow;
+  acct: FsGroupProjectionRow["accounts"][number];
+  isRevenue: boolean;
+}): StatementOfActivitiesV2Row {
+  const { parent, acct, isRevenue } = args;
+  const key = parent.fsGroupKey ?? `unassigned-${parent.fsGroupName}`;
+  const cmVariance = isRevenue ? (acct.cmActual - acct.cmBudget) : (acct.cmBudget - acct.cmActual);
+  const ytdVariance = isRevenue ? (acct.ytdActual - acct.ytdBudget) : (acct.ytdBudget - acct.ytdActual);
+  return {
+    key: `fsg-${key}-acct-${acct.accountNumber}`,
+    kind: "fs-group-child",
+    label: acct.accountName,
+    accountNumber: acct.accountNumber,
+    groupKey: key,
+    values: {
+      currentBudget: acct.cmBudget,
+      currentActual: acct.cmActual,
+      currentVariance: cmVariance,
+      ytdBudget: acct.ytdBudget,
+      ytdActual: acct.ytdActual,
+      ytdVariance: ytdVariance,
+      variancePct: acct.ytdBudget !== 0 ? ytdVariance / Math.abs(acct.ytdBudget) : null,
+    },
+  };
+}
 
 // =============================================================================
 // Internal row builders

@@ -46,10 +46,12 @@ import {
 } from "@/lib/reporting/stewardship-dashboard-notes";
 import {
   buildSilverSpringsStatementOfActivities,
+  buildStatementOfActivitiesFromFsGroupProjection,
   getStatementOfActivitiesForClub,
   SILVER_SPRINGS_SOA_AUXILIARY_INPUTS,
   type StatementOfActivitiesV2,
 } from "@/lib/reporting/statement-of-activities";
+import { resolveFsGroupProjection } from "@/lib/reporting/fs-group-projection";
 import {
   buildSilverSpringsCapitalFundStatement,
   type CapitalFundStatement,
@@ -2490,14 +2492,33 @@ export async function getMonthlyReportingPackage(
           period: reportingPeriod,
         }));
 
-  const statementOfActivitiesV2 = await getStatementOfActivitiesForClub({
-    clubId: club.id,
-    clubName: club.name,
-    period: reportingPeriod,
-    ledger: productionLedger,
-    auxiliaryInputs: soaAuxiliaryInputs,
-    demoFallback: soaDemoFallback,
-  });
+  // REPORT-PRESENTATION-1 §3-6 (2026-10-05) — live tenants now consume
+  // the canonical FS-Group projection for Section IV, replacing the
+  // per-natural-account default rendering with Board-facing FS-Group
+  // rows (e.g. ONE "Membership Dues" row aggregating 54 member-tier
+  // accounts). Demo tenants (Silver Springs) continue to render the
+  // seeded natural-account layout for historical continuity.
+  let statementOfActivitiesV2: StatementOfActivitiesV2;
+  if (hasRealData) {
+    const fsGroupProjection = await resolveFsGroupProjection({
+      clubId: club.id,
+      period: reportingPeriod,
+    });
+    statementOfActivitiesV2 = buildStatementOfActivitiesFromFsGroupProjection({
+      clubName: club.name,
+      period: reportingPeriod,
+      projection: fsGroupProjection,
+    });
+  } else {
+    statementOfActivitiesV2 = await getStatementOfActivitiesForClub({
+      clubId: club.id,
+      clubName: club.name,
+      period: reportingPeriod,
+      ledger: productionLedger,
+      auxiliaryInputs: soaAuxiliaryInputs,
+      demoFallback: soaDemoFallback,
+    });
+  }
 
   // Stewardship Dashboard (chapter II scorecards + chapter III
   // summary cards). DUAL-READ: prefers live BS + IS snapshots; falls

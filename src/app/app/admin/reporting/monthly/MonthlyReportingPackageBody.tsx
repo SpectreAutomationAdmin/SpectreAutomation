@@ -4485,6 +4485,10 @@ import type {
   StatementOfActivitiesV2Row,
   StatementOfActivitiesV2Values,
 } from "@/lib/reporting/statement-of-activities";
+// REPORT-PRESENTATION-1 §7-10 — Section IV tables are rendered by a
+// client component that owns expand/collapse state for FS-Group rows.
+// The server component still owns the header + CFO Commentary.
+import { StatementOfActivitiesTable } from "./StatementOfActivitiesTable";
 
 /** Render a numeric value cell.
  *  - null  → em-dash "—"
@@ -4845,56 +4849,15 @@ function StatementOfActivitiesPanel({
         </div>
       </header>
 
-      {/* Operating section table — column headers + all operating rows. */}
-      <div
-        data-testid="soa-table-operating"
-        className="mt-6 overflow-hidden rounded-md border border-club-sand/60"
-      >
-        <StatementColumnHeaderRow headers={soa.columnHeaders} />
-        {soa.operatingRows.map((row) => (
-          <StatementRow key={row.key} row={row} isCapitalSection={false} />
-        ))}
-      </div>
-
-      {/* Capital section — divider band + capital subtable with its own column headers. */}
-      <div data-testid="soa-table-capital" className="mt-4">
-        {/* Divider + intro rows render WITHOUT a surrounding card so
-            the pale-blue band reads as a top-of-section heading,
-            matching the Saguaro reference. */}
-        <div
-          className="grid"
-          style={{ gridTemplateColumns: STATEMENT_GRID, columnGap: STATEMENT_GRID_GAP }}
-        >
-          {soa.capitalRows
-            .filter((r) => r.kind === "capital-divider" || r.kind === "capital-intro")
-            .map((row) => (
-              <StatementRow key={row.key} row={row} isCapitalSection={true} />
-            ))}
-        </div>
-        {/* Capital subtable proper — column headers labelled "CAPITAL
-            FUND ACTIVITY" and the remaining rows. */}
-        <div className="mt-3 overflow-hidden rounded-md border border-[#bcd0e2]/70">
-          <div
-            data-testid="soa-capital-column-headers"
-            className="grid items-end px-4 py-2 uppercase tracking-[0.18em] text-[10px] text-[#4a6280] bg-[#d4e0ec]/40 border-b border-[#bcd0e2]/50"
-            style={{ gridTemplateColumns: STATEMENT_GRID, columnGap: STATEMENT_GRID_GAP }}
-          >
-            <span className="text-left">Capital Fund Activity</span>
-            <span className="text-right">{soa.columnHeaders.currentBudget}</span>
-            <span className="text-right">{soa.columnHeaders.currentActual}</span>
-            <span className="text-right">{soa.columnHeaders.currentVariance}</span>
-            <span className="text-right">{soa.columnHeaders.ytdBudget}</span>
-            <span className="text-right">{soa.columnHeaders.ytdActual}</span>
-            <span className="text-right">{soa.columnHeaders.ytdVariance}</span>
-            <span className="text-right">{soa.columnHeaders.variancePct}</span>
-          </div>
-          {soa.capitalRows
-            .filter((r) => r.kind !== "capital-divider" && r.kind !== "capital-intro")
-            .map((row) => (
-              <StatementRow key={row.key} row={row} isCapitalSection={true} />
-            ))}
-        </div>
-      </div>
+      {/* REPORT-PRESENTATION-1 §7-10 — Operating + Capital section
+          tables rendered by a client component that owns the FS-Group
+          expand/collapse state. The server component still owns the
+          header + CFO Commentary (no state needed). */}
+      <StatementOfActivitiesTable
+        operatingRows={soa.operatingRows}
+        capitalRows={soa.capitalRows}
+        columnHeaders={soa.columnHeaders}
+      />
 
       {/* CFO Commentary block — reactive ▶ paragraph bullets sourced
           from buildCfoCommentary in the service. */}
