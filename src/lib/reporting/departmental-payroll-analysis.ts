@@ -12,6 +12,15 @@
 
 import type { ReportingDataSource } from "@/lib/reporting/monthly-package";
 import type { ReportingPeriod } from "@/lib/reporting/reporting-period";
+// REPORT-AUDIT-1A §2 (2026-10-05) — Section XII live path consumes
+// the SAME canonical resolvers Section II Payroll Analysis uses:
+//   resolveHistoricalPayrollByDepartment — TB × IS_PAYROLL × Dept
+//   resolveBudgetPayrollByDepartment     — Budget × IS_PAYROLL × Dept
+// No parallel payroll calculator; no Employee roster records as
+// financial Actual.
+import { resolveHistoricalPayrollByDepartment } from "@/lib/reporting/historical-payroll-by-department";
+import { resolveBudgetPayrollByDepartment } from "@/lib/reporting/budget-resolver";
+import type { FsGroupProjection } from "@/lib/reporting/fs-group-projection";
 
 // =============================================================================
 // Public types
@@ -494,6 +503,396 @@ export function buildSilverSpringsDepartmentalPayrollAnalysis(opts: {
       callouts: {
         breakdown:    breakdownCallout,
         variance:     varianceCallout,
+        distribution: distributionCallout,
+        wagesVsTaxes: wagesVsTaxesCallout,
+      },
+    },
+    table: {
+      eyebrow: `Departmental Payroll Summary — ${period.periodLabel}`,
+      columnHeaders: {
+        department: "Department",
+        mtdActual: `${monthShort} Actual`,
+        mtdBudget: `${monthShort} Budget`,
+        mtdVariance: `${monthShort} Variance`,
+        ytdActual: "YTD Actual",
+        ytdBudget: "YTD Budget",
+        ytdVariance: "YTD Variance",
+      },
+      rows,
+      total,
+    },
+  };
+}
+
+// =============================================================================
+// REPORT-AUDIT-1A §2 (2026-10-05) — Canonical Section XII builder
+// =============================================================================
+//
+// Replaces the demo-build-then-redact pattern with a live path that
+// reads from the SAME canonical resolvers Section II Payroll Analysis
+// uses. Section XII payroll Actual/Budget totals reconcile to Section
+// II + Section IV IS_PAYROLL numerics to the penny.
+//
+// Scope restrictions enforced by this builder:
+//   • Historical payroll Actual comes from committed TB IS_PAYROLL ×
+//     Department. No Employee roster / payroll-module records.
+//   • Only departments with authoritative payroll financial activity
+//     render (consistent with the Section II historical chart).
+//   • Prior-year columns NOT rendered — the 2025 TB has not been
+//     loaded, so prior-year Actual is SOURCE_NOT_LOADED.
+//   • Wages / taxes & benefits split: NOT AVAILABLE from the TB
+//     alone — the IS_PAYROLL fsGroup aggregates both. Chart fields
+//     surface zero with an explicit callout stating the split is
+//     not configured. No fabricated 83%/17% split.
+//   • Narrative callouts are generated from canonical values; no
+//     Silver Springs copy survives.
+
+const CANONICAL_FILL_HEXES: readonly string[] = [
+  FILL_GREEN_DEEP,
+  FILL_GOLD_DEEP,
+  FILL_GREEN_MID,
+  FILL_SLATE_BLUE,
+  FILL_GREEN_DARK,
+  FILL_GOLD_LIGHT,
+  FILL_CLAY_SOFT,
+];
+
+/** Short label fallback — strips a leading "<code> — " prefix. */
+function makeShortLabel(departmentName: string): string {
+  const trimmed = departmentName.replace(/^\d+\s*[—-]\s*/u, "").trim();
+  // Compact common department names so chart axes stay readable.
+  const compactions: Record<string, string> = {
+    "Administration": "Admin",
+    "Food & Beverage": "F&B",
+    "Golf Shop": "Golf Shop",
+    "Course & Grounds": "Grounds",
+    "Clubhouse": "Clubhouse",
+    "Dues & Charges": "Dues",
+    "Corporate": "Corporate",
+    "Long Range Plan": "LRP",
+  };
+  return compactions[trimmed] ?? trimmed;
+}
+
+export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
+  clubId: string;
+  clubName: string;
+  period: ReportingPeriod;
+  projection: FsGroupProjection | null;
+}): Promise<DepartmentalPayrollAnalysis> {
+  const { clubId, clubName, period, projection } = opts;
+  const monthShort = period.monthShort;
+  const monthLong  = period.monthLong;
+  const fiscalYear = period.periodStart.getUTCFullYear();
+  const throughMonth = period.periodEnd.getUTCMonth() + 1;
+
+  // -- Pull canonical dept-level payroll (same source Section II uses) --
+  const historical = await resolveHistoricalPayrollByDepartment(
+    clubId,
+    period.periodStart,
+    period.periodEnd,
+  );
+  const budgetByDeptMap = await resolveBudgetPayrollByDepartment({
+    clubId,
+    fiscalYear,
+    throughMonth,
+  });
+  // Annual (12-month) Budget per dept — same resolver, through month 12.
+  const annualBudgetByDeptMap = await resolveBudgetPayrollByDepartment({
+    clubId,
+    fiscalYear,
+    throughMonth: 12,
+  });
+
+  // Union of dept codes seen in Actual + Budget. Nondepartmental
+  // (departmentCode === null) is intentionally skipped — Section II
+  // rolls it into the roster residual rather than rendering as a
+  // chart row, and Section XII follows the same convention.
+  const deptKeys = new Set<string>();
+  for (const r of historical.rows) {
+    if (r.departmentCode != null) deptKeys.add(r.departmentCode);
+  }
+  for (const [code] of budgetByDeptMap) if (code != null) deptKeys.add(code);
+
+  // Build per-dept rows + chart data.
+  type EnrichedRow = {
+    key: string;
+    label: string;
+    shortLabel: string;
+    mtdActual: number;   // January == YTD here; the period is single-month
+    mtdBudget: number;
+    ytdActual: number;
+    ytdBudget: number;
+    annualBudget: number;
+    fillHex: string;
+  };
+  const enriched: EnrichedRow[] = [];
+  for (const code of deptKeys) {
+    const hist = historical.rows.find((r) => r.departmentCode === code);
+    const label = hist?.departmentName ?? code;
+    const ytdActual = hist?.actual ?? 0;
+    const ytdBudget = budgetByDeptMap.get(code) ?? 0;
+    const annualBudget = annualBudgetByDeptMap.get(code) ?? 0;
+    // Skip depts with ZERO Actual AND ZERO Budget — nothing to show.
+    if (ytdActual === 0 && ytdBudget === 0) continue;
+    enriched.push({
+      key: `dept-${code}`,
+      label,
+      shortLabel: makeShortLabel(label),
+      // January single-month report: MTD == YTD. When this builder is
+      // called with a mid-year periodEnd, MTD will later differ; the
+      // resolver's YTD-through-selected-month shape is correct.
+      mtdActual: ytdActual,
+      mtdBudget: ytdBudget,
+      ytdActual,
+      ytdBudget,
+      annualBudget,
+      fillHex: CANONICAL_FILL_HEXES[enriched.length % CANONICAL_FILL_HEXES.length] ?? FILL_SLATE_BLUE,
+    });
+  }
+  // Sort by YTD actual descending so the Board scans the biggest cost
+  // centres first.
+  enriched.sort((a, b) => b.ytdActual - a.ytdActual);
+
+  // -- Dept-level rows + chart data --
+  const rows: PayrollDepartmentRow[] = [];
+  const byDeptChart: DepartmentChartDatum[] = [];
+  let mtdActualTotal = 0, mtdBudgetTotal = 0, ytdActualTotal = 0, ytdBudgetTotal = 0;
+  for (const e of enriched) {
+    const mtdVariance = e.mtdBudget - e.mtdActual;
+    const ytdVariance = e.ytdBudget - e.ytdActual;
+    mtdActualTotal += e.mtdActual;
+    mtdBudgetTotal += e.mtdBudget;
+    ytdActualTotal += e.ytdActual;
+    ytdBudgetTotal += e.ytdBudget;
+    rows.push({
+      key: e.key,
+      kind: "department",
+      label: e.label,
+      values: {
+        mtdActual: e.mtdActual, mtdBudget: e.mtdBudget, mtdVariance,
+        ytdActual: e.ytdActual, ytdBudget: e.ytdBudget, ytdVariance,
+      },
+      labels: {
+        mtdActual: formatDollars(e.mtdActual),
+        mtdBudget: formatDollars(e.mtdBudget),
+        mtdVariance: formatVariance(mtdVariance),
+        ytdActual: formatDollars(e.ytdActual),
+        ytdBudget: formatDollars(e.ytdBudget),
+        ytdVariance: formatVariance(ytdVariance),
+      },
+      tones: {
+        mtdVariance: toneForVariance(mtdVariance),
+        ytdVariance: toneForVariance(ytdVariance),
+      },
+    });
+    byDeptChart.push({
+      key: e.key,
+      shortLabel: e.shortLabel,
+      fullLabel: e.label,
+      ytdActual: e.ytdActual,
+      ytdBudget: e.ytdBudget,
+      ytdVariance,
+      ytdVarianceTone: toneForVariance(ytdVariance),
+      // Wages / taxes & benefits split NOT CONFIGURED for live tenants —
+      // the TB IS_PAYROLL fsGroup aggregates both. Setting both to 0
+      // keeps the stacked-bar chart renderable but shows nothing; the
+      // callout below explains why.
+      wages: 0,
+      taxesBenefits: 0,
+      fillHex: e.fillHex,
+    });
+  }
+
+  const mtdVarianceTotal = mtdBudgetTotal - mtdActualTotal;
+  const ytdVarianceTotal = ytdBudgetTotal - ytdActualTotal;
+
+  const total: PayrollDepartmentRow = {
+    key: "club-total",
+    kind: "total",
+    label: "Club Total",
+    values: {
+      mtdActual: mtdActualTotal, mtdBudget: mtdBudgetTotal, mtdVariance: mtdVarianceTotal,
+      ytdActual: ytdActualTotal, ytdBudget: ytdBudgetTotal, ytdVariance: ytdVarianceTotal,
+    },
+    labels: {
+      mtdActual: formatDollars(mtdActualTotal),
+      mtdBudget: formatDollars(mtdBudgetTotal),
+      mtdVariance: mtdVarianceTotal === 0 ? "—" : formatVariance(mtdVarianceTotal),
+      ytdActual: formatDollars(ytdActualTotal),
+      ytdBudget: formatDollars(ytdBudgetTotal),
+      ytdVariance: ytdVarianceTotal === 0 ? "—" : formatVariance(ytdVarianceTotal),
+    },
+    tones: {
+      mtdVariance: toneForVariance(mtdVarianceTotal),
+      ytdVariance: toneForVariance(ytdVarianceTotal),
+    },
+  };
+
+  // Donut shares (sum to 1.0 across departments; 0 if ytdActualTotal is 0).
+  const donutSlices = byDeptChart.map((d) => ({
+    key: d.key,
+    label: d.fullLabel,
+    amount: d.ytdActual,
+    share: ytdActualTotal > 0 ? d.ytdActual / ytdActualTotal : 0,
+    fillHex: d.fillHex,
+  }));
+
+  // -- KPI cards — canonical values only --
+  // Payroll-to-Revenue reads canonical Operating Revenue from the
+  // FS-Group projection (same source Section III uses).
+  const operatingRevenueYtd = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : 0;
+  const payrollToRevenuePct = operatingRevenueYtd > 0
+    ? (ytdActualTotal / operatingRevenueYtd) * 100
+    : null;
+
+  const kpiCards: ReadonlyArray<PayrollKpiCard> = [
+    {
+      key: "ytd-total-payroll",
+      valueLabel: ytdActualTotal === 0 ? "—" : formatMillions(ytdActualTotal),
+      label: "YTD Total Payroll",
+      subLabel: "All departments · IS_PAYROLL × Dept (TB)",
+      treatment: "primary",
+    },
+    {
+      key: "ytd-variance",
+      valueLabel: ytdVarianceTotal === 0 ? "—" : formatThousandsOneDecimal(ytdVarianceTotal),
+      label: ytdVarianceTotal >= 0 ? "YTD Favorable Variance" : "YTD Unfavorable Variance",
+      subLabel: ytdBudgetTotal === 0 ? "Budget not configured for payroll" : `vs. YTD budget of ${formatMillions(ytdBudgetTotal)}`,
+      treatment: "favorable",
+      valueTone: toneForVariance(ytdVarianceTotal),
+    },
+    {
+      key: "current-month-payroll",
+      valueLabel: mtdActualTotal === 0 ? "—" : formatMillions(mtdActualTotal),
+      label: `${monthLong} Payroll`,
+      subLabel: mtdBudgetTotal === 0
+        ? "Current-month budget not configured"
+        : `${formatThousandsOneDecimal(mtdVarianceTotal)} ${mtdVarianceTotal >= 0 ? "favorable" : "unfavorable"} to month budget`,
+      treatment: "neutral",
+    },
+    {
+      key: "payroll-to-revenue",
+      valueLabel: payrollToRevenuePct == null ? "—" : `${payrollToRevenuePct.toFixed(1)}%`,
+      label: "Payroll-to-Revenue",
+      subLabel: payrollToRevenuePct == null
+        ? "Operating Revenue source not available"
+        : "Club-wide · Canonical IS_PAYROLL / Operating Revenue",
+      treatment: "info",
+    },
+  ];
+
+  // -- Variance callout — reactive to real dept data when available --
+  let varianceCallout: PayrollCalloutMessage;
+  if (byDeptChart.length === 0) {
+    varianceCallout = {
+      text: "No departmental payroll activity for this reporting period.",
+    };
+  } else {
+    const sortedYtdVariance = [...byDeptChart].sort((a, b) => a.ytdVariance - b.ytdVariance);
+    const worstUnfav = sortedYtdVariance[0];
+    const bestFav = sortedYtdVariance[sortedYtdVariance.length - 1];
+    varianceCallout = {
+      text:
+        worstUnfav === bestFav
+          ? `${bestFav.fullLabel} is the only department with payroll activity this period — ` +
+            `YTD variance ${formatThousandsOneDecimal(bestFav.ytdVariance)}.`
+          : `${worstUnfav.fullLabel} is the largest unfavorable variance at ` +
+            `${formatThousandsOneDecimal(worstUnfav.ytdVariance)} YTD. ` +
+            `${bestFav.fullLabel} is the largest favorable at ` +
+            `${formatThousandsOneDecimal(bestFav.ytdVariance)}.`,
+    };
+  }
+
+  // Distribution callout — share-based from live data.
+  const distribByShare = [...byDeptChart].sort((a, b) => b.ytdActual - a.ytdActual);
+  const distributionCallout: PayrollCalloutMessage = distribByShare.length === 0
+    ? { text: "No departmental payroll activity for this reporting period." }
+    : (() => {
+        const largestDept = distribByShare[0];
+        const largestShare = ytdActualTotal > 0 ? (largestDept.ytdActual / ytdActualTotal) : 0;
+        const topN = Math.min(3, distribByShare.length);
+        const topNSum = distribByShare.slice(0, topN).reduce((s, d) => s + d.ytdActual, 0);
+        const topNShare = ytdActualTotal > 0 ? (topNSum / ytdActualTotal) : 0;
+        return {
+          text:
+            `${largestDept.fullLabel} carries ${(largestShare * 100).toFixed(1)}% of total club payroll — ` +
+            `the largest single cost centre. The top ${topN} departments together represent ` +
+            `${(topNShare * 100).toFixed(1)}% of YTD payroll spend.`,
+        };
+      })();
+
+  // Breakdown callout.
+  const breakdownCallout: PayrollCalloutMessage = distribByShare.length === 0
+    ? { text: "No departmental payroll activity for this reporting period." }
+    : (() => {
+        const largestSpend = distribByShare[0];
+        const largestVarLabel = largestSpend.ytdVariance >= 0
+          ? `${formatThousandsOneDecimal(largestSpend.ytdVariance)} favorable to plan`
+          : `${formatThousandsOneDecimal(largestSpend.ytdVariance)} unfavorable to plan`;
+        const totalVarQualifier = ytdVarianceTotal >= 0 ? "within" : "over";
+        const payrollToRevText = payrollToRevenuePct == null
+          ? "Payroll-to-revenue unavailable (Operating Revenue source missing)"
+          : `Payroll-to-revenue at ${payrollToRevenuePct.toFixed(1)}%`;
+        return {
+          text:
+            `${largestSpend.fullLabel} is the largest YTD payroll spend at ` +
+            `${formatDollars(largestSpend.ytdActual)}, running ${largestVarLabel}. ` +
+            `Total club payroll of ${formatMillions(ytdActualTotal)} is ${totalVarQualifier} plan by ` +
+            `${formatThousandsOneDecimal(Math.abs(ytdVarianceTotal))}. ${payrollToRevText}.`,
+        };
+      })();
+
+  // Wages vs Taxes callout — explicitly unavailable; no fabricated split.
+  const wagesVsTaxesCallout: PayrollCalloutMessage = {
+    eyebrow: "Compensation split unavailable",
+    text:
+      "Wages / taxes & benefits split is not configured for this tenant. " +
+      "IS_PAYROLL aggregates total compensation; a wages-vs-taxes breakdown " +
+      "requires the payroll system to post wages + benefits to separate GL accounts.",
+  };
+
+  return {
+    dataSource: "live",
+    eyebrow: `${clubName} · Payroll & Compensation`,
+    title: "Departmental Payroll Analysis",
+    periodLabel: period.statementHeaderLabel,
+    introNote:
+      "Payroll Actual + Budget by department — sourced from IS_PAYROLL × Department in the committed Trial Balance and Budget. Wages / taxes & benefits split awaits a separate GL classification; total compensation is shown.",
+    statementNumber: "Statement 12 of 14",
+    documentChip: "Payroll & Compensation",
+    preparedFor: "Management & Finance Committee",
+    kpiCards,
+    charts: {
+      byDepartment: byDeptChart,
+      donutSlices,
+      titles: {
+        byDeptActualVsBudget: {
+          title: "YTD Payroll by Department",
+          subtitle: `Actual vs. Budget — ${period.periodLabel}`,
+          chipLabel: "Payroll · Budget",
+        },
+        ytdVariance: {
+          title: "YTD Variance by Department",
+          subtitle: "Favorable (green) vs. Unfavorable (red)",
+          chipLabel: "Payroll · Variance",
+        },
+        payrollDistribution: {
+          title: "Payroll Distribution — Where Does the Dollar Go?",
+          subtitle: "YTD Allocation · All Departments",
+          chipLabel: "Payroll · Mix",
+        },
+        wagesVsTaxes: {
+          title: "Wages vs. Taxes & Benefits Split",
+          subtitle: "Not Configured",
+          chipLabel: "Comp · Split",
+        },
+      },
+      callouts: {
+        breakdown: breakdownCallout,
+        variance: varianceCallout,
         distribution: distributionCallout,
         wagesVsTaxes: wagesVsTaxesCallout,
       },

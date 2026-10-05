@@ -86,6 +86,7 @@ import {
   type MonthlyWeatherSummary,
 } from "@/lib/reporting/monthly-weather-summary";
 import {
+  buildCouleeDepartmentalPayrollAnalysis,
   buildSilverSpringsDepartmentalPayrollAnalysis,
   type DepartmentalPayrollAnalysis,
 } from "@/lib/reporting/departmental-payroll-analysis";
@@ -2592,6 +2593,13 @@ export async function getMonthlyReportingPackage(
           // for private clubs). Flip to a per-tenant lookup when a
           // tenant disagrees.
           entranceFeesAreOperating: false,
+          // REPORT-AUDIT-1A §1 — Coulee's BS merges PP&E gross +
+          // accumulated depreciation into one BS_CAPITAL_ASSETS
+          // fsGroup. Section III PP&E Reinvestment card renders
+          // precise unavailable until a BS category split exists.
+          // Mirrors the Section V ppeSplitAvailable: false signal
+          // established by CAPITAL-LIVE-1.
+          ppeSplitAvailable: false,
         }
       : null,
     demoFallback: () => ({
@@ -3195,10 +3203,22 @@ export async function getMonthlyReportingPackage(
 
     // Chapter XII — Departmental Payroll Analysis.
     // Owned end-to-end by src/lib/reporting/departmental-payroll-analysis.ts.
-    departmentalPayrollAnalysis: buildSilverSpringsDepartmentalPayrollAnalysis({
-      clubName: club.name,
-      period: reportingPeriod,
-    }),
+    // REPORT-AUDIT-1A §2 (2026-10-05) — live tenants consume the
+    // canonical builder which reads from the SAME IS_PAYROLL ×
+    // Department resolver Section II uses. Section XII payroll Actual/
+    // Budget totals reconcile to Section II + Section IV IS_PAYROLL
+    // to the penny. Demo tenants keep the Silver Springs seed.
+    departmentalPayrollAnalysis: hasRealData
+      ? await buildCouleeDepartmentalPayrollAnalysis({
+          clubId: club.id,
+          clubName: club.name,
+          period: reportingPeriod,
+          projection: fsGroupProjection,
+        })
+      : buildSilverSpringsDepartmentalPayrollAnalysis({
+          clubName: club.name,
+          period: reportingPeriod,
+        }),
 
     // Chapter XIII — Food & Beverage Statistics.
     // Owned end-to-end by src/lib/reporting/food-beverage-statistics.ts.
@@ -3914,7 +3934,15 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       pkg.departmentalPLSummary.dataSource === "live"
         ? pkg.departmentalPLSummary
         : makeUnavailable(pkg.departmentalPLSummary, u),
-    departmentalPayrollAnalysis: makeUnavailable(pkg.departmentalPayrollAnalysis, u),
+    // REPORT-AUDIT-1A §2 (2026-10-05) — Chapter XII now has a real-
+    // data path (buildCouleeDepartmentalPayrollAnalysis emits
+    // dataSource: "live"). Mirrors Chapter X / AR Aging — leave
+    // real-data chapters alone; only wipe when dataSource is still
+    // "demo".
+    departmentalPayrollAnalysis:
+      pkg.departmentalPayrollAnalysis.dataSource === "live"
+        ? pkg.departmentalPayrollAnalysis
+        : makeUnavailable(pkg.departmentalPayrollAnalysis, u),
     foodBeverageStatistics: makeUnavailable(pkg.foodBeverageStatistics, u),
     inventoryAnalysis: makeUnavailable(pkg.inventoryAnalysis, u),
     monthlyWeatherSummary: makeUnavailable(pkg.monthlyWeatherSummary, u),

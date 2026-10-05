@@ -72,6 +72,15 @@ export type StewardshipAvailabilityInputs = {
    *  (Coulee's accepted classification) — the KPI is then N/A for
    *  this tenant's accounting model, NOT source-not-connected. */
   entranceFeesAreOperating: boolean;
+  /** REPORT-AUDIT-1A §1 (2026-10-05) — true when the Balance Sheet
+   *  classifies PP&E as two distinct categories (`category === "ppe-gross"`
+   *  + `category === "ppe-accumulated-depreciation"`) sufficient to
+   *  compute Net-to-Gross PP&E = (gross − accum) / gross. False when
+   *  the BS consolidates PP&E (e.g. Coulee's `BS_CAPITAL_ASSETS`
+   *  fsGroup mixes original cost + accumulated depreciation). Mirrors
+   *  the Section V ppeSplitAvailable signal — one definition of
+   *  "PP&E split available" across the package. */
+  ppeSplitAvailable: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -1044,7 +1053,7 @@ function buildCapitalKpiCards(
     buildCapitalIncomeVsPlanCard(is, projection, aux, availability),
     aux.auxiliaryKpiCards.capital.capitalSpend,
     buildDebtEquityCard(bs, aux),
-    buildPpeReinvestmentCard(bs, aux),
+    buildPpeReinvestmentCard(bs, aux, availability),
     aux.auxiliaryKpiCards.capital.reserveSufficiency,
     buildWorkingCapitalCard(bs, aux),
     aux.auxiliaryKpiCards.capital.projectCompletion,
@@ -1353,7 +1362,27 @@ function buildDebtEquityCard(
 function buildPpeReinvestmentCard(
   bs: BalanceSheetSnapshot,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi {
+  // REPORT-AUDIT-1A §1 (2026-10-05) — PP&E Reinvestment requires the
+  // Balance Sheet to classify PP&E as two distinct categories (gross
+  // + accumulated depreciation). Coulee's BS merges both into one
+  // BS_CAPITAL_ASSETS fsGroup, so the ratio is NOT calculable from
+  // live data. Render as precise unavailable (not 0%, which the
+  // previous `grossPpe > 0 ? ... : 0` branch produced). Mirrors
+  // Section V's ppeSplitAvailable treatment.
+  if (availability && availability.ppeSplitAvailable === false) {
+    return {
+      key: "ppe-reinvestment",
+      name: "PPE Reinvestment",
+      whatIsIt: "Net property, plant, and equipment as a share of gross PPE — a proxy for how recently the asset base has been refreshed.",
+      whyItMatters: "A falling ratio signals an aging facility; sustained below 0.45 typically precedes a major capital cycle.",
+      assessment: "PP&E component split not configured.",
+      actual: "—",
+      tone: "neutral",
+    };
+  }
+
   // Net / gross PP&E from BS categories.
   const grossPpe = bs.lines
     .filter((l) => l.category === "ppe-gross")
