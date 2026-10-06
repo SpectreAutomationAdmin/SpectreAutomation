@@ -19,6 +19,7 @@ import {
   previewGolfActivityBatch,
   commitGolfActivityBatch,
   GolfCommitError,
+  GolfParseFailedError,
 } from "@/lib/imports/golf-activity/commit-service";
 
 export const dynamic = "force-dynamic";
@@ -67,12 +68,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const buf = Buffer.from(await (file as File).arrayBuffer());
   const parse = await parseGgGolfPdf(buf);
-  const preview = await previewGolfActivityBatch({
-    clubId,
-    parse,
-    sourceFileName: (file as File).name ?? null,
-    uploadedByUserId: principal.id,
-  });
+  let preview;
+  try {
+    preview = await previewGolfActivityBatch({
+      clubId,
+      parse,
+      sourceFileName: (file as File).name ?? null,
+      uploadedByUserId: principal.id,
+    });
+  } catch (e) {
+    if (e instanceof GolfParseFailedError) {
+      // Fail-closed: no batch is persisted, no misleading preview is
+      // shown. The client surfaces the message prominently.
+      return NextResponse.json(
+        {
+          error: e.message,
+          code: "PARSE_FAILED",
+          diagnostics: {
+            reportYear: parse.reportYear,
+            rowCount: parse.rows.length,
+            warnings: parse.warnings.slice(0, 20),
+          },
+        },
+        { status: 422 },
+      );
+    }
+    throw e;
+  }
   return NextResponse.json({
     batch: {
       id: preview.batch.id,
@@ -119,6 +141,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     })),
     warnings: parse.warnings,
   });
+}
+
+/**
+ * DELETE a PREVIEW batch. REFUSES to delete COMMITTED batches
+ * (those carry authoritative GolfActivityDay rows). Returns 404
+ * when the batch does not exist. Used for E2E cleanup AND the
+ * GOLF-HIST-1A cleanup of the founder's stale batch.
+ */
+export async function DELETE(req: NextRequest): Promise<NextResponse> {
+  if (!isStaging()) return NextResponse.json({ error: "Not available in production." }, { status: 404 });
+  const principal = await requirePrincipal();
+  const clubId = req.nextUrl.searchParams.get("clubId") ?? "";
+  const batchId = req.nextUrl.searchParams.get("batchId") ?? "";
+  if (!clubId || !batchId) {
+    return NextResponse.json({ error: "clubId and batchId required" }, { status: 400 });
+  }
+  if (!hasClubAccess(principal, clubId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const batch = await prisma.golfActivityImportBatch.findUnique({ where: { id: batchId } });
+  if (!batch) return NextResponse.json({ error: "Batch not found" }, { status: 404 });
+  if (batch.clubId !== clubId) return NextResponse.json({ error: "Cross-tenant delete refused" }, { status: 403 });
+  if (batch.status === "COMMITTED") {
+    return NextResponse.json(
+      { error: "Refuse to delete a COMMITTED batch (authoritative GolfActivityDay rows exist)." },
+      { status: 409 },
+    );
+  }
+  // Preview rows cascade-delete via Prisma onDelete: Cascade.
+  await prisma.golfActivityImportBatch.delete({ where: { id: batchId } });
+  return NextResponse.json({ deleted: batchId });
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

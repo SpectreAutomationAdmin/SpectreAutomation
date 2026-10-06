@@ -228,6 +228,42 @@ describe("GOLF-HIST-1 §H — Parser is provider-aware but canonical model is pr
     expect(src).toMatch(/sourceFileHash/);
   });
 
+  it("GOLF-HIST-1A — parser uses positional (pdfjs) extraction, NOT text flattening", () => {
+    const src = readFileSync(PARSER, "utf8");
+    // The real parser must read positional glyphs with pagerender +
+    // getTextContent; the previous text-only path is deleted.
+    expect(src).toMatch(/pagerender:/);
+    expect(src).toMatch(/getTextContent/);
+    expect(src).toMatch(/export async function extractGgGolfLayout/);
+    expect(src).toMatch(/export function parseGgGolfLayout/);
+    // No regex that splits on whitespace between numeric columns —
+    // the real pdf-parse output has no inter-column whitespace.
+    expect(src).not.toMatch(/parseGgGolfText/);
+  });
+
+  it("GOLF-HIST-1A — PARSE_FAILED enum value exists on the result type + is used for the fail-closed path", () => {
+    const src = readFileSync(PARSER, "utf8");
+    expect(src).toMatch(/"PARSE_FAILED"/);
+    expect(src).toMatch(/reconciliationStatus: "PARSE_FAILED"/);
+    // Period must NOT be fabricated when parsing fails.
+    expect(src).toMatch(/reportingPeriodStart: Date \| null/);
+    expect(src).toMatch(/reportingPeriodEnd: Date \| null/);
+  });
+
+  it("GOLF-HIST-1A — commit service refuses to persist a PARSE_FAILED batch", () => {
+    const src = readFileSync(COMMIT, "utf8");
+    expect(src).toMatch(/GolfParseFailedError/);
+    expect(src).toMatch(/parse\.reconciliationStatus === "PARSE_FAILED"/);
+    expect(src).toMatch(/PARSE FAILED/);
+  });
+
+  it("GOLF-HIST-1A — API endpoint returns HTTP 422 on GolfParseFailedError", () => {
+    const src = readFileSync(API, "utf8");
+    expect(src).toMatch(/GolfParseFailedError/);
+    expect(src).toMatch(/status: 422/);
+    expect(src).toMatch(/code: "PARSE_FAILED"/);
+  });
+
   it("resolver + join + Section XI builder never mention GGGolf", () => {
     for (const f of [RESOLVER, JOIN, SECTION_XI]) {
       const src = stripComments(readFileSync(f, "utf8"));

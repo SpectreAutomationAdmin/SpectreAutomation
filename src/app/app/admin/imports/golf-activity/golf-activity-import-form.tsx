@@ -105,7 +105,22 @@ export default function GolfActivityImportForm({ clubId }: { clubId: string }) {
           </div>
         </form>
         {error && (
-          <div className="text-sm text-rose-600" data-testid="golf-activity-import-error">
+          <div
+            className={`rounded border p-3 text-sm ${
+              error.startsWith("PARSE FAILED")
+                ? "border-rose-400 bg-rose-50 text-rose-800"
+                : "text-rose-600"
+            }`}
+            data-testid="golf-activity-import-error"
+          >
+            {error.startsWith("PARSE FAILED") && (
+              <div
+                className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-rose-900"
+                data-testid="golf-activity-import-parse-failed-banner"
+              >
+                PARSE FAILED
+              </div>
+            )}
             {error}
           </div>
         )}

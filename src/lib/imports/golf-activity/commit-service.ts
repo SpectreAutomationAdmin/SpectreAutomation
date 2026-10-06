@@ -85,13 +85,43 @@ export type GolfPreviewResult = {
 const DEFAULT_SOURCE_SYSTEM = "GGGOLF_EXPORT";
 
 /**
+ * Thrown when the parser produced PARSE_FAILED and we refuse to
+ * persist a misleading batch (0 rows / unresolvable year / no
+ * period). The admin API maps this to HTTP 422 and the UI shows the
+ * message verbatim.
+ */
+export class GolfParseFailedError extends Error {
+  constructor(message: string) { super(message); }
+}
+
+/**
  * Create or refresh the preview batch for an uploaded golf-activity
  * source file. Idempotent on (clubId, sourceSystem, sourceFileHash,
  * reportingPeriodStart).
+ *
+ * GOLF-HIST-1A (2026-10-06) — refuses to persist when
+ * `parse.reconciliationStatus === "PARSE_FAILED"` so a defective
+ * upload cannot appear in the admin history as "ready for review".
  */
 export async function previewGolfActivityBatch(input: GolfPreviewInput): Promise<GolfPreviewResult> {
   const sourceSystem = input.sourceSystem ?? DEFAULT_SOURCE_SYSTEM;
   const { parse, clubId, sourceFileName, uploadedByUserId } = input;
+
+  if (
+    parse.reconciliationStatus === "PARSE_FAILED" ||
+    parse.rows.length === 0 ||
+    parse.reportingPeriodStart == null ||
+    parse.reportingPeriodEnd == null
+  ) {
+    throw new GolfParseFailedError(
+      "PARSE FAILED — NO DAILY ACTIVITY ROWS DETECTED. The uploaded file did not yield any parseable GGGolf daily rows. " +
+      "Confirm the file is a positional GGGolf Daily Report PDF (not a scanned image, not a different report), and re-upload.",
+    );
+  }
+
+  // Narrow Date|null → Date after the fail-closed guard above.
+  const reportingPeriodStart = parse.reportingPeriodStart as Date;
+  const reportingPeriodEnd = parse.reportingPeriodEnd as Date;
 
   // Detect conflicts with already-committed days.
   const activityDates = parse.rows.map((r) => r.activityDate);
@@ -120,7 +150,7 @@ export async function previewGolfActivityBatch(input: GolfPreviewInput): Promise
         clubId,
         sourceSystem,
         sourceFileHash: parse.sourceFileHash,
-        reportingPeriodStart: parse.reportingPeriodStart,
+        reportingPeriodStart,
       },
     },
     create: {
@@ -129,8 +159,8 @@ export async function previewGolfActivityBatch(input: GolfPreviewInput): Promise
       sourceSystem,
       sourceFileName,
       sourceFileHash: parse.sourceFileHash,
-      reportingPeriodStart: parse.reportingPeriodStart,
-      reportingPeriodEnd: parse.reportingPeriodEnd,
+      reportingPeriodStart,
+      reportingPeriodEnd,
       rowCount: parse.rows.length,
       activeDays,
       realZeroDays,
@@ -155,7 +185,7 @@ export async function previewGolfActivityBatch(input: GolfPreviewInput): Promise
     update: {
       status: "PREVIEW",
       sourceFileName,
-      reportingPeriodEnd: parse.reportingPeriodEnd,
+      reportingPeriodEnd,
       rowCount: parse.rows.length,
       activeDays,
       realZeroDays,

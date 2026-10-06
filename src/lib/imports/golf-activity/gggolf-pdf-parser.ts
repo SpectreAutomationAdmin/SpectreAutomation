@@ -1,44 +1,51 @@
-// GOLF-HIST-1 (2026-10-05) — GGGolf Daily Report PDF parser.
+// GOLF-HIST-1A (2026-10-06) — GGGolf Daily Report PDF parser.
 //
-// GGGolf is Spectre's current tee-sheet provider (Silver Springs
-// uses it in production; Coulee Ridge staging shares the same source
-// format). This parser is INTENTIONALLY provider-specific — it
-// understands the GGGolf "Daily Report" PDF layout and produces
-// provider-neutral canonical rows. A future GGGolf API connector
-// writes to the SAME `GolfActivityDay` table through its own
-// loader; neither Section XI nor the resolver branch on provider.
+// REWRITTEN after the GOLF-HIST-1 real-upload defect. The previous
+// parser consumed the output of `pdf-parse`'s text flattening and
+// assumed inter-column whitespace. The real pdf-parse output strips
+// all inter-column spacing — a daily row like
 //
-// Source layout (per the January 2026 reference):
-//   Header: "<Club Name> · Daily Report"
-//   Columns:
-//     Date 2026 | Weather | Nb. Guests | Nb. Grnfees | Nb. Members |
-//     Total | Nb. Juniors | Nb. Women | Nb. Corpos | Nb. Corpos Half |
-//     Full 9 Cart | Half 9 Cart | Free Cart          (12 numeric)
-//   Rows: "<WeekdayAbbr>, <MonthAbbr> <Day> <WeatherCode> <12 ints>"
-//   Totals row (final): "Totals  <12 ints>"
-//   Footer legend: "Weather : 1=Closed, 2=Very cold, ... 8=Sunny"
+//   "Thu, Jan 1 - 0 0 0 0 0 0 0 0 0 0 0 0"
 //
-// Validation rules:
-//   - Every daily row MUST have exactly 12 integer columns.
-//   - Every daily row MUST have Total = Guests + GreenFees + Members
-//     (reconciliation per-row).
-//   - Period = min(activityDate) to max(activityDate).
-//   - Totals footer MUST reconcile to the per-row column sums.
-//   - Duplicate dates → warning + marked for operator review.
-//   - Dates outside the report's declared year (from the header
-//     "Date <YYYY>" row) → warning.
+// comes back as
+//
+//   "Thu, Jan 1-000000000000"
+//
+// which is non-deterministically splittable from the text alone. The
+// GOLF-HIST-1 fixture tested a hand-normalized text payload (what the
+// Claude Read tool rendered); it never exercised real PDF bytes.
+// 100 % test-fidelity failure.
+//
+// Fix: positional (pdfjs) extraction via `pdf-parse`'s pagerender
+// hook. Each glyph item carries (x, yBaselineRaw); items with the
+// same yBaselineRaw on the same page form one visual row. Rows are
+// sorted left-to-right by x. Daily rows become arrays of 14 cells;
+// the Totals row becomes an array of 13 cells. No whitespace-dependent
+// splitting anywhere.
+//
+// `parseGgGolfPdf(buffer)` is the production entry point. The
+// synthetic `parseGgGolfLayout(layout, hash)` is exposed so unit
+// tests can exercise edge cases (missing totals row, duplicate dates,
+// etc.) without crafting valid PDF binaries. There is NO flat-text
+// parser any more.
 
 import pdfParse from "pdf-parse";
 import { createHash } from "node:crypto";
+
+// =============================================================================
+// Public types
+// =============================================================================
 
 export type GgGolfParseWarning = {
   kind:
     | "DUPLICATE_DATE"
     | "ROW_TOTAL_MISMATCH"
     | "SHORT_COLUMNS"
-    | "UNPARSEABLE_LINE"
+    | "UNPARSEABLE_ROW"
     | "DATE_OUT_OF_YEAR"
-    | "TOTALS_RECONCILIATION";
+    | "TOTALS_RECONCILIATION"
+    | "NO_DAILY_ROWS"
+    | "YEAR_UNRESOLVED";
   message: string;
   rowIndex?: number;
   dateLabel?: string;
@@ -46,7 +53,7 @@ export type GgGolfParseWarning = {
 
 export type GgGolfParsedRow = {
   rowIndex: number;
-  rawLine: string;
+  rawCells: ReadonlyArray<string>;
   rawDateLabel: string;     // "Thu, Jan 1"
   activityDate: Date;       // UTC midnight for the local calendar date
   rawWeatherCode: string;   // "-" when the source left it blank
@@ -81,118 +88,247 @@ export type GgGolfSourceTotals = {
 
 export type GgGolfParseResult = {
   sourceFileHash: string;
-  reportYear: number;
-  reportingPeriodStart: Date;
-  reportingPeriodEnd: Date;
+  reportYear: number | null;
+  reportingPeriodStart: Date | null;
+  reportingPeriodEnd: Date | null;
   rows: GgGolfParsedRow[];
   sourceTotals: GgGolfSourceTotals | null;
   parsedTotals: GgGolfSourceTotals;
   warnings: GgGolfParseWarning[];
-  // RECONCILED: parsedTotals === sourceTotals for every column.
-  // MISMATCH:   any column differs OR source totals row is missing.
-  // UNKNOWN:    reserved; parser never emits this.
-  reconciliationStatus: "RECONCILED" | "MISMATCH" | "UNKNOWN";
+  // RECONCILED:  parsedTotals === sourceTotals for every column.
+  // MISMATCH:    parsed rows exist but totals mismatch (or source
+  //              footer missing).
+  // PARSE_FAILED: 0 daily rows OR year unresolvable OR period
+  //              cannot be derived. The batch is unusable; the
+  //              admin API refuses to persist a batch in this state.
+  reconciliationStatus: "RECONCILED" | "MISMATCH" | "PARSE_FAILED";
 };
 
-const MONTH_ABBRS: Record<string, number> = {
-  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-  jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+/** Positional glyph item recovered from the PDF. */
+export type GgGolfLayoutItem = {
+  text: string;
+  page: number;
+  x: number;
+  yBaseline: number;
 };
-const WEEKDAY_ABBRS = new Set([
-  "mon", "tue", "wed", "thu", "fri", "sat", "sun",
-]);
+
+export type GgGolfLayout = {
+  items: ReadonlyArray<GgGolfLayoutItem>;
+};
+
+// =============================================================================
+// Entry points
+// =============================================================================
 
 /** Compute SHA-256 of the uploaded binary. Idempotency key. */
 export function hashSourceFile(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-/** Entry point. Parse a GGGolf Daily Report PDF buffer. */
-export async function parseGgGolfPdf(
-  buf: Buffer,
-): Promise<GgGolfParseResult> {
+/**
+ * Production entry point. Extracts positional glyph layout from the
+ * PDF, groups items into rows by y-baseline, and parses each row.
+ */
+export async function parseGgGolfPdf(buf: Buffer): Promise<GgGolfParseResult> {
   const sourceFileHash = hashSourceFile(buf);
-  const text = (await pdfParse(buf)).text;
-  return parseGgGolfText(text, sourceFileHash);
+  const layout = await extractGgGolfLayout(buf);
+  return parseGgGolfLayout(layout, sourceFileHash);
 }
 
-/** Parse a pre-extracted text payload. Separated so tests can
- *  exercise the row/footer logic without a real PDF buffer. */
-export function parseGgGolfText(
-  text: string,
+/**
+ * Extract positional glyph items from a GGGolf PDF using
+ * `pdf-parse`'s pagerender hook. Each item carries (text, page, x,
+ * yBaseline). Returns an empty-items layout when extraction fails
+ * (an image-only / corrupt PDF).
+ */
+export async function extractGgGolfLayout(buf: Buffer): Promise<GgGolfLayout> {
+  const items: GgGolfLayoutItem[] = [];
+  try {
+    await pdfParse(buf, {
+      pagerender: async (pageData: unknown) => {
+        try {
+          const page = pageData as {
+            pageNumber?: number;
+            pageIndex?: number;
+            getTextContent: (opts?: unknown) => Promise<{
+              items: Array<{ str: string; transform: number[] }>;
+            }>;
+          };
+          const pageNum = page.pageNumber ?? ((page.pageIndex ?? 0) + 1);
+          const content = await page.getTextContent({
+            normalizeWhitespace: false,
+            disableCombineTextItems: true,
+          });
+          for (const it of content.items) {
+            const t = it.transform ?? [0, 0, 0, 0, 0, 0];
+            const x = round2(t[4] ?? 0);
+            const yBase = round2(t[5] ?? 0);
+            items.push({ text: it.str ?? "", page: pageNum, x, yBaseline: yBase });
+          }
+          return "";
+        } catch {
+          return "";
+        }
+      },
+    });
+  } catch {
+    // Extraction failed. Return the empty layout; the parser will
+    // emit PARSE_FAILED.
+  }
+  return { items };
+}
+
+/**
+ * Parse a GGGolf layout into daily rows + totals. Used directly by
+ * unit tests to exercise edge cases without crafting PDF binaries;
+ * production always goes through `parseGgGolfPdf`.
+ */
+export function parseGgGolfLayout(
+  layout: GgGolfLayout,
   sourceFileHash: string,
 ): GgGolfParseResult {
   const warnings: GgGolfParseWarning[] = [];
-  const reportYear = extractReportYear(text) ?? new Date().getUTCFullYear();
+  const visualRows = groupItemsIntoRows(layout.items);
 
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  const reportYear = extractReportYear(visualRows);
+  if (reportYear == null) {
+    warnings.push({
+      kind: "YEAR_UNRESOLVED",
+      message: "Could not identify the report year (`Date <YYYY>` header missing).",
+    });
+  }
+
   const rows: GgGolfParsedRow[] = [];
-  const seenDates = new Set<string>();
   let sourceTotals: GgGolfSourceTotals | null = null;
+  const seenDates = new Set<string>();
 
-  for (const raw of lines) {
-    if (!raw) continue;
-    // "Totals <12 ints>" — final footer row.
-    if (/^Totals\b/i.test(raw)) {
-      const nums = extractTrailingNumbers(raw.replace(/^Totals\s*/i, ""), 12);
+  for (const vr of visualRows) {
+    // Totals row: first cell is literal "Totals"; remaining 12 are integers.
+    if (vr.cells[0] && /^Totals$/i.test(vr.cells[0])) {
+      const nums = parseIntegerCells(vr.cells.slice(1));
       if (nums && nums.length === 12) {
-        sourceTotals = {
-          guests:      nums[0],
-          greenFees:   nums[1],
-          members:     nums[2],
-          totalRounds: nums[3],
-          juniors:     nums[4],
-          women:       nums[5],
-          corpos:      nums[6],
-          corposHalf:  nums[7],
-          fullCart:    nums[8],
-          nineCart:    nums[9],
-          halfCart:    nums[10],
-          freeCart:    nums[11],
-        };
+        sourceTotals = toSourceTotals(nums);
       }
       continue;
     }
-    // Daily row — begins with a weekday abbreviation + comma.
-    const parsed = parseDailyRow(raw, reportYear, rows.length);
-    if (!parsed) continue;
-    if (parsed.warning) {
-      warnings.push({ ...parsed.warning, rowIndex: rows.length });
-      continue;
-    }
-    const key = parsed.row.activityDate.toISOString().slice(0, 10);
-    if (seenDates.has(key)) {
+    // Daily row: first cell is "<WeekdayAbbr>, <MonthAbbr> <Day>".
+    const dateMatch = parseDateCell(vr.cells[0] ?? "");
+    if (!dateMatch) continue;
+    if (reportYear == null) continue;
+
+    // Expected shape: [date] [weather] [12 ints] = 14 cells.
+    if (vr.cells.length < 14) {
       warnings.push({
-        kind: "DUPLICATE_DATE",
-        message: `Duplicate date in source: ${parsed.row.rawDateLabel}`,
-        rowIndex: rows.length,
-        dateLabel: parsed.row.rawDateLabel,
+        kind: "SHORT_COLUMNS",
+        message: `Expected 14 cells (date + weather + 12 ints); got ${vr.cells.length} on "${vr.cells.join(" ")}".`,
       });
       continue;
     }
-    seenDates.add(key);
+    const weatherCell = vr.cells[1];
+    const nums = parseIntegerCells(vr.cells.slice(2, 14));
+    if (!nums) {
+      warnings.push({
+        kind: "UNPARSEABLE_ROW",
+        message: `Non-integer value in daily row "${vr.cells.join(" ")}".`,
+      });
+      continue;
+    }
+
+    const activityDate = new Date(Date.UTC(reportYear, dateMatch.month - 1, dateMatch.day));
+    if (
+      activityDate.getUTCFullYear() !== reportYear ||
+      activityDate.getUTCMonth() !== dateMatch.month - 1 ||
+      activityDate.getUTCDate() !== dateMatch.day
+    ) {
+      warnings.push({
+        kind: "UNPARSEABLE_ROW",
+        message: `Date resolution failed for cell "${vr.cells[0]}".`,
+      });
+      continue;
+    }
+
+    const isoKey = activityDate.toISOString().slice(0, 10);
+    if (seenDates.has(isoKey)) {
+      warnings.push({
+        kind: "DUPLICATE_DATE",
+        message: `Duplicate date in source: ${dateMatch.label}`,
+        rowIndex: rows.length,
+        dateLabel: dateMatch.label,
+      });
+      continue;
+    }
+    seenDates.add(isoKey);
+
+    const row: GgGolfParsedRow = {
+      rowIndex: rows.length,
+      rawCells: vr.cells,
+      rawDateLabel: dateMatch.label,
+      activityDate,
+      rawWeatherCode: weatherCell,
+      guests:      nums[0],
+      greenFees:   nums[1],
+      members:     nums[2],
+      totalRounds: nums[3],
+      juniors:     nums[4],
+      women:       nums[5],
+      corpos:      nums[6],
+      corposHalf:  nums[7],
+      fullCart:    nums[8],
+      nineCart:    nums[9],
+      halfCart:    nums[10],
+      freeCart:    nums[11],
+    };
     // Per-row reconciliation: Total = Guests + GreenFees + Members.
-    if (parsed.row.totalRounds !== parsed.row.guests + parsed.row.greenFees + parsed.row.members) {
+    if (row.totalRounds !== row.guests + row.greenFees + row.members) {
       warnings.push({
         kind: "ROW_TOTAL_MISMATCH",
         message:
-          `Row total ${parsed.row.totalRounds} ≠ ` +
-          `guests ${parsed.row.guests} + green fees ${parsed.row.greenFees} ` +
-          `+ members ${parsed.row.members} on ${parsed.row.rawDateLabel}.`,
+          `Row total ${row.totalRounds} ≠ ` +
+          `guests ${row.guests} + green fees ${row.greenFees} ` +
+          `+ members ${row.members} on ${row.rawDateLabel}.`,
         rowIndex: rows.length,
-        dateLabel: parsed.row.rawDateLabel,
+        dateLabel: row.rawDateLabel,
       });
     }
-    rows.push(parsed.row);
+    rows.push(row);
   }
 
   // Compute parsed totals.
   const parsedTotals = sumRows(rows);
 
-  // Reconciliation: parsed totals vs source footer.
+  // Resolve period from parsed rows.
+  let reportingPeriodStart: Date | null = null;
+  let reportingPeriodEnd: Date | null = null;
+  if (rows.length > 0) {
+    const sorted = [...rows].sort((a, b) => a.activityDate.getTime() - b.activityDate.getTime());
+    reportingPeriodStart = sorted[0].activityDate;
+    reportingPeriodEnd = sorted[sorted.length - 1].activityDate;
+  }
+
+  // Fail-closed: 0 rows OR year unresolvable → PARSE_FAILED. No
+  // period is fabricated; downstream admin API refuses to persist.
+  if (rows.length === 0 || reportYear == null) {
+    warnings.push({
+      kind: "NO_DAILY_ROWS",
+      message: "No GGGolf daily rows detected in the uploaded source. The parser requires a positional PDF (not a scanned image).",
+    });
+    return {
+      sourceFileHash,
+      reportYear,
+      reportingPeriodStart,
+      reportingPeriodEnd,
+      rows: [],
+      sourceTotals,
+      parsedTotals,
+      warnings,
+      reconciliationStatus: "PARSE_FAILED",
+    };
+  }
+
+  // Reconciliation.
   let reconciliationStatus: GgGolfParseResult["reconciliationStatus"] = "MISMATCH";
   if (sourceTotals) {
-    if (sumsEqual(sourceTotals, parsedTotals)) {
+    if (sumsEqual(sourceTotals, parsedTotals) && !warnings.some((w) => w.kind === "ROW_TOTAL_MISMATCH")) {
       reconciliationStatus = "RECONCILED";
     } else {
       warnings.push({
@@ -206,17 +342,8 @@ export function parseGgGolfText(
   } else {
     warnings.push({
       kind: "TOTALS_RECONCILIATION",
-      message: "Source totals row was not found in the document.",
+      message: "Source Totals row was not found in the document.",
     });
-  }
-
-  // Period boundaries from parsed rows.
-  let reportingPeriodStart = new Date(Date.UTC(reportYear, 0, 1));
-  let reportingPeriodEnd = new Date(Date.UTC(reportYear, 11, 31));
-  if (rows.length) {
-    const sorted = [...rows].sort((a, b) => a.activityDate.getTime() - b.activityDate.getTime());
-    reportingPeriodStart = sorted[0].activityDate;
-    reportingPeriodEnd = sorted[sorted.length - 1].activityDate;
   }
 
   return {
@@ -232,117 +359,147 @@ export function parseGgGolfText(
   };
 }
 
-// ---------------------------------------------------------------------------
+// =============================================================================
 // Internals
-// ---------------------------------------------------------------------------
+// =============================================================================
 
-function extractReportYear(text: string): number | null {
-  // The GGGolf header column reads "Date <YYYY>". Try to extract.
-  const m = /Date\s+(\d{4})/.exec(text);
-  if (m) {
-    const y = Number(m[1]);
-    if (y >= 1900 && y <= 2200) return y;
+const MONTH_ABBRS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+};
+const WEEKDAY_ABBRS = new Set([
+  "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+]);
+
+type VisualRow = {
+  page: number;
+  yBaseline: number;
+  cells: ReadonlyArray<string>;
+};
+
+/** Group positional items into rows by (page, rounded yBaseline). */
+export function groupItemsIntoRows(items: ReadonlyArray<GgGolfLayoutItem>): VisualRow[] {
+  const groups = new Map<string, GgGolfLayoutItem[]>();
+  for (const it of items) {
+    // Round y-baseline to the nearest integer unit. GGGolf rows are
+    // ~17 pts apart; within-row glyphs share the baseline exactly.
+    const key = `${it.page}:${Math.round(it.yBaseline)}`;
+    const arr = groups.get(key);
+    if (arr) arr.push(it);
+    else groups.set(key, [it]);
   }
-  // Fallback — try to find a 4-digit year in a year-anchoring row.
-  const m2 = /\b(20\d{2})\b/.exec(text);
-  if (m2) return Number(m2[1]);
+  const rows: VisualRow[] = [];
+  for (const [key, arr] of groups) {
+    arr.sort((a, b) => a.x - b.x);
+    const [pageStr] = key.split(":");
+    const page = Number(pageStr);
+    const yBaseline = arr[0]?.yBaseline ?? 0;
+    const cells: string[] = [];
+    for (const it of arr) {
+      // Collapse adjacent items at nearly the same x (sub-glyph
+      // splits that pdfjs sometimes emits) into a single cell.
+      // Threshold: < 4 points of horizontal gap.
+      const prev = cells.length ? arr[cells.length - 1] : null;
+      // (We can't look back by cell index because we already pushed
+      // text; fall through to simple push + merge at the end.)
+      cells.push(it.text);
+    }
+    // Second pass: merge glyph fragments that pdfjs emits for the
+    // same visual cell. We treat two items as the same cell when
+    // they sit within 4 pts of horizontal gap.
+    const merged: string[] = [];
+    for (let i = 0; i < arr.length; i++) {
+      const t = arr[i].text ?? "";
+      if (!t) continue;
+      if (merged.length === 0) { merged.push(t); continue; }
+      const prevRight = arr[i - 1].x + estimateGlyphWidth(arr[i - 1].text);
+      const gap = arr[i].x - prevRight;
+      if (gap < 2) merged[merged.length - 1] = merged[merged.length - 1] + t;
+      else merged.push(t);
+    }
+    rows.push({ page, yBaseline, cells: merged });
+  }
+  // Sort rows top-to-bottom (y decreasing in PDF user space).
+  rows.sort((a, b) => a.page === b.page ? b.yBaseline - a.yBaseline : a.page - b.page);
+  return rows;
+}
+
+function estimateGlyphWidth(s: string): number {
+  // Average character width in points at the font sizes GGGolf uses
+  // (~10pt body). Only used to decide whether two items belong to
+  // the same visual cell; conservative small value biases toward
+  // treating adjacent glyphs as the same cell.
+  return 2.5 * (s?.length ?? 1);
+}
+
+/** Extract the report year from the header row ("Date <YYYY>"). */
+function extractReportYear(rows: VisualRow[]): number | null {
+  for (const r of rows) {
+    for (const c of r.cells) {
+      const m = /^Date\s+(\d{4})$/.exec(c);
+      if (m) {
+        const y = Number(m[1]);
+        if (y >= 1900 && y <= 2200) return y;
+      }
+    }
+  }
+  // Fallback: any 4-digit year in any header cell.
+  for (const r of rows) {
+    for (const c of r.cells) {
+      const m = /\b(20\d{2})\b/.exec(c);
+      if (m) return Number(m[1]);
+    }
+  }
   return null;
 }
 
-type ParseDailyOutcome =
-  | { row: GgGolfParsedRow; warning?: never }
-  | { row?: never; warning: GgGolfParseWarning };
-
-function parseDailyRow(line: string, reportYear: number, rowIndex: number): ParseDailyOutcome | null {
-  // Expected shape: "Thu, Jan 1 - 0 0 0 0 0 0 0 0 0 0 0 0"
-  // The weekday abbreviation + comma anchors the start of a daily row.
-  const prefix = line.match(/^([A-Za-z]{3,4}),\s+([A-Za-z]{3,5})\s+(\d{1,2})\s+(.*)$/);
-  if (!prefix) return null;
-  const weekday = prefix[1].toLowerCase();
-  const monthToken = prefix[2].toLowerCase();
-  const day = Number(prefix[3]);
-  const trailing = prefix[4];
+function parseDateCell(cell: string): { month: number; day: number; label: string } | null {
+  // Expected: "Thu, Jan 1" / "Fri, Jan 2" / "Thu, Jan 1"
+  const m = /^([A-Za-z]{3,4}),\s+([A-Za-z]{3,5})\s+(\d{1,2})$/.exec(cell.trim());
+  if (!m) return null;
+  const weekday = m[1].toLowerCase();
+  const monthToken = m[2].toLowerCase();
+  const day = Number(m[3]);
   if (!WEEKDAY_ABBRS.has(weekday)) return null;
   const month = MONTH_ABBRS[monthToken];
-  if (!month || !Number.isFinite(day) || day < 1 || day > 31) return null;
-
-  const activityDate = new Date(Date.UTC(reportYear, month - 1, day));
-  if (
-    activityDate.getUTCFullYear() !== reportYear ||
-    activityDate.getUTCMonth() !== month - 1 ||
-    activityDate.getUTCDate() !== day
-  ) {
-    return {
-      warning: {
-        kind: "UNPARSEABLE_LINE",
-        message: `Could not resolve date on line: ${line}`,
-      },
-    };
-  }
-
-  // Split the trailing portion. The first token is the Weather code
-  // (a single char or "-"); the remaining 12 are integers.
-  const tokens = trailing.trim().split(/\s+/);
-  if (tokens.length < 13) {
-    return {
-      warning: {
-        kind: "SHORT_COLUMNS",
-        message:
-          `Expected 1 weather code + 12 integer columns after date; ` +
-          `got ${tokens.length} on "${line}".`,
-      },
-    };
-  }
-  const rawWeatherCode = tokens[0];
-  const numStrings = tokens.slice(1, 13);
-  const nums = numStrings.map((t) => Number(t));
-  if (nums.some((n) => !Number.isFinite(n))) {
-    return {
-      warning: {
-        kind: "UNPARSEABLE_LINE",
-        message: `Non-numeric value in daily row: ${line}`,
-      },
-    };
-  }
-
-  const [
-    guests, greenFees, members, totalRounds,
-    juniors, women,
-    corpos, corposHalf,
-    fullCart, nineCart, halfCart, freeCart,
-  ] = nums.map((n) => Math.max(0, Math.round(n)));
-
-  const dateLabel = `${capitalizeAbbr(weekday)}, ${capitalizeAbbr(monthToken)} ${day}`;
-
+  if (!month) return null;
+  if (!Number.isFinite(day) || day < 1 || day > 31) return null;
   return {
-    row: {
-      rowIndex,
-      rawLine: line,
-      rawDateLabel: dateLabel,
-      activityDate,
-      rawWeatherCode,
-      guests, greenFees, members, totalRounds,
-      juniors, women,
-      corpos, corposHalf,
-      fullCart, nineCart, halfCart, freeCart,
-    },
+    month, day,
+    label: `${capitalizeAbbr(weekday)}, ${capitalizeAbbr(monthToken)} ${day}`,
   };
 }
 
-function capitalizeAbbr(s: string): string {
-  if (!s) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+function parseIntegerCells(cells: ReadonlyArray<string>): number[] | null {
+  const out: number[] = [];
+  for (const c of cells) {
+    const t = c.trim();
+    if (!/^\d+$/.test(t)) {
+      // Weather code / "-" lands in position 1 of a daily row; this
+      // function is called ONLY on the integer slice so a non-integer
+      // here is a true parse error.
+      return null;
+    }
+    out.push(Number(t));
+  }
+  return out;
 }
 
-/** Extract the final N integers from a trailing-text segment. Used
- *  for the Totals footer row. */
-function extractTrailingNumbers(s: string, n: number): number[] | null {
-  const tokens = s.trim().split(/\s+/);
-  if (tokens.length < n) return null;
-  const tail = tokens.slice(-n);
-  const nums = tail.map((t) => Number(t));
-  if (nums.some((v) => !Number.isFinite(v))) return null;
-  return nums.map((v) => Math.max(0, Math.round(v)));
+function toSourceTotals(nums: number[]): GgGolfSourceTotals {
+  return {
+    guests:      nums[0],
+    greenFees:   nums[1],
+    members:     nums[2],
+    totalRounds: nums[3],
+    juniors:     nums[4],
+    women:       nums[5],
+    corpos:      nums[6],
+    corposHalf:  nums[7],
+    fullCart:    nums[8],
+    nineCart:    nums[9],
+    halfCart:    nums[10],
+    freeCart:    nums[11],
+  };
 }
 
 function sumRows(rows: GgGolfParsedRow[]): GgGolfSourceTotals {
@@ -382,4 +539,13 @@ function sumsEqual(a: GgGolfSourceTotals, b: GgGolfSourceTotals): boolean {
     a.halfCart    === b.halfCart    &&
     a.freeCart    === b.freeCart
   );
+}
+
+function capitalizeAbbr(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
