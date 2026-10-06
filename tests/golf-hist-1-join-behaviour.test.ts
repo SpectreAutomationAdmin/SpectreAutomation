@@ -90,10 +90,14 @@ describe("GOLF-HIST-1 §1 — live-join activates the rounds-by-weather bars", (
     expect(summary.roundsCard.insight).toMatch(/401 rounds/);
     expect(summary.roundsCard.insight).toMatch(/31 day/);
 
-    // Golf correlation card is LIVE.
+    // Golf correlation card is LIVE for descriptive narrative, but
+    // GOLF-HIST-1B holds the correlation coefficient at "—" pending
+    // founder approval of a defensible semantic — the old
+    // sign-inverted Pearson is withheld.
     const golf = summary.correlationSummary.cards.find((c) => c.key === "golf-rounds")!;
     expect(golf.narrative).toMatch(/Live Weather × Golf join/);
-    expect(golf.dataPoint.value).toMatch(/-0\.68/);
+    expect(golf.narrative).toMatch(/withheld pending founder approval/i);
+    expect(golf.dataPoint.value).toBe("—");
   });
 
   it("falls back to UNAVAILABLE sentinel when join is omitted", async () => {

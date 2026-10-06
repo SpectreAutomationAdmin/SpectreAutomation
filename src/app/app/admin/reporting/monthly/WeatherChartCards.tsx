@@ -56,9 +56,15 @@ export function WeatherChartCards({
   pattern: PatternCard;
   rounds: RoundsCard;
 }) {
-  // Period-average round count for the bar tooltip's variance line.
-  const periodAverage =
-    rounds.bars.reduce((s, b) => s + b.averageRounds, 0) / rounds.bars.length;
+  // GOLF-HIST-1B (2026-10-06) — Zero ≠ UNAVAILABLE. When no bars
+  // are supplied, the Rounds-by-Weather analysis is UNAVAILABLE —
+  // period average + best/worst condition KPIs render "—" rather
+  // than 0 rds, and the chart body renders a sentinel panel instead
+  // of a 4-bar chart at zero height.
+  const roundsAvailable = rounds.bars.length > 0;
+  const periodAverage = roundsAvailable
+    ? rounds.bars.reduce((s, b) => s + b.averageRounds, 0) / rounds.bars.length
+    : 0;
 
   // Pattern card KPIs — synthesized from the slice data so the
   // ribbon reads parallel to the FP cards' KPI strip. Sunny-share /
@@ -74,14 +80,18 @@ export function WeatherChartCards({
 
   // Rounds card KPIs — pull the highest / lowest bars + period
   // average so the ribbon previews the chart's distribution.
-  const sortedBars = [...rounds.bars].sort((a, b) => b.averageRounds - a.averageRounds);
+  const sortedBars = roundsAvailable
+    ? [...rounds.bars].sort((a, b) => b.averageRounds - a.averageRounds)
+    : [];
   const bestBar = sortedBars[0];
   const worstBar = sortedBars[sortedBars.length - 1];
 
   // Y-axis: cap to ≤ 6 ticks so the bar chart reads cleanly (the
   // older 10-rd-per-tick rendering produced 16 labels). FP's
   // OperatingResults bar chart uses 4 ticks.
-  const maxRoundsRaw = Math.max(...rounds.bars.map((b) => b.averageRounds));
+  const maxRoundsRaw = roundsAvailable
+    ? Math.max(...rounds.bars.map((b) => b.averageRounds))
+    : 0;
   const yMaxRounded = Math.ceil(maxRoundsRaw / 50) * 50;
 
   return (
@@ -239,9 +249,10 @@ export function WeatherChartCards({
         subtitle={rounds.subtitle}
         pillLabel="ROUNDS BY CONDITION"
         kpis={[
-          { label: "Period avg",    value: `${Math.round(periodAverage)} rds` },
-          { label: "Best condition", value: bestBar ? `${bestBar.averageRounds} rds` : "—" },
-          { label: "Worst condition", value: worstBar ? `${worstBar.averageRounds} rds` : "—" },
+          // GOLF-HIST-1B — "—" when the join is unavailable.
+          { label: "Period avg",    value: roundsAvailable ? `${Math.round(periodAverage)} rds` : "—" },
+          { label: "Best condition", value: roundsAvailable && bestBar ? `${bestBar.averageRounds} rds` : "—" },
+          { label: "Worst condition", value: roundsAvailable && worstBar ? `${worstBar.averageRounds} rds` : "—" },
           { label: "Total days",    value: String(pattern.totalDays) },
         ]}
         commentary={rounds.insight}
@@ -256,6 +267,15 @@ export function WeatherChartCards({
             by 14 px = px-3.5). The previous `px-4` wrapper here
             double-inset the chart and broke the KPI-vs-plot alignment. */}
         <div className="py-4" style={{ height: 260 }}>
+          {!roundsAvailable ? (
+            <div
+              className="flex h-full items-center justify-center text-center text-xs italic text-club-green-800/60"
+              style={{ fontFamily: "serif", padding: "0 24px" }}
+              data-testid="mws-rounds-unavailable"
+            >
+              Rounds-by-weather chart unavailable — no committed Golf Activity for this period.
+            </div>
+          ) : (
           <EditorialChartReveal testid="mws-rounds-reveal">
           <EditorialInteractiveBarChart
             bars={rounds.bars.map((b) => ({
@@ -326,6 +346,7 @@ export function WeatherChartCards({
             }}
           />
           </EditorialChartReveal>
+          )}
         </div>
       </FpChartCard>
     </div>

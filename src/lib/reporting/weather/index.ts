@@ -39,6 +39,7 @@ import {
 export type {
   CurrentWeatherCondition,
   CurrentWeatherObservation,
+  DailyWeatherClassification,
   MonthlyWeatherObservation,
   WeatherLocation,
   WeatherProvider,
@@ -59,6 +60,24 @@ export {
 export { geocodeClubProfileAddress } from "./geocode";
 
 export type WeatherProviderId = "seed" | "open-meteo";
+
+/**
+ * GOLF-HIST-1B (2026-10-06) — canonical contract check.
+ *
+ * The current canonical `MonthlyWeatherObservation` MUST expose
+ * authoritative per-date classifications via `dailyClassifications`.
+ * Both the Weather Pattern aggregator AND the Weather × Golf join
+ * read from this one array. A cache row written before
+ * `dailyClassifications` existed carries only the monthly aggregates
+ * — Weather Pattern still renders but the join sees nothing. This
+ * predicate decides whether such a row counts as a cache HIT or a
+ * stale MISS that must be refetched.
+ */
+export function isObservationContractCurrent(obs: MonthlyWeatherObservation): boolean {
+  if (!Array.isArray(obs.dailyClassifications)) return false;
+  if (obs.dailyClassifications.length === 0) return false;
+  return true;
+}
 
 export function getWeatherProvider(opts?: {
   providerId?: WeatherProviderId;
@@ -97,6 +116,17 @@ export async function fetchObservation(input: {
   const location = resolveClubLocation(input.club);
 
   // -- 1. Cache lookup when we have both a clubId and coordinates. --
+  // GOLF-HIST-1B (2026-10-06) — cache HIT and provider FETCH MUST
+  // return equivalent contracts. A cache row written before
+  // `dailyClassifications` was added (pre-GOLF-HIST-1) carries the
+  // monthly aggregate counts but no per-day array. Treating that as
+  // a HIT silently delivered a weaker contract to downstream
+  // consumers — Weather Pattern rendered (uses aggregates) while
+  // the Weather × Golf join saw `dailyClassifications: undefined`
+  // and fell back to UNAVAILABLE. Fix: a cached observation lacking
+  // the canonical per-day array is treated as a MISS; the provider
+  // is refetched and the cache row is overwritten with the full
+  // contract.
   const yearMonth = `${input.period.year}-${String(input.period.month).padStart(2, "0")}`;
   if (
     !input.bypassCache &&
@@ -110,9 +140,11 @@ export async function fetchObservation(input: {
       latitude: location.latitude,
       longitude: location.longitude,
     });
-    if (cached) {
+    if (cached && isObservationContractCurrent(cached)) {
       return { location, observation: cached };
     }
+    // Fall through — cache row is stale by contract. The provider
+    // call below will overwrite it.
   }
 
   // -- 2. Primary provider. --

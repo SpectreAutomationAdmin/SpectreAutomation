@@ -685,14 +685,15 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
         insight: buildRoundsLiveInsight(opts.weatherGolfJoin, monthLong),
       }
     : {
+        // GOLF-HIST-1B (2026-10-06) — Zero ≠ UNAVAILABLE. When the
+        // Weather × Golf join is NOT available for the period, we
+        // emit zero bars so the panel's KPI ribbon renders "—" for
+        // Period Avg / Best / Worst Condition instead of the
+        // defective "0 rds". Rendering a true zero would misrepresent
+        // "data unavailable" as "no rounds happened".
         title: "Weather vs. Golf Rounds",
         subtitle: "Average Daily Rounds by Weather Condition",
-        bars: [
-          { key: "sunny-clear",   label: "Sunny/Clear",    averageRounds: 0, fillHex: FILL_OPERATING_BEIGE },
-          { key: "partly-cloudy", label: "Partly Cloudy",  averageRounds: 0, fillHex: FILL_PALE_CREAM },
-          { key: "high-wind",     label: "High Wind",      averageRounds: 0, fillHex: FILL_GOLD_DEEP },
-          { key: "rain-storm",    label: "Rain/Storm",     averageRounds: 0, fillHex: FILL_SLATE_BLUE },
-        ],
+        bars: [] as ReadonlyArray<WeatherRoundsBar>,
         insight: buildRoundsUnavailableInsight(opts.weatherGolfJoin, monthLong),
       };
 
@@ -861,17 +862,29 @@ function buildLiveGolfCorrelationCard(
   const avg =
     join.periodAverageRoundsPerDay != null
       ? Math.round(join.periodAverageRoundsPerDay)
-      : 0;
-  const corrLabel =
-    join.rainRoundsCorrelation != null
-      ? `${join.rainRoundsCorrelation.toFixed(2)} (rain vs. rounds)`
-      : "—";
+      : null;
+  // GOLF-HIST-1B (2026-10-06) — correlation COEFFICIENT held at "—"
+  // pending founder approval of its statistical semantic. The old
+  // formula manually negated the Pearson between the day-count
+  // vector and the per-condition average-rounds vector, which (a)
+  // does NOT measure a rain-vs-rounds relationship across daily
+  // observations and (b) sign-flips the sign of its own output to
+  // match the expected narrative. Neither is defensible as a
+  // published correlation metric. The descriptive narrative stays
+  // LIVE; the coefficient does not.
   const narrativeParts: string[] = [];
-  narrativeParts.push(
-    `Live Weather × Golf join for ${periodLabel}. ` +
-    `${join.periodTotalRounds} rounds across ${join.periodDaysWithGolfData} ` +
-    `day(s) of authoritative Golf Activity coverage (avg ${avg} rounds/day).`,
-  );
+  if (avg != null) {
+    narrativeParts.push(
+      `Live Weather × Golf join for ${periodLabel}. ` +
+      `${join.periodTotalRounds} rounds across ${join.periodDaysWithGolfData} ` +
+      `day(s) of authoritative Golf Activity coverage (avg ${avg} rounds/day).`,
+    );
+  } else {
+    narrativeParts.push(
+      `Live Weather × Golf join for ${periodLabel}. ` +
+      `${join.periodTotalRounds} rounds across ${join.periodDaysWithGolfData} day(s).`,
+    );
+  }
   if (join.bestCondition) {
     narrativeParts.push(
       `${capitalize(CONDITION_LABELS[join.bestCondition])} days produced the highest ` +
@@ -884,13 +897,21 @@ function buildLiveGolfCorrelationCard(
       `average rounds (${Math.round(join.byCondition[join.worstCondition].averageRoundsPerDay)} rounds/day).`,
     );
   }
+  narrativeParts.push(
+    `Rain-vs-rounds correlation coefficient withheld pending founder approval ` +
+    `of a statistically defensible definition.`,
+  );
   return {
     key: "golf-rounds",
     icon: "golf-flag",
     title: "Golf Rounds",
     accent: "green",
     narrative: narrativeParts.join(" "),
-    dataPoint: { label: "Weather correlation:", value: corrLabel },
+    // Correlation coefficient held at "—" — see the GOLF-HIST-1B
+    // note above. `join.rainRoundsCorrelation` is retained upstream
+    // only to preserve the join shape for tests; it is NEVER
+    // published on this card.
+    dataPoint: { label: "Weather correlation:", value: "—" },
   };
 }
 
