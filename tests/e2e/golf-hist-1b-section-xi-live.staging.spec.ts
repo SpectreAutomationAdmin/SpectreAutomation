@@ -67,19 +67,23 @@ runAt("GOLF-HIST-1B · Section XI Weather × Golf LIVE for committed January", a
   // -- §2 Rounds-by-weather card is LIVE. -----------------------------
   const roundsCard = await page.locator('[data-testid="mws-rounds-card"]').innerText();
   console.log("GOLF_HIST_1B_ROUNDS_CARD " + JSON.stringify(roundsCard));
-  // Period Avg must be a real integer (not "0" and not "—").
-  // "N rds" where N > 0.
-  const periodAvgMatch = roundsCard.match(/Period\s*avg\s*\n*\s*([-\d]+)\s*rds/i);
-  expect(periodAvgMatch, "Period avg KPI not found in rounds card").toBeTruthy();
-  const periodAvg = Number(periodAvgMatch![1]);
-  console.log("GOLF_HIST_1B_PERIOD_AVG " + periodAvg);
-  expect(Number.isFinite(periodAvg)).toBe(true);
-  expect(periodAvg).toBeGreaterThan(0);
-  // Best / worst condition KPIs must NOT be "—" when the join is live.
-  expect(roundsCard).toMatch(/Best\s*condition\s*\n*\s*\d+\s*rds/i);
-  expect(roundsCard).toMatch(/Worst\s*condition\s*\n*\s*\d+\s*rds/i);
-  // Live insight sentence quotes the total.
-  expect(roundsCard).toMatch(/Live Golf Activity|401 rounds/i);
+  // The KPI labels + values render as uppercase chrome; innerText
+  // interleaves label and value with newlines. We just assert that:
+  //   (a) the live commentary mentions the 401 total + 31 days (proof
+  //       the live join is active, not the UNAVAILABLE sentinel),
+  //   (b) the Period Avg KPI does NOT render as "— rds" or "0 rds"
+  //       (proof of the Zero ≠ UNAVAILABLE fix),
+  //   (c) no "— rds" appears anywhere in the card (same proof applied
+  //       to Best + Worst condition KPIs).
+  expect(roundsCard).toMatch(/Live Golf Activity for January/i);
+  expect(roundsCard).toMatch(/401 rounds across 31 day/i);
+  expect(roundsCard).toMatch(/average 13 rounds\/day/i);
+  // GOLF-HIST-1B §G — the Period Avg KPI must now use the
+  // authoritative weighted value (401/31 ≈ 13), not the unweighted
+  // mean of per-condition averages. Verify "13 rds" appears next
+  // to the PERIOD AVG label.
+  expect(roundsCard).toMatch(/13 rds\s*\n*\s*PERIOD AVG/i);
+  expect(roundsCard).not.toMatch(/—\s*rds/);
   // Chart UNAVAILABLE sentinel panel is NOT present when join is LIVE.
   await expect(page.locator('[data-testid="mws-rounds-unavailable"]')).toBeHidden();
 

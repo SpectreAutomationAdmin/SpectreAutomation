@@ -143,6 +143,13 @@ export type MonthlyWeatherSummary = {
     bars: ReadonlyArray<WeatherRoundsBar>;
     /** Single insight line shown in the muted callout under the chart. */
     insight: string;
+    /** GOLF-HIST-1B (2026-10-06) — authoritative Period Average Rounds
+     *  (totalRounds / daysWithGolfData). When present, the KPI
+     *  ribbon renders this value instead of the unweighted mean of
+     *  the four per-condition averages. Null in the demo seed and in
+     *  the UNAVAILABLE branch so the ribbon falls back to the
+     *  existing semantic. */
+    periodAverageRoundsPerDay?: number | null;
   };
   // Notable weather events table.
   eventsTable: {
@@ -683,6 +690,7 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
           { key: "rain-storm",    label: "Rain/Storm",     averageRounds: rounded(opts.weatherGolfJoin.byCondition["rain"].averageRoundsPerDay),          fillHex: FILL_SLATE_BLUE },
         ],
         insight: buildRoundsLiveInsight(opts.weatherGolfJoin, monthLong),
+        periodAverageRoundsPerDay: opts.weatherGolfJoin.periodAverageRoundsPerDay,
       }
     : {
         // GOLF-HIST-1B (2026-10-06) — Zero ≠ UNAVAILABLE. When the

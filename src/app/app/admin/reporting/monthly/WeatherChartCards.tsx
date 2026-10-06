@@ -62,8 +62,15 @@ export function WeatherChartCards({
   // than 0 rds, and the chart body renders a sentinel panel instead
   // of a 4-bar chart at zero height.
   const roundsAvailable = rounds.bars.length > 0;
+  // Prefer the authoritative Period Average Rounds supplied by the
+  // reporting service (totalRounds / daysWithGolfData — the directive-
+  // approved semantic). Fall back to the unweighted mean of the four
+  // per-condition averages for the demo seed path, which does not
+  // supply the weighted value.
   const periodAverage = roundsAvailable
-    ? rounds.bars.reduce((s, b) => s + b.averageRounds, 0) / rounds.bars.length
+    ? (rounds.periodAverageRoundsPerDay != null
+        ? rounds.periodAverageRoundsPerDay
+        : rounds.bars.reduce((s, b) => s + b.averageRounds, 0) / rounds.bars.length)
     : 0;
 
   // Pattern card KPIs — synthesized from the slice data so the
