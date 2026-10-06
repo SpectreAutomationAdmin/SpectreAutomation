@@ -46,6 +46,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { SectionSelectAllCheckbox } from "@/app/app/admin/coa/SectionSelectAllCheckbox";
 import { updateAccountInspectorAction, bulkArchiveAccountsAction } from "@/app/app/admin/coa/_actions";
 import { KNOWN_FUND_KEYS } from "@/lib/accounting/fund-applicability";
+import { AccountListMappingDrawer } from "@/components/coa-mapping/AccountListMappingDrawer";
 
 // ----- Public row shape (serialised from the RSC) ---------------------
 
@@ -61,6 +62,10 @@ export type DwAccountRow = {
   fsGroupKey: string;
   fsGroupLabel: string;
   fsGroupSortOrder: number;
+  // COA-MAP-2B (2026-10-06) — canonical FinancialStatementGroup.id
+  // for the account's current assignment.  Required so Account List
+  // drag/drop can target the group by ID (never by display text).
+  fsGroupId: string | null;
   departmentLabel: string | null;
   fundKeys: Array<"OPERATING" | "CAPITAL">;
   fundApplicabilityRaw: string;
@@ -91,6 +96,11 @@ export type DwOption = { key: string; label: string; type?: string; statement?: 
 export type DwParentOption = { id: string; accountNumber: string; name: string };
 
 export type ChartOfAccountsClientProps = {
+  // COA-MAP-2B (2026-10-06) — the active tenant's clubId.  Threaded
+  // down so Account List drag/drop can call the shared mapping
+  // endpoints (/api/admin/coa-mapping/preview, /.../reassign) with
+  // the correct tenant scope.
+  clubId: string;
   rows: DwAccountRow[];
   canEdit: boolean;
   disabledTooltip: string;
@@ -262,6 +272,118 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
   );
   const [openMenuFor, setOpenMenuFor] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<DwAccountRow["type"]>>(new Set());
+
+  // ---- COA-MAP-2B (2026-10-06) — Account-List direct drag-mapping -----
+  //
+  // Drag an account row by its grip handle onto a Financial Statement
+  // Group header to open the shared Reporting Impact drawer.  No new
+  // mutation logic — the drawer calls the SAME /api/admin/coa-mapping/*
+  // endpoints the Mapping Studio uses.
+  //
+  // `mappingDragId` is the source account id (null when not dragging).
+  // `mappingHoverGroupId` is the current drop target.
+  // `mappingDrop` carries the drop target that OPENED the drawer.
+  const [mappingDragId, setMappingDragId] = useState<string | null>(null);
+  const [mappingHoverGroupId, setMappingHoverGroupId] = useState<string | null>(null);
+  const [mappingDrop, setMappingDrop] = useState<{ accountId: string; targetFsGroupId: string } | null>(null);
+  // Auto-scroll ref state for the Account List's `.spectre-dw-table-wrap`
+  // scroll owner (measured on COA-MAP-2A).
+  const scrollRafRef = useRef<number | null>(null);
+  const scrollVelRef = useRef<number>(0);
+
+  const stopAutoScroll = useCallback(() => {
+    if (scrollRafRef.current != null) {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+    scrollVelRef.current = 0;
+  }, []);
+
+  const stepAutoScroll = useCallback(() => {
+    const dy = scrollVelRef.current;
+    if (dy === 0) { scrollRafRef.current = null; return; }
+    // Scroll the measured Account List scroll owner.
+    const wrap = document.querySelector(".spectre-dw-table-wrap") as HTMLElement | null;
+    if (wrap && wrap.scrollHeight > wrap.clientHeight) {
+      wrap.scrollTop += dy;
+    } else {
+      // Defensive fallback — if nested inside a different shell.
+      const se = (document.scrollingElement ?? document.documentElement) as HTMLElement;
+      se.scrollTop += dy;
+    }
+    scrollRafRef.current = requestAnimationFrame(stepAutoScroll);
+  }, []);
+
+  const updateAutoScroll = useCallback((clientY: number) => {
+    const vh = window.innerHeight;
+    const edge = 100;
+    const maxV = 24;
+    const minV = 6;
+    let v = 0;
+    if (clientY < edge) {
+      const t = Math.max(0, Math.min(1, 1 - clientY / edge));
+      v = -Math.round(minV + t * (maxV - minV));
+    } else if (clientY > vh - edge) {
+      const t = Math.max(0, Math.min(1, (clientY - (vh - edge)) / edge));
+      v = Math.round(minV + t * (maxV - minV));
+    }
+    scrollVelRef.current = v;
+    if (v !== 0 && scrollRafRef.current == null) {
+      scrollRafRef.current = requestAnimationFrame(stepAutoScroll);
+    } else if (v === 0) {
+      stopAutoScroll();
+    }
+  }, [stepAutoScroll, stopAutoScroll]);
+
+  // Global dragover listener while a mapping drag is in flight.
+  useEffect(() => {
+    if (!mappingDragId) return undefined;
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      updateAutoScroll(e.clientY);
+    };
+    const onDragEnd = () => stopAutoScroll();
+    const onDrop = () => stopAutoScroll();
+    window.addEventListener("dragover", onDragOver, { passive: false });
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDrop);
+      stopAutoScroll();
+    };
+  }, [mappingDragId, updateAutoScroll, stopAutoScroll]);
+
+  useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
+
+  const beginMappingDrag = useCallback((e: React.DragEvent, accountId: string) => {
+    setMappingDragId(accountId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("application/x-spectre-account", accountId);
+  }, []);
+  const endMappingDrag = useCallback(() => {
+    setMappingDragId(null);
+    setMappingHoverGroupId(null);
+    stopAutoScroll();
+  }, [stopAutoScroll]);
+  const dragOverGroup = useCallback((e: React.DragEvent, fsGroupId: string) => {
+    e.preventDefault();
+    setMappingHoverGroupId(fsGroupId);
+  }, []);
+  const dragLeaveGroup = useCallback((fsGroupId: string) => {
+    setMappingHoverGroupId((cur) => (cur === fsGroupId ? null : cur));
+  }, []);
+  const dropOnGroup = useCallback((e: React.DragEvent, fsGroupId: string) => {
+    e.preventDefault();
+    stopAutoScroll();
+    const accountId = mappingDragId;
+    setMappingDragId(null);
+    setMappingHoverGroupId(null);
+    if (accountId) {
+      setMappingDrop({ accountId, targetFsGroupId: fsGroupId });
+    }
+  }, [mappingDragId, stopAutoScroll]);
   const [inspectorTab, setInspectorTab] = useState<"details" | "rules" | "activity" | "audit">("details");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -918,6 +1040,16 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
                         selected, toggleRow, rowClick, openMenuFor, setOpenMenuFor, canEdit: props.canEdit,
                         disabledTooltip: props.disabledTooltip, currentInspectorId,
                         columnCount: 10 + (props.fundMode && props.canEdit ? 1 : 0),
+                        // COA-MAP-2B — mapping drag/drop wiring.
+                        mapping: {
+                          dragId: mappingDragId,
+                          hoverGroupId: mappingHoverGroupId,
+                          onDragStart: beginMappingDrag,
+                          onDragEnd: endMappingDrag,
+                          onDragOverGroup: dragOverGroup,
+                          onDragLeaveGroup: dragLeaveGroup,
+                          onDropOnGroup: dropOnGroup,
+                        },
                       })}
                     </React.Fragment>
                   );
@@ -1254,6 +1386,18 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
            so a reviewer can jump between empty / selected / editing /
            error / no-results without hunting through the workspace. */}
       {props.reviewMode && <ReviewStatesPanel />}
+
+      {/* COA-MAP-2B — Mapping Reporting Impact drawer.  Opens when
+          an account is dropped on a Financial Statement Group
+          header. */}
+      {mappingDrop && (
+        <AccountListMappingDrawer
+          clubId={props.clubId}
+          accountId={mappingDrop.accountId}
+          targetFsGroupId={mappingDrop.targetFsGroupId}
+          onClose={() => setMappingDrop(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1405,6 +1549,16 @@ function FundProgress({ rows }: { rows: DwAccountRow[] }) {
   );
 }
 
+type MappingDragCtx = {
+  dragId: string | null;
+  hoverGroupId: string | null;
+  onDragStart: (e: React.DragEvent, accountId: string) => void;
+  onDragEnd: () => void;
+  onDragOverGroup: (e: React.DragEvent, fsGroupId: string) => void;
+  onDragLeaveGroup: (fsGroupId: string) => void;
+  onDropOnGroup: (e: React.DragEvent, fsGroupId: string) => void;
+};
+
 function renderCategorySubgroups(
   rows: DwAccountRow[],
   type: DwAccountRow["type"],
@@ -1419,6 +1573,7 @@ function renderCategorySubgroups(
     disabledTooltip: string;
     currentInspectorId: string | null;
     columnCount: number;
+    mapping?: MappingDragCtx;
   },
 ): React.ReactNode[] {
   // Sub-group by category → FS Group with legacy sort. Emit ONE
@@ -1426,12 +1581,15 @@ function renderCategorySubgroups(
   // SectionSelectAllCheckbox (which queries
   //   [data-section-key="X"] input[type="checkbox"][name="accountIds"]
   // ) scopes to only the rows inside its own section.
-  const cats = new Map<string, { label: string; sortOrder: number; fsGroups: Map<string, { key: string; label: string; sortOrder: number; rows: DwAccountRow[] }> }>();
+  // COA-MAP-2B — capture the canonical fsGroupId on each bucket.
+  // Rows for the same (categoryKey, fsGroupKey) share the same
+  // Account.fsGroup — pick the first row's fsGroupId.
+  const cats = new Map<string, { label: string; sortOrder: number; fsGroups: Map<string, { id: string | null; key: string; label: string; sortOrder: number; rows: DwAccountRow[] }> }>();
   for (const r of rows) {
     let c = cats.get(r.categoryKey);
     if (!c) { c = { label: r.categoryLabel, sortOrder: r.categorySortOrder, fsGroups: new Map() }; cats.set(r.categoryKey, c); }
     let g = c.fsGroups.get(r.fsGroupKey);
-    if (!g) { g = { key: r.fsGroupKey, label: r.fsGroupLabel, sortOrder: r.fsGroupSortOrder, rows: [] }; c.fsGroups.set(r.fsGroupKey, g); }
+    if (!g) { g = { id: r.fsGroupId, key: r.fsGroupKey, label: r.fsGroupLabel, sortOrder: r.fsGroupSortOrder, rows: [] }; c.fsGroups.set(r.fsGroupKey, g); }
     g.rows.push(r);
   }
   const catList = Array.from(cats.entries()).sort((a, b) => a[1].sortOrder - b[1].sortOrder || a[1].label.localeCompare(b[1].label));
@@ -1439,13 +1597,32 @@ function renderCategorySubgroups(
   for (const [catKey, cat] of catList) {
     const fsList = Array.from(cat.fsGroups.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
     for (const fsg of fsList) {
+      // COA-MAP-2B — group header is a drop target when a mapping drag
+      // is active AND the group has a canonical fsGroupId.
+      const dragActive = ctx.mapping?.dragId != null;
+      const canDrop = dragActive && !!fsg.id;
+      const hovered = canDrop && ctx.mapping?.hoverGroupId === fsg.id;
+      const headerDropProps = canDrop && fsg.id
+        ? {
+            onDragOver: (e: React.DragEvent) => ctx.mapping!.onDragOverGroup(e, fsg.id as string),
+            onDragLeave: () => ctx.mapping!.onDragLeaveGroup(fsg.id as string),
+            onDrop: (e: React.DragEvent) => ctx.mapping!.onDropOnGroup(e, fsg.id as string),
+          }
+        : {};
       out.push(
         <tbody
           key={`${type}-${catKey}-${fsg.key}-body`}
           data-section-key={fsg.key}
+          data-fs-group-id={fsg.id ?? ""}
           data-testid={`coa-fsgroup-${type}-${catKey}-${fsg.key}`}
+          data-drop-eligible={canDrop ? "true" : "false"}
+          data-drop-hovered={hovered ? "true" : "false"}
         >
-          <tr className="spectre-dw-sub-header">
+          <tr
+            className={"spectre-dw-sub-header" + (hovered ? " coa-mapping-drop-hovered" : canDrop ? " coa-mapping-drop-eligible" : "")}
+            data-testid={fsg.id ? `coa-mapping-drop-${fsg.id}` : undefined}
+            {...headerDropProps}
+          >
             <td colSpan={ctx.columnCount}>
               <span data-testid={`coa-fsgroup-label-${fsg.key}`} className="inline-flex items-center">
                 {props.fundMode && ctx.canEdit && (
@@ -1458,9 +1635,16 @@ function renderCategorySubgroups(
                 {cat.label} · {fsg.label}
               </span>
               <span className="sg-count">{fsg.rows.length} account{fsg.rows.length === 1 ? "" : "s"}</span>
-              <span className="sg-total" data-testid={`coa-subsection-total-${fsg.key}`}>
-                <BalanceValue amount={fsg.rows.reduce((s, r) => s + r.balance, 0)} />
-              </span>
+              {hovered && (
+                <span className="sg-total" data-testid="coa-mapping-drop-affordance" style={{ color: "var(--spectre-text-primary)", fontWeight: 600 }}>
+                  Move here
+                </span>
+              )}
+              {!hovered && (
+                <span className="sg-total" data-testid={`coa-subsection-total-${fsg.key}`}>
+                  <BalanceValue amount={fsg.rows.reduce((s, r) => s + r.balance, 0)} />
+                </span>
+              )}
             </td>
           </tr>
           {fsg.rows.map((r) => (
@@ -1476,6 +1660,8 @@ function renderCategorySubgroups(
               menuOpen={ctx.openMenuFor === r.id}
               setMenuOpen={(open) => ctx.setOpenMenuFor(open ? r.id : null)}
               isInspectorTarget={ctx.currentInspectorId === r.id}
+              onMappingDragStart={ctx.mapping?.onDragStart}
+              onMappingDragEnd={ctx.mapping?.onDragEnd}
             />
           ))}
         </tbody>,
@@ -1488,6 +1674,7 @@ function renderCategorySubgroups(
 function AccountRow({
   row, selected, onToggle, onRowClick, canEdit, disabledTooltip,
   fundMode, menuOpen, setMenuOpen, isInspectorTarget,
+  onMappingDragStart, onMappingDragEnd,
 }: {
   row: DwAccountRow;
   selected: boolean;
@@ -1499,6 +1686,12 @@ function AccountRow({
   menuOpen: boolean;
   setMenuOpen: (open: boolean) => void;
   isInspectorTarget: boolean;
+  // COA-MAP-2B (2026-10-06).  When provided, the row renders a small
+  // drag-grip handle at the start of the row.  The handle is the
+  // ONLY draggable element so row click (→ open Inspector) is
+  // preserved for normal pointer-up without drag.
+  onMappingDragStart?: (e: React.DragEvent, accountId: string) => void;
+  onMappingDragEnd?: () => void;
 }) {
   return (
     <tr
@@ -1522,6 +1715,32 @@ function AccountRow({
           aria-label={`Select account ${row.accountNumber}`}
           {...(fundMode ? { name: "accountIds", value: row.id, form: "coa-bulk-fund-form", "data-testid": `coa-bulk-select-${row.accountNumber}` } : {})}
         />
+        {onMappingDragStart && !fundMode && canEdit && (
+          /* COA-MAP-2B drag handle — visible on row hover.  The row
+             itself is NOT draggable so normal row click still opens
+             the Inspector.  Only this handle begins a mapping drag. */
+          <span
+            draggable
+            role="button"
+            aria-label={`Drag account ${row.accountNumber} to a Financial Statement Group`}
+            title="Drag to reassign Financial Statement Group"
+            data-testid={`coa-mapping-drag-handle-${row.accountNumber}`}
+            onDragStart={(e) => onMappingDragStart(e, row.id)}
+            onDragEnd={() => onMappingDragEnd?.()}
+            onClick={(e) => e.stopPropagation()}
+            className="coa-mapping-drag-handle"
+            style={{
+              cursor: "grab",
+              userSelect: "none",
+              display: "inline-block",
+              padding: "0 6px",
+              marginLeft: 2,
+              color: "var(--spectre-text-muted)",
+              fontSize: 14,
+              lineHeight: "14px",
+            }}
+          >⠿</span>
+        )}
       </td>
       {fundMode && canEdit && (
         <td className="fund-assign" onClick={(e) => e.stopPropagation()}>

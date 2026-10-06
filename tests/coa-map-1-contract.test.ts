@@ -219,6 +219,11 @@ describe("COA-MAP-1 §G — No account-name regex in COA mapping classification"
 
 describe("COA-MAP-1 §H — Mapping Studio UI contract", () => {
   const src = readFileSync(UI, "utf8");
+  // COA-MAP-2B — the Preview panel + its period-aware fieldset are
+  // now in a SHARED component mounted by both the Mapping Studio and
+  // Account List drag/drop.  Preview testids live in the shared file.
+  const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
+  const sharedPreview = readFileSync(SHARED_PREVIEW, "utf8");
 
   for (const testid of [
     "coa-mapping-workspace",
@@ -237,7 +242,12 @@ describe("COA-MAP-1 §H — Mapping Studio UI contract", () => {
     "coa-mapping-create-group-submit",
   ]) {
     it(`exposes [data-testid="${testid}"]`, () => {
-      expect(src).toMatch(new RegExp(`data-testid="${testid.replace(/-/g, "\\-")}"`));
+      const slug = testid.replace(/-/g, "\\-");
+      // Match either `data-testid="X"` (direct attribute) or
+      // `??"X"` / `: "X"` (string literal passed through a prop
+      // default inside the shared Preview component).
+      const re = new RegExp(`(data-testid="|\\?\\?\\s*"|:\\s*")${slug}"`);
+      expect(src.match(re) || sharedPreview.match(re)).toBeTruthy();
     });
   }
 
@@ -246,7 +256,7 @@ describe("COA-MAP-1 §H — Mapping Studio UI contract", () => {
     expect(src).toMatch(/handleDragOverGroup/);
     expect(src).toMatch(/handleDropOnGroup/);
     expect(src).toMatch(/handleDragEnd/);
-    expect(src).toMatch(/draggable\n/);
+    expect(src).toMatch(/draggable[\r\n]/);
   });
 
   it("keyboard alternative: Account Inspector exposes a group <select> + Preview button", () => {

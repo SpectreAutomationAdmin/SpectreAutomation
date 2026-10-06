@@ -78,6 +78,12 @@ describe("COA-MAP-1A §C — Mapping Studio period-aware UX", () => {
     expect(src).toMatch(/fiscalYearIso/);
   });
 
+  // COA-MAP-2B — Preview panel + period-aware fieldset extracted to
+  // the shared component mounted by both the Mapping Studio and the
+  // Account List drag/drop drawer.
+  const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
+  const sharedPreview = readFileSync(SHARED_PREVIEW, "utf8");
+
   for (const testid of [
     "coa-mapping-preview-effective-fieldset",
     "coa-mapping-effective-current-period",
@@ -86,29 +92,28 @@ describe("COA-MAP-1A §C — Mapping Studio period-aware UX", () => {
     "coa-mapping-historical-note",
   ]) {
     it(`exposes [data-testid="${testid}"]`, () => {
-      expect(src).toMatch(new RegExp(`data-testid="${testid.replace(/-/g, "\\-")}"`));
+      const re = new RegExp(`data-testid="${testid.replace(/-/g, "\\-")}"`);
+      expect(src.match(re) || sharedPreview.match(re)).toBeTruthy();
     });
   }
 
   it("still exposes legacy coa-mapping-preview-effective-from (custom-date input)", () => {
-    // Existing E2E tests depend on this testid; the migration must
-    // retain it rather than rename it.
-    expect(src).toMatch(/data-testid="coa-mapping-preview-effective-from"/);
+    const re = /data-testid="coa-mapping-preview-effective-from"/;
+    expect(src.match(re) || sharedPreview.match(re)).toBeTruthy();
   });
 
   it("renders the collapsed current-period/fiscal-year label when both match", () => {
-    expect(src).toMatch(/Current reporting period \/ fiscal year/);
+    const re = /Current reporting period \/ fiscal year/;
+    expect(src.match(re) || sharedPreview.match(re)).toBeTruthy();
   });
 
   it("historical-note copy is quiet and non-alarming (no modal / destructive language)", () => {
-    expect(src).toMatch(/This change will update unpublished reporting from/);
-    expect(src).toMatch(/Published Board packages will not change/);
-    // The note itself (the historicalNote literal block) must not
-    // contain alarming language.  "WARNING: " is used elsewhere in
-    // the file for validation BLOCKED/WARNING preamble, which is
-    // expected and unrelated to this quiet historical note.
-    const noteIdx = src.indexOf("This change will update unpublished reporting");
-    const noteBlock = src.slice(noteIdx, noteIdx + 500);
+    // Copy lives in the shared panel in COA-MAP-2B.
+    const haystack = sharedPreview + "\n" + src;
+    expect(haystack).toMatch(/This change will update unpublished reporting from/);
+    expect(haystack).toMatch(/Published Board packages will not change/);
+    const noteIdx = haystack.indexOf("This change will update unpublished reporting");
+    const noteBlock = haystack.slice(noteIdx, noteIdx + 500);
     expect(noteBlock).not.toMatch(/DANGER|⚠|WARNING:/);
   });
 });

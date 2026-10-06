@@ -217,9 +217,12 @@ describe("COA-MAP-2 §E — labelForStatement + section groupings", () => {
 
 describe("COA-MAP-2 §F — COA-MAP-1 + 1A pins preserved", () => {
   const ui = readFileSync(UI, "utf8");
+  // COA-MAP-2B — Preview-panel testids now live in the shared
+  // component so both the Mapping Studio and the Account List
+  // drag/drop drawer mount the same panel.
+  const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
+  const sharedPreview = readFileSync(SHARED_PREVIEW, "utf8");
 
-  // All the pinned testids from COA-MAP-1 §H + COA-MAP-1A §C must
-  // still exist in the rewritten client.
   for (const testid of [
     "coa-mapping-workspace",
     "coa-mapping-unmapped",
@@ -241,7 +244,9 @@ describe("COA-MAP-2 §F — COA-MAP-1 + 1A pins preserved", () => {
     "coa-mapping-create-group-submit",
   ]) {
     it(`still exposes [data-testid="${testid}"]`, () => {
-      expect(ui).toMatch(new RegExp(`data-testid="${testid.replace(/-/g, "\\-")}"`));
+      const slug = testid.replace(/-/g, "\\-");
+      const re = new RegExp(`(data-testid="|\\?\\?\\s*"|:\\s*")${slug}"`);
+      expect(ui.match(re) || sharedPreview.match(re)).toBeTruthy();
     });
   }
 
@@ -287,7 +292,10 @@ describe("COA-MAP-2 §G — auto-scroll during drag", () => {
 });
 
 describe("COA-MAP-2 §H — Preview panel copy refinement", () => {
-  const ui = readFileSync(UI, "utf8");
+  // COA-MAP-2B — the Preview panel moved to a shared component; the
+  // copy guards now scan the shared file.
+  const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
+  const ui = readFileSync(SHARED_PREVIEW, "utf8");
 
   it("Preview panel heading reads 'Reporting impact' (not 'Reporting Impact Preview')", () => {
     expect(ui).toMatch(/>\s*Reporting impact\s*</);

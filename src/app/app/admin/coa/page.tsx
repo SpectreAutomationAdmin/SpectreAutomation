@@ -216,6 +216,9 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
       fsGroupKey: a.fsGroup?.key ?? "__no_fs_group__",
       fsGroupLabel: a.fsGroup?.name ?? "Other",
       fsGroupSortOrder: a.fsGroup?.sortOrder ?? 9999,
+      // COA-MAP-2B — canonical id so Account List drag/drop targets
+      // the group by ID (never by display text).
+      fsGroupId: a.fsGroup?.id ?? null,
       departmentLabel: a.defaultDepartment?.name ?? null,
       fundKeys,
       fundApplicabilityRaw: rawFa ?? "",
@@ -497,6 +500,7 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
 
       {/* ------------------------------ CLIENT WORKSPACE */}
       <ChartOfAccountsClient
+        clubId={clubId}
         rows={clientRows}
         canEdit={canEdit}
         disabledTooltip={DISABLED_TOOLTIP}
