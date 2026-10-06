@@ -60,16 +60,19 @@ runAt("OPS-LIVE-1 · Sections IX + XI live wiring (no demo leakage)", async ({ b
   const utilRow = await page.locator('[data-testid="mws-utilization-extension-grid"]').innerText();
   console.log("OPS_LIVE_1_UTILIZATION " + JSON.stringify(utilRow));
 
+  // KPI tiles render as: LABEL\n VALUE·\n CONTEXT·\n SUB — labels
+  // are uppercased by CSS. Order matches the DOM for innerText.
   // Rounds YTD = 401 (LIVE)
-  expect(utilRow).toMatch(/401\s*\n*\s*Rounds YTD/i);
+  expect(utilRow).toMatch(/ROUNDS YTD\s*\n[\s\S]{0,20}401/i);
+  expect(utilRow).toMatch(/1\.0% guest share/i);
   // Course Utilization UNAVAILABLE
-  expect(utilRow).toMatch(/—\s*\n*\s*Course utilization/i);
+  expect(utilRow).toMatch(/COURSE UTILIZATION\s*\n[\s\S]{0,20}—/i);
   expect(utilRow).toMatch(/Tee-time inventory source not connected/i);
   // Spend per Member UNAVAILABLE
-  expect(utilRow).toMatch(/—\s*\n*\s*Spend per member/i);
+  expect(utilRow).toMatch(/SPEND PER MEMBER\s*\n[\s\S]{0,20}—/i);
   expect(utilRow).toMatch(/Member spend source not connected/i);
   // Spend per Round UNAVAILABLE
-  expect(utilRow).toMatch(/—\s*\n*\s*Spend per round/i);
+  expect(utilRow).toMatch(/SPEND PER ROUND\s*\n[\s\S]{0,20}—/i);
   expect(utilRow).toMatch(/Round spend source not connected/i);
   // Demo values must NOT appear anywhere on the Utilization row.
   expect(utilRow).not.toMatch(/31,420/);
