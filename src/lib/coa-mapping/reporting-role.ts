@@ -169,6 +169,87 @@ export function labelForReportingRole(role: ReportingRole): string {
 }
 
 /**
+ * COA-MAP-2 (2026-10-06) — human-readable statement label.
+ * Never surface the raw enum (`INCOME_STATEMENT`) to the Controller.
+ */
+export function labelForStatement(statement: string): string {
+  if (statement === "INCOME_STATEMENT") return "Income Statement";
+  if (statement === "BALANCE_SHEET")    return "Balance Sheet";
+  if (statement === "CASH_FLOW")        return "Cash Flow";
+  return statement.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * COA-MAP-2 (2026-10-06) — groups a flat list of FinancialStatementGroups
+ * into named sections keyed by reportingRole family (OPERATING_REVENUE,
+ * OPERATING_EXPENSE, OTHER_INCOME, etc.) so the Mapping Studio can
+ * render a true Statement → Section → Group hierarchy.
+ *
+ * The section ORDER matches the canonical reading order of the
+ * Income Statement / Balance Sheet. Groups whose reportingRole is
+ * null fall into "Other" so Controllers still see them.
+ */
+const IS_SECTION_ORDER: ReadonlyArray<{ label: string; roles: ReadonlyArray<ReportingRole> }> = [
+  { label: "Operating Revenue",       roles: ["OPERATING_REVENUE", "MEMBERSHIP_DUES"] },
+  { label: "Cost of Sales",           roles: ["COGS"] },
+  { label: "Payroll & Related",       roles: ["PAYROLL"] },
+  { label: "Operating Expenses",      roles: ["OPERATING_EXPENSE"] },
+  { label: "Depreciation",            roles: ["DEPRECIATION"] },
+  { label: "Interest & Financing",    roles: ["INTEREST_EXPENSE", "FINANCING_OTHER"] },
+  { label: "Interest Income",         roles: ["INTEREST_INCOME"] },
+  { label: "Other Income",            roles: ["OTHER_INCOME"] },
+  { label: "Other Expense",           roles: ["OTHER_EXPENSE"] },
+  { label: "Capital Fund",            roles: ["CAPITAL_ASSESSMENTS", "ENTRANCE_FEES", "CAPITAL_FUND_OTHER_REVENUE"] },
+];
+
+const BS_SECTION_ORDER: ReadonlyArray<{ label: string; roles: ReadonlyArray<ReportingRole> }> = [
+  { label: "Current Assets",          roles: ["CASH", "ACCOUNTS_RECEIVABLE", "INVENTORY", "PREPAIDS"] },
+  { label: "Capital Assets",          roles: ["CAPITAL_ASSETS", "ACCUMULATED_DEPRECIATION"] },
+  { label: "Other Assets",            roles: ["OTHER_ASSETS"] },
+  { label: "Current Liabilities",     roles: ["ACCOUNTS_PAYABLE", "ACCRUED_LIABILITIES", "DEFERRED_REVENUE"] },
+  { label: "Long-term Liabilities",   roles: ["DEBT"] },
+  { label: "Capital Reserves",        roles: ["CAPITAL_RESERVE", "DEFERRED_CAPITAL_CONTRIBUTIONS"] },
+  { label: "Other Liabilities",       roles: ["OTHER_LIABILITIES"] },
+  { label: "Equity",                  roles: ["SHARE_CAPITAL", "CONTRIBUTED_SURPLUS", "RETAINED_EARNINGS", "OTHER_EQUITY"] },
+];
+
+export type SectionBucket<G> = { label: string; groups: ReadonlyArray<G> };
+
+export function groupBySectionsForStatement<G extends { reportingRole: string | null }>(
+  statement: string,
+  groups: ReadonlyArray<G>,
+): ReadonlyArray<SectionBucket<G>> {
+  const order = statement === "INCOME_STATEMENT" ? IS_SECTION_ORDER
+              : statement === "BALANCE_SHEET"    ? BS_SECTION_ORDER
+              : [];
+  if (order.length === 0) {
+    return groups.length > 0 ? [{ label: labelForStatement(statement), groups }] : [];
+  }
+  const roleToSection = new Map<string, string>();
+  for (const sec of order) {
+    for (const r of sec.roles) roleToSection.set(r, sec.label);
+  }
+  const buckets = new Map<string, G[]>();
+  for (const sec of order) buckets.set(sec.label, []);
+  const otherBucket: G[] = [];
+  for (const g of groups) {
+    const label = g.reportingRole ? roleToSection.get(g.reportingRole) : null;
+    if (label) {
+      buckets.get(label)!.push(g);
+    } else {
+      otherBucket.push(g);
+    }
+  }
+  const out: Array<SectionBucket<G>> = [];
+  for (const sec of order) {
+    const list = buckets.get(sec.label) ?? [];
+    if (list.length > 0) out.push({ label: sec.label, groups: list });
+  }
+  if (otherBucket.length > 0) out.push({ label: "Other", groups: otherBucket });
+  return out;
+}
+
+/**
  * Statement that owns a role — used by the Mapping Studio to
  * suggest the statement when a Controller creates a new group and
  * picks a role.
