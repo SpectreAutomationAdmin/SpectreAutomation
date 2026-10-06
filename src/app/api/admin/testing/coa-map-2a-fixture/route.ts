@@ -82,9 +82,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   });
 
   // Seed the effective-dated assignment table so the resolver can
-  // find it AS OF today (matches the COA-MAP-1 backfill shape).
+  // find it AS OF today.  We date the seed row 7 days ago so a
+  // reassign that fires today lands on a DIFFERENT effectiveFrom
+  // and never collides with the AccountFinancialStatementAssignment
+  // unique index on (accountId, effectiveFrom).
   const start = new Date();
   start.setUTCHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - 7);
   await prisma.accountFinancialStatementAssignment.create({
     data: {
       clubId,
