@@ -435,6 +435,11 @@ model Club {
   golfActivityImportBatches        GolfActivityImportBatch[]
   golfActivityDays                 GolfActivityDay[]
 
+  // COA-MAP-1 (2026-10-06) — effective-dated Account→FsGroup history
+  // + mapping-change audit trail.
+  fsGroupAssignments               AccountFinancialStatementAssignment[]
+  mappingChangeAudits              MappingChangeAudit[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -2561,8 +2566,115 @@ model FinancialStatementGroup {
   children        FinancialStatementGroup[] @relation("FSGroupTree")
   accounts        Account[]
 
+  // COA-MAP-1 (2026-10-06) — presentation-only semantic role. Lets
+  // tenant-created groups participate in reporting without a
+  // hardcoded `fsGroupKey` string. Null for groups whose role has
+  // not been classified (new tenant-created groups default to null
+  // until the Controller selects a role on save). See
+  // src/lib/coa-mapping/reporting-role.ts for the enum. Role is
+  // PRESENTATION-ONLY per founder decision (COA-MAP-1 Decision 2) —
+  // it does NOT override Account.fundApplicability / AccountFund.
+  reportingRole   String?
+
+  // COA-MAP-1 (2026-10-06) — distinguishes seeded Spectre default
+  // groups from tenant-created groups. Default groups require
+  // stronger deletion/edit protections per the directive.
+  isTenantCreated Boolean                   @default(false)
+
+  // COA-MAP-1 (2026-10-06) — effective-dated assignments reference
+  // the group through the AccountFinancialStatementAssignment table.
+  // When a group is deleted, assignments must be reassigned first
+  // (service-layer guard; schema uses Restrict).
+  assignments     AccountFinancialStatementAssignment[]
+
   @@unique([clubId, key])
   @@index([clubId, statement])
+  @@index([clubId, reportingRole])
+}
+
+// -------------------------------------------------------------------------
+// COA-MAP-1 (2026-10-06) — effective-dated Account → Financial
+// Statement Group assignment history.
+//
+// Founder decision: an account's financial-statement classification
+// is a FIRST-CLASS historical dimension, resolved AS OF the
+// reporting date — not inherited from the current `Account.fsGroup`
+// pointer. A September report resolves the September-effective
+// group; an October report resolves the October-effective group.
+//
+// Design rules (COA-MAP-1 Decision 1 Option D):
+//   1. One assignment row per (accountId, effectiveFrom). No two
+//      assignments for the same account may overlap in time —
+//      enforced by the composite unique index below AND by the
+//      service layer which closes the previous row on insert.
+//   2. The CURRENT assignment carries `effectiveTo = null`.
+//      Historical assignments carry explicit `effectiveTo`.
+//   3. Reports resolve the group AS OF a reporting-period date via
+//      `resolveFinancialStatementGroupAsOf` — picks the row where
+//      `effectiveFrom <= asOf < (effectiveTo ?? +inf)`.
+//   4. `Account.fsGroupId` is retained for compatibility with the
+//      56 call sites that still read current-resolution — kept in
+//      sync with the CURRENT assignment by the service layer.
+//      Will be migrated to the as-of resolver in future slices.
+//   5. Audit trail: every reassignment writes a parallel
+//      MappingChangeAudit row.
+// -------------------------------------------------------------------------
+model AccountFinancialStatementAssignment {
+  id             String                  @id @default(cuid())
+  clubId         String
+  club           Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account                 @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  fsGroupId      String
+  fsGroup        FinancialStatementGroup @relation(fields: [fsGroupId], references: [id])
+  // UTC midnight of the local-calendar date this assignment becomes
+  // effective. For backfilled rows the service picks the earliest
+  // safe boundary (the tenant's first committed TB period start, or
+  // a far-past floor when no snapshot exists yet).
+  effectiveFrom  DateTime
+  // UTC midnight of the local-calendar date the NEXT assignment
+  // becomes effective (exclusive). Null = currently effective.
+  effectiveTo    DateTime?
+  // Audit — who made the change and why.
+  createdAt      DateTime                @default(now())
+  createdByUserId String?
+  reason         String?
+
+  // No two assignments for the same account may share effectiveFrom
+  // (gaps + overlaps are prevented by the service layer; this
+  // backstops it in the schema).
+  @@unique([accountId, effectiveFrom])
+  @@index([clubId, accountId, effectiveFrom])
+  @@index([clubId, fsGroupId])
+}
+
+// -------------------------------------------------------------------------
+// COA-MAP-1 (2026-10-06) — mapping-change audit trail.
+//
+// Captures every create/edit/reorder on FinancialStatementGroup and
+// every reassignment on AccountFinancialStatementAssignment. Stored
+// as discrete rows (rather than a JSON diff on the entity itself) so
+// the Controller can audit the sequence of changes without replaying
+// the full history. Scoped per-tenant.
+// -------------------------------------------------------------------------
+model MappingChangeAudit {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // GROUP_CREATE | GROUP_EDIT | GROUP_REORDER | GROUP_DELETE |
+  // ACCOUNT_REASSIGN
+  action        String
+  // Target entity (group id OR account id depending on action).
+  entityType    String
+  entityId      String
+  // JSON blob: before/after fields + effectiveFrom + semantic deltas.
+  payloadJson   String
+  actorUserId   String?
+  actorEmail    String?
+  createdAt     DateTime @default(now())
+
+  @@index([clubId, createdAt])
+  @@index([clubId, entityType, entityId])
 }
 
 // -------------------------------------------------------------------------
@@ -2616,6 +2728,11 @@ model Account {
   accountRole         String                   @default("STANDARD")
   fsGroupId           String?
   fsGroup             FinancialStatementGroup? @relation(fields: [fsGroupId], references: [id])
+  // COA-MAP-1 (2026-10-06) — effective-dated FS Group assignment
+  // history. The CURRENT assignment is kept in sync with
+  // `fsGroupId` by the service layer so existing current-resolution
+  // consumers continue to work during the compatibility window.
+  fsGroupAssignments  AccountFinancialStatementAssignment[]
   /// Founder rule 2026-07-02 v15.0 — Fund Applicability.
   /// A comma-separated list of canonical fund keys (e.g.
   /// "OPERATING", "CAPITAL", "OPERATING,CAPITAL") indicating

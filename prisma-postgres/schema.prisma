@@ -435,6 +435,11 @@ model Club {
   golfActivityImportBatches        GolfActivityImportBatch[]
   golfActivityDays                 GolfActivityDay[]
 
+  // COA-MAP-1 (2026-10-06) — effective-dated Account→FsGroup history
+  // + mapping-change audit trail.
+  fsGroupAssignments               AccountFinancialStatementAssignment[]
+  mappingChangeAudits              MappingChangeAudit[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -2455,10 +2460,9 @@ model FinancialStatementGroup {
   id              String                    @id @default(cuid())
   clubId          String
   club            Club                      @relation(fields: [clubId], references: [id])
-  key             String // e.g. CURRENT_ASSETS, COGS, OPERATING_REVENUE
+  key             String
   name            String
   statement       String
-  // OPERATING | INVESTING | FINANCING for CASH_FLOW; null otherwise.
   cashFlowSection String?
   sortOrder       Int                       @default(0)
   parentGroupId   String?
@@ -2466,8 +2470,52 @@ model FinancialStatementGroup {
   children        FinancialStatementGroup[] @relation("FSGroupTree")
   accounts        Account[]
 
+  // COA-MAP-1 (2026-10-06) — presentation-only semantic role.
+  reportingRole   String?
+  isTenantCreated Boolean                   @default(false)
+  assignments     AccountFinancialStatementAssignment[]
+
   @@unique([clubId, key])
   @@index([clubId, statement])
+  @@index([clubId, reportingRole])
+}
+
+// COA-MAP-1 (2026-10-06) — effective-dated Account→FsGroup history.
+// See prisma/schema.prisma for full documentation.
+model AccountFinancialStatementAssignment {
+  id              String                  @id @default(cuid())
+  clubId          String
+  club            Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  accountId       String
+  account         Account                 @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  fsGroupId       String
+  fsGroup         FinancialStatementGroup @relation(fields: [fsGroupId], references: [id])
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  createdAt       DateTime                @default(now())
+  createdByUserId String?
+  reason          String?
+
+  @@unique([accountId, effectiveFrom])
+  @@index([clubId, accountId, effectiveFrom])
+  @@index([clubId, fsGroupId])
+}
+
+// COA-MAP-1 (2026-10-06) — mapping-change audit trail.
+model MappingChangeAudit {
+  id          String   @id @default(cuid())
+  clubId      String
+  club        Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  action      String
+  entityType  String
+  entityId    String
+  payloadJson String
+  actorUserId String?
+  actorEmail  String?
+  createdAt   DateTime @default(now())
+
+  @@index([clubId, createdAt])
+  @@index([clubId, entityType, entityId])
 }
 
 // -------------------------------------------------------------------------
@@ -2521,6 +2569,9 @@ model Account {
   accountRole         String                   @default("STANDARD")
   fsGroupId           String?
   fsGroup             FinancialStatementGroup? @relation(fields: [fsGroupId], references: [id])
+  // COA-MAP-1 (2026-10-06) — effective-dated FS Group assignment
+  // history. See prisma/schema.prisma for full documentation.
+  fsGroupAssignments  AccountFinancialStatementAssignment[]
   /// Founder rule 2026-07-02 v15.0 — Fund Applicability.
   /// A comma-separated list of canonical fund keys (e.g.
   /// "OPERATING", "CAPITAL", "OPERATING,CAPITAL") indicating
