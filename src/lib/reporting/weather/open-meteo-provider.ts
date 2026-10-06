@@ -152,6 +152,10 @@ export function createOpenMeteoProvider(opts?: {
       const sSec = daily.sunshine_duration ?? [];
 
       let daysSunny = 0, daysPartlyCloudy = 0, daysRain = 0, daysHighWind = 0;
+      // GOLF-HIST-1 (2026-10-05) — accumulate per-day classification
+      // in order so the Weather × Golf join can attribute each day's
+      // rounds to its weather bucket.
+      const dailyClassifications: Array<{ dateISO: string; condition: "sunny" | "partly-cloudy" | "rain" | "high-wind" }> = [];
       for (let i = 0; i < daily.time.length; i++) {
         const bucket = classifyDay({
           tMaxF: tMax[i] ?? 0,
@@ -165,6 +169,7 @@ export function createOpenMeteoProvider(opts?: {
           case "rain":          daysRain++;         break;
           case "high-wind":     daysHighWind++;     break;
         }
+        dailyClassifications.push({ dateISO: daily.time[i], condition: bucket });
       }
 
       // Round-rate seeds (no tee-sheet integration yet) fall back to
@@ -190,6 +195,7 @@ export function createOpenMeteoProvider(opts?: {
         avgRoundsHighWind:     seedAvgRounds.avgRoundsHighWind,
         avgRoundsRain:         seedAvgRounds.avgRoundsRain,
         notableEvents: seedAvgRounds.notableEvents,
+        dailyClassifications,
         provenance: {
           source: "open-meteo-archive",
           precision: "coordinate",

@@ -160,15 +160,18 @@ describe("WEATHER-HIST-1 §D — Section XI live builder emits dataSource: 'live
   });
 
   it("live builder emits partial-availability sentinels for utilization-dependent sections", () => {
+    // GOLF-HIST-1 (2026-10-05) extracted the sentinel strings into
+    // module-level helpers (buildRoundsUnavailableInsight +
+    // buildLiveGolfCorrelationCard et al.). Verify at FILE scope.
+    expect(src).toMatch(/Rounds-by-weather analysis unavailable/);
+    // String split across template-literal concatenation — tolerate
+    // leading whitespace or quote characters between tokens.
+    expect(src).toMatch(/Golf Activity source not yet[\s\S]{0,20}connected/);
+    expect(src).toMatch(/Racquet booking source[\s\S]*?not yet connected/);
+    expect(src).toMatch(/POS source not yet connected/);
+    // Events table rows are empty (operational-impact data unavailable).
     const idx = src.indexOf("export async function buildCouleeMonthlyWeatherSummary");
     const body = idx >= 0 ? src.slice(idx) : "";
-    // Rounds-by-weather chart is unavailable (Tee Sheet pending).
-    expect(body).toMatch(/Rounds-by-weather analysis unavailable/);
-    // Correlation cards name the pending integration.
-    expect(body).toMatch(/Tee Sheet integration not yet connected/);
-    expect(body).toMatch(/Racquet booking source[\s\S]*?not yet connected/);
-    expect(body).toMatch(/POS source not yet connected/);
-    // Events table rows are empty (operational-impact data unavailable).
     expect(body).toMatch(/rows: \[\] as ReadonlyArray<WeatherEventRow>/);
   });
 
@@ -198,7 +201,12 @@ describe("WEATHER-HIST-1 §E — monthly-package wires live tenants to canonical
   });
 
   it("Section XI picks the canonical live builder when hasRealData is true", () => {
-    expect(src).toMatch(/monthlyWeatherSummary: hasRealData\s*\?\s*await buildCouleeMonthlyWeatherSummary\(\{[\s\S]*?clubId: club\.id,/);
+    // GOLF-HIST-1 (2026-10-05) wrapped the call in an async IIFE so
+    // the Weather × Golf join can be resolved first. The structural
+    // invariant we care about: the live tenant path (hasRealData)
+    // reaches buildCouleeMonthlyWeatherSummary with clubId: club.id.
+    expect(src).toMatch(/monthlyWeatherSummary: hasRealData/);
+    expect(src).toMatch(/buildCouleeMonthlyWeatherSummary\(\{[\s\S]*?clubId: club\.id,/);
   });
 
   it("Section XI falls back to buildSilverSpringsMonthlyWeatherSummary for demo tenants", () => {

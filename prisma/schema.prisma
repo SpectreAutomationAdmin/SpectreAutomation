@@ -430,6 +430,11 @@ model Club {
   // weather observations (keyed by period + coordinates).
   weatherObservationCache          WeatherObservationCache[]
 
+  // GOLF-HIST-1 (2026-10-05) — canonical Historical Golf Activity
+  // (provider-neutral; GGGolf export today, future connectors tomorrow).
+  golfActivityImportBatches        GolfActivityImportBatch[]
+  golfActivityDays                 GolfActivityDay[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -15123,4 +15128,174 @@ model WeatherObservationCache {
   @@unique([clubId, yearMonth, latitude, longitude])
   @@index([clubId, yearMonth])
   @@index([clubId])
+}
+
+// -------------------------------------------------------------------
+// GOLF-HIST-1 (2026-10-05) — canonical Historical Golf Activity.
+// -------------------------------------------------------------------
+// Provider-neutral canonical model for daily golf-activity data. The
+// first supported source is a monthly GGGolf PDF export; a future
+// GGGolf (or Jonas, or other tee-sheet provider) live connector can
+// populate the SAME `GolfActivityDay` table with its own
+// `sourceSystem` identifier — the reporting layer never branches on
+// provider.
+//
+// Lifecycle (mirrors AR-HIST-1 + MEM-HIST-2):
+//   1. Operator uploads a monthly source file via the admin page.
+//   2. Parser extracts daily rows + the source footer totals.
+//   3. The import batch lands in PREVIEW with per-row rows + a
+//      reconciliation summary (parsed totals vs source totals,
+//      conflict detection against already-committed days).
+//   4. Operator reviews preview; founder commits.
+//   5. On commit, each PREVIEW row writes an authoritative
+//      `GolfActivityDay` row (upsert on clubId + activityDate),
+//      refusing to overwrite a committed row from a different batch
+//      without an explicit replace workflow.
+//
+// Operational source data — NOT accounting ledger data. No
+// JournalEntry / ReportingLedgerSnapshot / TB involvement.
+model GolfActivityImportBatch {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+
+  // PREVIEW / COMMITTED / VOIDED
+  status               String   @default("PREVIEW")
+
+  // "GGGOLF_EXPORT" today. Future: "GGGOLF_CONNECTOR", "JONAS_EXPORT",
+  // "JONAS_CONNECTOR", etc. The reporting layer treats all canonical
+  // sources identically; this field is for provenance / audit only.
+  sourceSystem         String
+  sourceFileName       String?
+  // SHA-256 hex of the raw upload. Idempotency key — re-uploading
+  // the identical file against the identical reporting period
+  // resolves to the same batch instead of double-counting.
+  sourceFileHash       String
+  // Reporting period the source covers, as UTC midnights of the
+  // local-calendar day boundaries.
+  reportingPeriodStart DateTime
+  reportingPeriodEnd   DateTime
+
+  rowCount             Int      @default(0)
+  // Daily rows where totalRounds > 0 (operational golf days).
+  activeDays           Int      @default(0)
+  // Daily rows where totalRounds == 0 AND the row was present in the
+  // source (REAL ZERO). Distinct from "missing dates".
+  realZeroDays         Int      @default(0)
+  invalidCount         Int      @default(0)
+  warningCount         Int      @default(0)
+  // Dates where a PRIOR committed GolfActivityDay row already exists.
+  // Commit is blocked when conflictCount > 0.
+  conflictCount        Int      @default(0)
+
+  // Source-footer totals as parsed from the source document.
+  sourceTotalGuests    Int?
+  sourceTotalGreenFees Int?
+  sourceTotalMembers   Int?
+  sourceTotalRounds    Int?
+  sourceTotalJuniors   Int?
+  sourceTotalWomen     Int?
+  // Parsed daily totals (sum across the batch's rows). Must equal
+  // the source footer totals byte-for-byte or `reconciliationStatus`
+  // flips to MISMATCH and commit is blocked.
+  parsedTotalGuests    Int      @default(0)
+  parsedTotalGreenFees Int      @default(0)
+  parsedTotalMembers   Int      @default(0)
+  parsedTotalRounds    Int      @default(0)
+  parsedTotalJuniors   Int      @default(0)
+  parsedTotalWomen     Int      @default(0)
+  // RECONCILED | MISMATCH | UNKNOWN
+  reconciliationStatus String   @default("UNKNOWN")
+
+  uploadedByUserId     String?
+  uploadedAt           DateTime @default(now())
+  committedAt          DateTime?
+  committedByUserId    String?
+
+  rows                 GolfActivityImportRow[]
+  committedDays        GolfActivityDay[]
+
+  @@unique([clubId, sourceSystem, sourceFileHash, reportingPeriodStart])
+  @@index([clubId, status])
+  @@index([clubId, reportingPeriodStart])
+}
+
+// One per calendar date present in the source. Preserves every raw
+// column — the canonical `GolfActivityDay` table only carries the
+// semantically-clear subset the reporting layer consumes.
+model GolfActivityImportRow {
+  id                   String   @id @default(cuid())
+  batchId              String
+  batch                GolfActivityImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  // Ordinal within the source so the preview UI can render rows in
+  // source order even when dates jump (e.g. missing dates).
+  rowIndex             Int
+  // Local-calendar date, stored as UTC midnight.
+  activityDate         DateTime
+  // Raw date label from the source (e.g. "Thu, Jan 1") — provenance.
+  rawDateLabel         String
+  // Raw weather column from the source. GGGolf weather is NOT
+  // canonical Weather for Spectre; stored for source provenance
+  // only. Open-Meteo remains the authoritative Weather source.
+  rawWeatherCode       String?
+
+  // Daily counters — same semantic as the final canonical model.
+  guests               Int      @default(0)
+  greenFees            Int      @default(0)
+  members              Int      @default(0)
+  totalRounds          Int      @default(0)
+  juniors              Int      @default(0)
+  women                Int      @default(0)
+  // GGGolf-specific cart / corpo fields preserved as source data.
+  // NOT consumed by Section XI; retained for audit + future use.
+  corpos               Int      @default(0)
+  corposHalf           Int      @default(0)
+  fullCart             Int      @default(0)
+  nineCart             Int      @default(0)
+  halfCart             Int      @default(0)
+  freeCart             Int      @default(0)
+
+  // When non-null, points at a committed GolfActivityDay for the
+  // same (clubId, activityDate). Commit refuses to overwrite without
+  // an explicit replace workflow.
+  conflictWithCommittedDayId String?
+  // JSON array of per-row warnings — e.g. "duplicate date in source",
+  // "negative value coerced to 0".
+  warningsJson         String?
+
+  @@unique([batchId, rowIndex])
+  @@index([batchId, activityDate])
+}
+
+// Authoritative committed daily golf activity. One row per
+// (clubId, activityDate). All reporting resolvers read from this
+// table.
+model GolfActivityDay {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // Local-calendar date, stored as UTC midnight.
+  activityDate         DateTime
+  // Provenance.
+  sourceSystem         String
+  sourceBatchId        String?
+  sourceBatch          GolfActivityImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
+
+  guests               Int      @default(0)
+  greenFees            Int      @default(0)
+  members              Int      @default(0)
+  totalRounds          Int      @default(0)
+  juniors              Int      @default(0)
+  women                Int      @default(0)
+  corpos               Int      @default(0)
+  corposHalf           Int      @default(0)
+  fullCart             Int      @default(0)
+  nineCart             Int      @default(0)
+  halfCart             Int      @default(0)
+  freeCart             Int      @default(0)
+  committedAt          DateTime @default(now())
+  committedByUserId    String?
+
+  @@unique([clubId, activityDate])
+  @@index([clubId, activityDate])
 }

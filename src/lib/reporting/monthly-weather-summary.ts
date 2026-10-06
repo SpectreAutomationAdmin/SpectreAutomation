@@ -590,6 +590,29 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
   club: ClubLike;
   /** Test seam — bypass the factory + env var. */
   provider?: WeatherProvider;
+  /** GOLF-HIST-1 (2026-10-05) — pre-resolved Weather×Golf join. When
+   *  present + `golfDataAvailable + dailyClassificationsAvailable`,
+   *  the rounds-by-weather bar chart + Golf correlation card
+   *  activate LIVE. When absent OR partially unavailable, Section XI
+   *  falls back to the existing UNAVAILABLE sentinels. Injected by
+   *  the monthly-package builder so tests can stub it. */
+  weatherGolfJoin?: {
+    golfDataAvailable: boolean;
+    dailyClassificationsAvailable: boolean;
+    golfDataSource: string | null;
+    periodTotalRounds: number;
+    periodDaysWithGolfData: number;
+    periodAverageRoundsPerDay: number | null;
+    bestCondition: "sunny" | "partly-cloudy" | "rain" | "high-wind" | null;
+    worstCondition: "sunny" | "partly-cloudy" | "rain" | "high-wind" | null;
+    rainRoundsCorrelation: number | null;
+    byCondition: {
+      "sunny":         { daysObserved: number; totalRounds: number; averageRoundsPerDay: number };
+      "partly-cloudy": { daysObserved: number; totalRounds: number; averageRoundsPerDay: number };
+      "rain":          { daysObserved: number; totalRounds: number; averageRoundsPerDay: number };
+      "high-wind":     { daysObserved: number; totalRounds: number; averageRoundsPerDay: number };
+    };
+  } | null;
 }): Promise<MonthlyWeatherSummary> {
   const { period, club, clubId, clubName } = opts;
   const monthLong = period.monthLong;
@@ -640,23 +663,38 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
     totalDays,
   };
 
-  // -- Rounds-by-weather bar chart: UNAVAILABLE. -----------------------
-  // Bars render with averageRounds = 0 so the chart primitive renders
-  // the x-axis without crashing, but the KPI ribbon + commentary make
-  // the unavailable state unambiguous.
-  const roundsCard = {
-    title: "Weather vs. Golf Rounds",
-    subtitle: "Average Daily Rounds by Weather Condition",
-    bars: [
-      { key: "sunny-clear",   label: "Sunny/Clear",    averageRounds: 0, fillHex: FILL_OPERATING_BEIGE },
-      { key: "partly-cloudy", label: "Partly Cloudy",  averageRounds: 0, fillHex: FILL_PALE_CREAM },
-      { key: "high-wind",     label: "High Wind",      averageRounds: 0, fillHex: FILL_GOLD_DEEP },
-      { key: "rain-storm",    label: "Rain/Storm",     averageRounds: 0, fillHex: FILL_SLATE_BLUE },
-    ],
-    insight:
-      "Rounds-by-weather analysis unavailable — Tee Sheet integration not yet connected. " +
-      "Weather observations above are live from the Open-Meteo historical archive.",
-  };
+  // -- Rounds-by-weather bar chart. -----------------------------------
+  // GOLF-HIST-1 (2026-10-05) — populates with LIVE averages when the
+  // Weather×Golf join is available for the period; falls back to the
+  // UNAVAILABLE sentinel otherwise.
+  const joinLive = Boolean(
+    opts.weatherGolfJoin?.golfDataAvailable &&
+    opts.weatherGolfJoin?.dailyClassificationsAvailable,
+  );
+  const rounded = (n: number) => Math.round(n);
+  const roundsCard = joinLive && opts.weatherGolfJoin
+    ? {
+        title: "Weather vs. Golf Rounds",
+        subtitle: "Average Daily Rounds by Weather Condition",
+        bars: [
+          { key: "sunny-clear",   label: "Sunny/Clear",    averageRounds: rounded(opts.weatherGolfJoin.byCondition["sunny"].averageRoundsPerDay),         fillHex: FILL_OPERATING_BEIGE },
+          { key: "partly-cloudy", label: "Partly Cloudy",  averageRounds: rounded(opts.weatherGolfJoin.byCondition["partly-cloudy"].averageRoundsPerDay), fillHex: FILL_PALE_CREAM },
+          { key: "high-wind",     label: "High Wind",      averageRounds: rounded(opts.weatherGolfJoin.byCondition["high-wind"].averageRoundsPerDay),     fillHex: FILL_GOLD_DEEP },
+          { key: "rain-storm",    label: "Rain/Storm",     averageRounds: rounded(opts.weatherGolfJoin.byCondition["rain"].averageRoundsPerDay),          fillHex: FILL_SLATE_BLUE },
+        ],
+        insight: buildRoundsLiveInsight(opts.weatherGolfJoin, monthLong),
+      }
+    : {
+        title: "Weather vs. Golf Rounds",
+        subtitle: "Average Daily Rounds by Weather Condition",
+        bars: [
+          { key: "sunny-clear",   label: "Sunny/Clear",    averageRounds: 0, fillHex: FILL_OPERATING_BEIGE },
+          { key: "partly-cloudy", label: "Partly Cloudy",  averageRounds: 0, fillHex: FILL_PALE_CREAM },
+          { key: "high-wind",     label: "High Wind",      averageRounds: 0, fillHex: FILL_GOLD_DEEP },
+          { key: "rain-storm",    label: "Rain/Storm",     averageRounds: 0, fillHex: FILL_SLATE_BLUE },
+        ],
+        insight: buildRoundsUnavailableInsight(opts.weatherGolfJoin, monthLong),
+      };
 
   // -- Notable weather events table: EMPTY (requires operational
   //    integration to render impact labels). ------------------------
@@ -673,23 +711,31 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
     rows: [] as ReadonlyArray<WeatherEventRow>,
   };
 
-  // -- Correlation cards: three UNAVAILABLE cards, each naming the
-  //    specific integration that is pending. -----------------------
+  // -- Correlation cards. ---------------------------------------------
+  // GOLF-HIST-1 (2026-10-05) — Golf Rounds card activates when golf
+  // activity data is committed AND per-day weather classifications
+  // are available for the period. Racquet + Dining remain UNAVAILABLE
+  // (their source integrations are still unconnected).
+  const golfCorrelationCard = joinLive && opts.weatherGolfJoin
+    ? buildLiveGolfCorrelationCard(opts.weatherGolfJoin, period.periodLabel)
+    : {
+        key: "golf-rounds" as const,
+        icon: "golf-flag" as const,
+        title: "Golf Rounds",
+        accent: "green" as const,
+        narrative:
+          `Correlation analysis unavailable — Golf Activity source not yet ` +
+          `connected for this period. Weather observations for ${period.periodLabel} ` +
+          `are live from the Open-Meteo historical archive; rounds-by-weather ` +
+          `correlation activates once a committed Golf Activity import covers ` +
+          `the reporting period.`,
+        dataPoint: { label: "Weather correlation:", value: "—" },
+      };
+
   const correlationSummary: WeatherCorrelationSummary = {
     eyebrow: "Weather–Utilization Correlation Summary",
     cards: [
-      {
-        key: "golf-rounds",
-        icon: "golf-flag",
-        title: "Golf Rounds",
-        accent: "green",
-        narrative:
-          `Correlation analysis unavailable — Tee Sheet integration not yet ` +
-          `connected. Weather observations for ${period.periodLabel} are live ` +
-          `from the Open-Meteo historical archive; rounds-by-weather correlation ` +
-          `will activate once daily tee-time utilization lands.`,
-        dataPoint: { label: "Weather correlation:", value: "—" },
-      },
+      golfCorrelationCard,
       {
         key: "tennis-racquet",
         icon: "tennis",
@@ -737,4 +783,118 @@ export async function buildCouleeMonthlyWeatherSummary(opts: {
     provenance: observation.provenance,
     location,
   };
+}
+
+// =============================================================================
+// GOLF-HIST-1 (2026-10-05) — live Weather × Golf helpers.
+// =============================================================================
+
+type WeatherGolfJoinInput = NonNullable<Parameters<typeof buildCouleeMonthlyWeatherSummary>[0]["weatherGolfJoin"]>;
+
+const CONDITION_LABELS: Record<"sunny" | "partly-cloudy" | "rain" | "high-wind", string> = {
+  "sunny": "sunny",
+  "partly-cloudy": "partly cloudy",
+  "rain": "rainy",
+  "high-wind": "high-wind",
+};
+
+/** Build the LIVE Rounds-by-Weather insight sentence from the join. */
+function buildRoundsLiveInsight(join: WeatherGolfJoinInput, monthLong: string): string {
+  const avg =
+    join.periodAverageRoundsPerDay != null
+      ? Math.round(join.periodAverageRoundsPerDay)
+      : 0;
+  const parts: string[] = [];
+  parts.push(
+    `Live Golf Activity for ${monthLong}: ${join.periodTotalRounds} rounds ` +
+    `across ${join.periodDaysWithGolfData} day(s) with authoritative source coverage ` +
+    `(average ${avg} rounds/day).`,
+  );
+  if (join.bestCondition && join.worstCondition && join.bestCondition !== join.worstCondition) {
+    const b = Math.round(join.byCondition[join.bestCondition].averageRoundsPerDay);
+    const w = Math.round(join.byCondition[join.worstCondition].averageRoundsPerDay);
+    parts.push(
+      `${capitalize(CONDITION_LABELS[join.bestCondition])} days averaged ${b} rounds; ` +
+      `${CONDITION_LABELS[join.worstCondition]} days averaged ${w}.`,
+    );
+  } else if (join.bestCondition) {
+    const b = Math.round(join.byCondition[join.bestCondition].averageRoundsPerDay);
+    parts.push(
+      `All observed days were ${CONDITION_LABELS[join.bestCondition]} ` +
+      `(average ${b} rounds/day).`,
+    );
+  }
+  return parts.join(" ");
+}
+
+/** Build the UNAVAILABLE Rounds-by-Weather insight sentence. */
+function buildRoundsUnavailableInsight(
+  join: WeatherGolfJoinInput | null | undefined,
+  monthLong: string,
+): string {
+  if (!join) {
+    return (
+      "Rounds-by-weather analysis unavailable — Golf Activity source not yet " +
+      "connected for this period. Weather observations above are live from the " +
+      "Open-Meteo historical archive."
+    );
+  }
+  if (join.golfDataAvailable && !join.dailyClassificationsAvailable) {
+    return (
+      `Rounds-by-weather analysis unavailable for ${monthLong} — Golf Activity ` +
+      `is committed but per-day weather classification is not yet available for ` +
+      `this period.`
+    );
+  }
+  return (
+    `Rounds-by-weather analysis unavailable for ${monthLong} — no committed ` +
+    `Golf Activity source covers this reporting period yet. Upload a monthly ` +
+    `Golf Activity export via Admin → Imports → Golf Activity.`
+  );
+}
+
+/** Build the LIVE Golf Rounds correlation card from the join. */
+function buildLiveGolfCorrelationCard(
+  join: WeatherGolfJoinInput,
+  periodLabel: string,
+): WeatherCorrelationCard {
+  const avg =
+    join.periodAverageRoundsPerDay != null
+      ? Math.round(join.periodAverageRoundsPerDay)
+      : 0;
+  const corrLabel =
+    join.rainRoundsCorrelation != null
+      ? `${join.rainRoundsCorrelation.toFixed(2)} (rain vs. rounds)`
+      : "—";
+  const narrativeParts: string[] = [];
+  narrativeParts.push(
+    `Live Weather × Golf join for ${periodLabel}. ` +
+    `${join.periodTotalRounds} rounds across ${join.periodDaysWithGolfData} ` +
+    `day(s) of authoritative Golf Activity coverage (avg ${avg} rounds/day).`,
+  );
+  if (join.bestCondition) {
+    narrativeParts.push(
+      `${capitalize(CONDITION_LABELS[join.bestCondition])} days produced the highest ` +
+      `average rounds (${Math.round(join.byCondition[join.bestCondition].averageRoundsPerDay)} rounds/day).`,
+    );
+  }
+  if (join.worstCondition && join.worstCondition !== join.bestCondition) {
+    narrativeParts.push(
+      `${capitalize(CONDITION_LABELS[join.worstCondition])} days produced the lowest ` +
+      `average rounds (${Math.round(join.byCondition[join.worstCondition].averageRoundsPerDay)} rounds/day).`,
+    );
+  }
+  return {
+    key: "golf-rounds",
+    icon: "golf-flag",
+    title: "Golf Rounds",
+    accent: "green",
+    narrative: narrativeParts.join(" "),
+    dataPoint: { label: "Weather correlation:", value: corrLabel },
+  };
+}
+
+function capitalize(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

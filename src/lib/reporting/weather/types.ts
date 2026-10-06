@@ -60,8 +60,28 @@ export type MonthlyWeatherObservation = {
   avgRoundsRain: number;
   /** Notable weather events for the period, normalised. */
   notableEvents: ReadonlyArray<NormalisedWeatherEvent>;
+  /** GOLF-HIST-1 (2026-10-05) — per-day weather classification for
+   *  the period, used by the Weather × Golf join to attribute each
+   *  day's golf activity to its weather condition. Optional for
+   *  back-compat with cache rows written before this field existed;
+   *  consumers must gracefully fall back when absent. */
+  dailyClassifications?: ReadonlyArray<DailyWeatherClassification>;
   /** Provenance — where the data came from + how precise. */
   provenance: WeatherProvenance;
+};
+
+/**
+ * GOLF-HIST-1 (2026-10-05) — one day's weather bucket. The provider
+ * classifier assigns each day in the period to exactly one of the
+ * four canonical buckets using the same thresholds as the aggregate
+ * `daysSunny` / `daysPartlyCloudy` / `daysRain` / `daysHighWind`
+ * counts. Downstream joins consume this to pair golf-activity days
+ * with their weather condition.
+ */
+export type DailyWeatherClassification = {
+  /** Local-calendar date ISO (YYYY-MM-DD). */
+  dateISO: string;
+  condition: "sunny" | "partly-cloudy" | "rain" | "high-wind";
 };
 
 export type NormalisedWeatherEventKind =

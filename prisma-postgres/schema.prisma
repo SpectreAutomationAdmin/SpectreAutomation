@@ -430,6 +430,11 @@ model Club {
   // weather observations (keyed by period + coordinates).
   weatherObservationCache          WeatherObservationCache[]
 
+  // GOLF-HIST-1 (2026-10-05) — canonical Historical Golf Activity
+  // (provider-neutral; GGGolf export today, future connectors tomorrow).
+  golfActivityImportBatches        GolfActivityImportBatch[]
+  golfActivityDays                 GolfActivityDay[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -14696,4 +14701,112 @@ model WeatherObservationCache {
   @@unique([clubId, yearMonth, latitude, longitude])
   @@index([clubId, yearMonth])
   @@index([clubId])
+}
+
+// -------------------------------------------------------------------
+// GOLF-HIST-1 (2026-10-05) — canonical Historical Golf Activity.
+// Provider-neutral canonical model for daily golf-activity data.
+// See the SQLite schema for the full documentation.
+model GolfActivityImportBatch {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+
+  status               String   @default("PREVIEW")
+
+  sourceSystem         String
+  sourceFileName       String?
+  sourceFileHash       String
+  reportingPeriodStart DateTime
+  reportingPeriodEnd   DateTime
+
+  rowCount             Int      @default(0)
+  activeDays           Int      @default(0)
+  realZeroDays         Int      @default(0)
+  invalidCount         Int      @default(0)
+  warningCount         Int      @default(0)
+  conflictCount        Int      @default(0)
+
+  sourceTotalGuests    Int?
+  sourceTotalGreenFees Int?
+  sourceTotalMembers   Int?
+  sourceTotalRounds    Int?
+  sourceTotalJuniors   Int?
+  sourceTotalWomen     Int?
+  parsedTotalGuests    Int      @default(0)
+  parsedTotalGreenFees Int      @default(0)
+  parsedTotalMembers   Int      @default(0)
+  parsedTotalRounds    Int      @default(0)
+  parsedTotalJuniors   Int      @default(0)
+  parsedTotalWomen     Int      @default(0)
+  reconciliationStatus String   @default("UNKNOWN")
+
+  uploadedByUserId     String?
+  uploadedAt           DateTime @default(now())
+  committedAt          DateTime?
+  committedByUserId    String?
+
+  rows                 GolfActivityImportRow[]
+  committedDays        GolfActivityDay[]
+
+  @@unique([clubId, sourceSystem, sourceFileHash, reportingPeriodStart])
+  @@index([clubId, status])
+  @@index([clubId, reportingPeriodStart])
+}
+
+model GolfActivityImportRow {
+  id                   String   @id @default(cuid())
+  batchId              String
+  batch                GolfActivityImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowIndex             Int
+  activityDate         DateTime
+  rawDateLabel         String
+  rawWeatherCode       String?
+
+  guests               Int      @default(0)
+  greenFees            Int      @default(0)
+  members              Int      @default(0)
+  totalRounds          Int      @default(0)
+  juniors              Int      @default(0)
+  women                Int      @default(0)
+  corpos               Int      @default(0)
+  corposHalf           Int      @default(0)
+  fullCart             Int      @default(0)
+  nineCart             Int      @default(0)
+  halfCart             Int      @default(0)
+  freeCart             Int      @default(0)
+
+  conflictWithCommittedDayId String?
+  warningsJson         String?
+
+  @@unique([batchId, rowIndex])
+  @@index([batchId, activityDate])
+}
+
+model GolfActivityDay {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  activityDate         DateTime
+  sourceSystem         String
+  sourceBatchId        String?
+  sourceBatch          GolfActivityImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
+
+  guests               Int      @default(0)
+  greenFees            Int      @default(0)
+  members              Int      @default(0)
+  totalRounds          Int      @default(0)
+  juniors              Int      @default(0)
+  women                Int      @default(0)
+  corpos               Int      @default(0)
+  corposHalf           Int      @default(0)
+  fullCart             Int      @default(0)
+  nineCart             Int      @default(0)
+  halfCart             Int      @default(0)
+  freeCart             Int      @default(0)
+  committedAt          DateTime @default(now())
+  committedByUserId    String?
+
+  @@unique([clubId, activityDate])
+  @@index([clubId, activityDate])
 }

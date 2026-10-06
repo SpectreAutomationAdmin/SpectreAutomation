@@ -87,6 +87,9 @@ import {
   buildCouleeMonthlyWeatherSummary,
   type MonthlyWeatherSummary,
 } from "@/lib/reporting/monthly-weather-summary";
+// GOLF-HIST-1 (2026-10-05) — canonical Weather × Golf join feeds the
+// Section XI rounds-by-weather bar chart + Golf correlation card.
+import { resolveWeatherGolfJoin } from "@/lib/reporting/weather-golf-join";
 import {
   buildCouleeDepartmentalPayrollAnalysis,
   buildSilverSpringsDepartmentalPayrollAnalysis,
@@ -3235,12 +3238,28 @@ export async function getMonthlyReportingPackage(
     // `dataSource: "demo"` — the redactor wipes those surfaces when
     // training mode is active.
     monthlyWeatherSummary: hasRealData
-      ? await buildCouleeMonthlyWeatherSummary({
-          clubId: club.id,
-          clubName: club.name,
-          period: reportingPeriod,
-          club,
-        })
+      ? await (async () => {
+          // GOLF-HIST-1 (2026-10-05) — resolve the Weather × Golf
+          // join first so Section XI can activate the rounds-by-
+          // weather bars + Golf correlation card when authoritative
+          // Golf Activity rows exist for the period. The join is
+          // fail-safe: when any input is missing it returns
+          // `golfDataAvailable: false` and Section XI preserves its
+          // UNAVAILABLE sentinels. Never throws — a weather-side
+          // outage must not fail the whole report.
+          const weatherGolfJoin = await resolveWeatherGolfJoin({
+            clubId: club.id,
+            club,
+            period: reportingPeriod,
+          }).catch(() => null);
+          return buildCouleeMonthlyWeatherSummary({
+            clubId: club.id,
+            clubName: club.name,
+            period: reportingPeriod,
+            club,
+            weatherGolfJoin,
+          });
+        })()
       : await buildSilverSpringsMonthlyWeatherSummary({
           clubName: club.name,
           period: reportingPeriod,
