@@ -6407,3 +6407,91 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .wi-review-rail { border-left: none; border-top: 1px solid var(--wi-review-hairline); }
   .wi-review-two-col { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ====================================================================
+   COA-MAP-2C (2026-10-06) — pointer-driven mapping drag.
+
+   Styling for:
+     • the floating drag overlay (fixed-position card that rides the
+       pointer);
+     • the subtle source-row fade while drag is active;
+     • the destination group header "available / hovered" treatment.
+
+   All effects are additive — no shadow stacks, no neon.  Timings
+   are ~160 ms, no bounce/spring. */
+
+.coa-mapping-drag-overlay-card {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 360px;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--spectre-surface);
+  border: 1px solid var(--spectre-border-strong);
+  box-shadow: 0 6px 18px rgba(15, 15, 20, 0.14);
+  font-size: 12.5px;
+  line-height: 1.2;
+  color: var(--spectre-text-primary);
+  transition: transform 160ms ease-out;
+}
+.coa-mapping-drag-overlay-num {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--spectre-text-muted);
+  letter-spacing: 0.02em;
+}
+.coa-mapping-drag-overlay-name {
+  font-weight: 600;
+  color: var(--spectre-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.coa-mapping-drag-overlay-group {
+  font-size: 10.5px;
+  color: var(--spectre-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* The source row fades back to about one-third opacity while the
+   drag overlay is riding the pointer.  Transition is intentionally
+   short — "lift" rather than "disappear". */
+tr.spectre-dw-row[data-dragging-source="true"] {
+  opacity: 0.35;
+  transition: opacity 160ms ease-out;
+}
+tr.spectre-dw-row[data-dragging-source="true"] td {
+  background: var(--spectre-surface-hover);
+}
+
+/* Group sub-header while a mapping drag is active.  "Eligible"
+   state is a quiet accent border on the left; "hovered" state
+   adds a stronger stone-900 band and raises the row background.
+   No red for invalid — invalid simply stays neutral and the
+   validation layer explains on drop. */
+tbody[data-drop-eligible="true"] tr.spectre-dw-sub-header td {
+  box-shadow: inset 3px 0 0 var(--spectre-border-strong);
+  transition: box-shadow 160ms ease-out, background-color 160ms ease-out;
+}
+tbody[data-drop-hovered="true"] tr.spectre-dw-sub-header td {
+  box-shadow: inset 3px 0 0 var(--spectre-text-primary);
+  background: var(--spectre-surface-hover);
+}
+
+/* Hover affordance on a normal row — the grab cursor appears only
+   on hover of a draggable row, never permanently, so the resting
+   table doesn't shout "I'm a drag/drop demo". */
+tr.spectre-dw-row:not([data-dragging-source="true"]) {
+  cursor: default;
+}
+tr.spectre-dw-row:not([data-dragging-source="true"]):hover {
+  cursor: grab;
+}
+tr.spectre-dw-row:not([data-dragging-source="true"]):hover
+  td:not(.spectre-dw-select-cell):not(.fund-assign) {
+  background: var(--spectre-surface-hover);
+}
+

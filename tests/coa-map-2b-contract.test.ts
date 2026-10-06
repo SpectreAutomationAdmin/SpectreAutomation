@@ -81,84 +81,97 @@ describe("COA-MAP-2B §C — group sub-header is a drop target", () => {
     expect(src).toMatch(/data-fs-group-id=\{fsg\.id/);
   });
 
-  it("sub-header conditionally attaches onDragOver / onDragLeave / onDrop when a mapping drag is active", () => {
-    expect(src).toMatch(/onDragOver:\s*\(e:\s*React\.DragEvent\)\s*=>\s*ctx\.mapping!\.onDragOverGroup/);
-    expect(src).toMatch(/onDrop:\s*\(e:\s*React\.DragEvent\)\s*=>\s*ctx\.mapping!\.onDropOnGroup/);
-    expect(src).toMatch(/onDragLeave:\s*\(\)\s*=>\s*ctx\.mapping!\.onDragLeaveGroup/);
-  });
-
-  it("destination inferred from fsGroupId (never from display text / fsGroupKey / fsGroupLabel)", () => {
+  it("destination is detected by fsGroupId (never from display text / fsGroupKey / fsGroupLabel)", () => {
+    // COA-MAP-2C — the pointer-driven hook uses elementFromPoint and
+    // walks up to the nearest [data-fs-group-id] ancestor; the
+    // destination is NEVER derived from fsGroupKey or fsGroupLabel.
     expect(src).not.toMatch(/onDropOnGroup\(.*fsg\.key\)/);
     expect(src).not.toMatch(/onDropOnGroup\(.*fsg\.label\)/);
-    expect(src).toMatch(/onDropOnGroup\(e,\s*fsg\.id as string\)/);
-  });
-
-  it("hovered destination exposes coa-mapping-drop-affordance 'Move here' label", () => {
-    expect(src).toMatch(/data-testid="coa-mapping-drop-affordance"/);
-    expect(src).toMatch(/Move here/);
   });
 
   it("eligible destinations are flagged with data-drop-eligible for CSS targeting", () => {
     expect(src).toMatch(/data-drop-eligible=/);
   });
-});
 
-describe("COA-MAP-2B §D — drag handle on account rows (not whole row)", () => {
-  const src = readFileSync(COA_UI, "utf8");
-
-  it("AccountRow accepts onMappingDragStart / onMappingDragEnd props", () => {
-    expect(src).toMatch(/onMappingDragStart\?:\s*\(e:\s*React\.DragEvent,\s*accountId:\s*string\)\s*=>\s*void/);
-    expect(src).toMatch(/onMappingDragEnd\?:\s*\(\)\s*=>\s*void/);
+  it("hovered destinations are flagged with data-drop-hovered for CSS targeting", () => {
+    expect(src).toMatch(/data-drop-hovered=/);
   });
 
-  it("row <tr> is NOT draggable; only the handle span is", () => {
-    // No `draggable` attribute on `.spectre-dw-row` <tr> itself.
-    expect(src).not.toMatch(/<tr\s[^>]*className="spectre-dw-row"[^>]*draggable/);
-    // Handle span has `draggable` on its own line (CRLF-portable).
-    expect(src).toMatch(/<span\s*\n?\s*draggable/);
-  });
-
-  it("handle has coa-mapping-drag-handle-{accountNumber} testid", () => {
-    expect(src).toMatch(/data-testid=\{`coa-mapping-drag-handle-\$\{row\.accountNumber\}`\}/);
-  });
-
-  it("handle stops propagation of click so row click still opens Inspector", () => {
-    const idx = src.indexOf("coa-mapping-drag-handle");
-    const near = src.slice(idx, idx + 600);
-    expect(near).toMatch(/onClick=\{\(e\)\s*=>\s*e\.stopPropagation\(\)\}/);
-  });
-
-  it("handle is hidden in fundMode OR when canEdit is false", () => {
-    expect(src).toMatch(/onMappingDragStart && !fundMode && canEdit/);
+  it("sub-header carries a coa-mapping-drop-{fsGroupId} testid for Playwright targeting", () => {
+    expect(src).toMatch(/data-testid=\{fsg\.id \? `coa-mapping-drop-\$\{fsg\.id\}` : undefined\}/);
   });
 });
 
-describe("COA-MAP-2B §E — global window.dragover + spectre-dw-table-wrap auto-scroll", () => {
-  // ChartOfAccountsClient contains a block comment somewhere that
-  // makes stripComments too aggressive on this file; use raw src.
+describe("COA-MAP-2B / 2C §D — whole-row pointer-driven drag", () => {
   const src = readFileSync(COA_UI, "utf8");
 
-  it("global dragover listener mounted on window while mappingDragId is set", () => {
-    expect(src).toMatch(/window\.addEventListener\("dragover"/);
-    expect(src).toMatch(/if \(!mappingDragId\) return undefined/);
+  it("AccountRow accepts onRowPointerDown + currentFsGroupLabel", () => {
+    expect(src).toMatch(/onRowPointerDown\?:\s*\(/);
+    expect(src).toMatch(/currentFsGroupLabel:\s*string;/);
   });
 
-  it("auto-scroll targets .spectre-dw-table-wrap", () => {
-    expect(src).toMatch(/document\.querySelector\(["']\.spectre-dw-table-wrap["']\)/);
+  it("<tr> itself carries onPointerDown (whole row is the drag source)", () => {
+    expect(src).toMatch(/onPointerDown=\{dragEnabled \? \(e\) => onRowPointerDown!/);
+    // The old HTML5 handle span is gone — no `draggable` attribute
+    // on the row OR anywhere inside AccountRow.
+    expect(src).not.toMatch(/data-testid=\{`coa-mapping-drag-handle-/);
   });
 
-  it("velocity ramps rather than being a constant", () => {
-    expect(src).toMatch(/const maxV = 24;/);
-    expect(src).toMatch(/const minV = 6;/);
-    expect(src).toMatch(/const edge = 100;/);
+  it("pointer-down payload carries accountId + accountNumber + accountName + currentFsGroupName", () => {
+    expect(src).toMatch(/accountId:\s*row\.id/);
+    expect(src).toMatch(/accountNumber:\s*row\.accountNumber/);
+    expect(src).toMatch(/accountName:\s*row\.name/);
+    expect(src).toMatch(/currentFsGroupName:\s*currentFsGroupLabel/);
   });
 
-  it("rAF loop + cleanup on dragend/drop/unmount", () => {
-    expect(src).toMatch(/requestAnimationFrame\(stepAutoScroll\)/);
-    expect(src).toMatch(/removeEventListener\("dragover"/);
-    expect(src).toMatch(/removeEventListener\("dragend"/);
-    expect(src).toMatch(/removeEventListener\("drop"/);
-    expect(src).toMatch(/useEffect\(\(\)\s*=>\s*\(\)\s*=>\s*stopAutoScroll\(\)/);
+  it("drag is disabled in fundMode OR when canEdit is false", () => {
+    expect(src).toMatch(/const dragEnabled = !!onRowPointerDown && !fundMode && canEdit;/);
+  });
+
+  it("row's own onClick still fires — click vs drag disambiguation lives in the useAccountDrag hook, not the row", () => {
+    // The <tr> still has onClick={onRowClick}; threshold is handled
+    // in the hook.  Row click opens the Inspector via its own path.
+    expect(src).toMatch(/onClick=\{onRowClick\}/);
+  });
+});
+
+describe("COA-MAP-2B / 2C §E — pointer-driven auto-scroll (now in useAccountDrag hook)", () => {
+  // COA-MAP-2C moved auto-scroll into the pointer-driven hook so a
+  // single rAF loop drives both the overlay motion and the scroll.
+  const HOOK = path.join(REPO, "src/components/coa-mapping/useAccountDrag.tsx");
+  const src = readFileSync(HOOK, "utf8");
+
+  it("hook uses pointer events (not dragover) as the authoritative source", () => {
+    expect(src).toMatch(/window\.addEventListener\("pointermove"/);
+    expect(src).toMatch(/window\.addEventListener\("pointerup"/);
+    expect(src).toMatch(/window\.addEventListener\("pointercancel"/);
+  });
+
+  it("auto-scroll walks the scrollable ancestor of the source row (defensively covers .spectre-dw-table-wrap and document)", () => {
+    expect(src).toMatch(/findScrollableAncestor/);
+    expect(src).toMatch(/\.spectre-dw-table-wrap/);
+  });
+
+  it("velocity is a progressive 2 → 14 px/frame quadratic curve (NOT the 6 → 24 ramp from COA-MAP-2B)", () => {
+    expect(src).toMatch(/V_BASE_PX_PER_FRAME = 2/);
+    expect(src).toMatch(/V_MAX_PX_PER_FRAME = 14/);
+    expect(src).toMatch(/EDGE_ZONE_PX = 100/);
+    // Quadratic ramp: t * t * (max - base).
+    expect(src).toMatch(/t \* t \* \(V_MAX_PX_PER_FRAME - V_BASE_PX_PER_FRAME\)/);
+  });
+
+  it("rAF loop + cleanup on pointerup/pointercancel/unmount", () => {
+    expect(src).toMatch(/requestAnimationFrame\(scrollStep\)/);
+    expect(src).toMatch(/removeEventListener\("pointermove"/);
+    expect(src).toMatch(/removeEventListener\("pointerup"/);
+    expect(src).toMatch(/removeEventListener\("pointercancel"/);
+    expect(src).toMatch(/cleanup/);
+  });
+
+  it("auto-scroll is driven by LAST KNOWN pointer Y (not event rate)", () => {
+    // The rAF loop reads pointerRef.current.y, so the scroll velocity
+    // is independent of how often the browser fires pointermove.
+    expect(src).toMatch(/pointerRef\.current\.y/);
   });
 });
 
@@ -197,7 +210,7 @@ describe("COA-MAP-2B §F — AccountListMappingDrawer canonical API usage", () =
   });
 });
 
-describe("COA-MAP-2B §G — ChartOfAccountsClient wiring", () => {
+describe("COA-MAP-2B / 2C §G — ChartOfAccountsClient wiring", () => {
   const src = readFileSync(COA_UI, "utf8");
   const page = readFileSync(COA_PAGE, "utf8");
 
@@ -210,17 +223,22 @@ describe("COA-MAP-2B §G — ChartOfAccountsClient wiring", () => {
     expect(src).toMatch(/mapping\?\s*:\s*MappingDragCtx/);
   });
 
-  it("ChartOfAccountsClient renders AccountListMappingDrawer on drop", () => {
+  it("ChartOfAccountsClient uses the pointer-driven useAccountDrag hook", () => {
+    expect(src).toMatch(/import \{ useAccountDrag, AccountDragOverlay \} from "@\/components\/coa-mapping\/useAccountDrag"/);
+    expect(src).toMatch(/const drag = useAccountDrag\(\);/);
+  });
+
+  it("ChartOfAccountsClient mounts the floating overlay (fixed-position drag ghost)", () => {
+    expect(src).toMatch(/<AccountDragOverlay state=\{drag\.state\}/);
+  });
+
+  it("ChartOfAccountsClient renders AccountListMappingDrawer on drop (same canonical path)", () => {
     expect(src).toMatch(/<AccountListMappingDrawer/);
     expect(src).toMatch(/accountId=\{mappingDrop\.accountId\}/);
     expect(src).toMatch(/targetFsGroupId=\{mappingDrop\.targetFsGroupId\}/);
   });
 
-  it("beginMappingDrag / endMappingDrag / dropOnGroup handlers defined", () => {
-    expect(src).toMatch(/const beginMappingDrag = useCallback/);
-    expect(src).toMatch(/const endMappingDrag = useCallback/);
-    expect(src).toMatch(/const dropOnGroup = useCallback/);
-    expect(src).toMatch(/const dragOverGroup = useCallback/);
-    expect(src).toMatch(/const dragLeaveGroup = useCallback/);
+  it("drag.onDrop callback is wired so pointer-driven drops open the drawer", () => {
+    expect(src).toMatch(/drag\.onDrop\(\(accountId,\s*targetFsGroupId\)\s*=>\s*\{[\s\S]*?setMappingDrop/);
   });
 });
