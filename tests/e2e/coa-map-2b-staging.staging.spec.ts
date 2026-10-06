@@ -64,6 +64,56 @@ async function destroyFixture(page: Page, fixtureKey: string): Promise<void> {
     .catch(() => undefined);
 }
 
+/**
+ * Perform an HTML5 drag/drop sequence as a REAL dispatchEvent
+ * chain, with explicit awaits between each event so React has a
+ * chance to flush state updates (otherwise the conditional
+ * onDragOver/onDrop handlers on the sub-header haven't attached
+ * when the dragover fires).  Playwright's own dragTo() uses mouse
+ * events which Chromium does not synthesize into HTML5 DnD events,
+ * so this stays as the closest-to-real automated path.
+ *
+ * NOTE: this is AUTOMATED acceptance; founder manual acceptance
+ * remains PENDING until the founder personally retests.
+ */
+async function performDrop(page: Page, accountNumber: string, targetFsGroupId: string): Promise<void> {
+  const accSel = `[data-testid="coa-mapping-drag-handle-${accountNumber}"]`;
+  const grpSel = `[data-fs-group-id="${targetFsGroupId}"] .spectre-dw-sub-header`;
+  // dragstart alone — React flushes mappingDragId before the next
+  // page.evaluate executes.
+  await page.evaluate((sel) => {
+    const h = document.querySelector(sel) as HTMLElement | null;
+    if (!h) throw new Error("drag handle not found: " + sel);
+    const dt = new DataTransfer();
+    h.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: dt }));
+  }, accSel);
+  await page.waitForTimeout(100);
+  // dragover on the target header — now `canDrop` is true and the
+  // header carries onDragOver/onDrop handlers.
+  await page.evaluate((sel) => {
+    const grp = document.querySelector(sel) as HTMLElement | null;
+    if (!grp) throw new Error("group header not found: " + sel);
+    const rect = grp.getBoundingClientRect();
+    const dt = new DataTransfer();
+    grp.dispatchEvent(new DragEvent("dragover", {
+      bubbles: true, cancelable: true, dataTransfer: dt,
+      clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
+    }));
+  }, grpSel);
+  await page.waitForTimeout(100);
+  // drop — commits the gesture and opens the drawer.
+  await page.evaluate((sel) => {
+    const grp = document.querySelector(sel) as HTMLElement | null;
+    if (!grp) throw new Error("group header not found: " + sel);
+    const rect = grp.getBoundingClientRect();
+    const dt = new DataTransfer();
+    grp.dispatchEvent(new DragEvent("drop", {
+      bubbles: true, cancelable: true, dataTransfer: dt,
+      clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
+    }));
+  }, grpSel);
+}
+
 runAt("COA-MAP-2B · Account List drag/drop + Reporting Impact + cross-view parity", async ({ browser }) => {
   test.setTimeout(600_000);
   const ctx: BrowserContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -200,27 +250,7 @@ runAt("COA-MAP-2B · Account List drag/drop + Reporting Impact + cross-view pari
     const groupBHeader = page.locator(`[data-fs-group-id="${fx.groupB.id}"]`).first();
     await groupBHeader.scrollIntoViewIfNeeded();
 
-    await page.evaluate(
-      ([accSel, groupId]) => {
-        const h = document.querySelector(accSel) as HTMLElement | null;
-        const grp = document.querySelector(`[data-fs-group-id="${groupId}"] .spectre-dw-sub-header`) as HTMLElement | null;
-        if (!h || !grp) throw new Error("handle or group header not found");
-        const dt = new DataTransfer();
-        h.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: dt }));
-        const rect = grp.getBoundingClientRect();
-        const over = new DragEvent("dragover", {
-          bubbles: true, cancelable: true, dataTransfer: dt,
-          clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
-        });
-        grp.dispatchEvent(over);
-        const drop = new DragEvent("drop", {
-          bubbles: true, cancelable: true, dataTransfer: dt,
-          clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
-        });
-        grp.dispatchEvent(drop);
-      },
-      [`[data-testid="coa-mapping-drag-handle-${fx.account.accountNumber}"]`, fx.groupB.id],
-    );
+    await performDrop(page, fx.account.accountNumber, fx.groupB.id);
     await page.locator('[data-testid="coa-mapping-drawer"]').waitFor({ state: "visible", timeout: 10_000 });
     await page.locator('[data-testid="coa-mapping-drawer-preview"]').waitFor({ state: "visible", timeout: 10_000 });
     const drawerText = (await page.locator('[data-testid="coa-mapping-drawer-preview"]').innerText()).toLowerCase();
@@ -248,27 +278,7 @@ runAt("COA-MAP-2B · Account List drag/drop + Reporting Impact + cross-view pari
     // ------------------------------------------------------------
     await accountRow.scrollIntoViewIfNeeded();
     await groupBHeader.scrollIntoViewIfNeeded();
-    await page.evaluate(
-      ([accSel, groupId]) => {
-        const h = document.querySelector(accSel) as HTMLElement | null;
-        const grp = document.querySelector(`[data-fs-group-id="${groupId}"] .spectre-dw-sub-header`) as HTMLElement | null;
-        if (!h || !grp) throw new Error("handle or group header not found");
-        const dt = new DataTransfer();
-        h.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: dt }));
-        const rect = grp.getBoundingClientRect();
-        const over = new DragEvent("dragover", {
-          bubbles: true, cancelable: true, dataTransfer: dt,
-          clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
-        });
-        grp.dispatchEvent(over);
-        const drop = new DragEvent("drop", {
-          bubbles: true, cancelable: true, dataTransfer: dt,
-          clientX: rect.left + 20, clientY: rect.top + rect.height / 2,
-        });
-        grp.dispatchEvent(drop);
-      },
-      [`[data-testid="coa-mapping-drag-handle-${fx.account.accountNumber}"]`, fx.groupB.id],
-    );
+    await performDrop(page, fx.account.accountNumber, fx.groupB.id);
     await page.locator('[data-testid="coa-mapping-drawer-preview"]').waitFor({ state: "visible", timeout: 10_000 });
     const [applyResp] = await Promise.all([
       page.waitForResponse(
