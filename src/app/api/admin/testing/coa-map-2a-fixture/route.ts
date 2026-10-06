@@ -81,26 +81,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     select: { id: true, accountNumber: true, name: true },
   });
 
+  // COA-MAP-2B — a second disposable Account seeded onto Group B so
+  // the Account List renders a Group B sub-header.  (Account List
+  // only renders sub-headers for groups that have at least one
+  // account.)  This anchor account is NOT the drag source — the
+  // test drags `account` from Group A → Group B.  Both get cleaned
+  // up on DELETE.
+  const anchorB = await prisma.account.create({
+    data: {
+      clubId,
+      accountNumber: `9${Date.now().toString().slice(-5)}8`,
+      name: `${fixtureKey} anchor B`,
+      type: "ASSET",
+      normalBalance: "DEBIT",
+      fsGroupId: groupB.id,
+      isActive: true,
+    },
+    select: { id: true, accountNumber: true, name: true },
+  });
+
   // Seed the effective-dated assignment table so the resolver can
-  // find it AS OF today.  We date the seed row 7 days ago so a
-  // reassign that fires today lands on a DIFFERENT effectiveFrom
-  // and never collides with the AccountFinancialStatementAssignment
-  // unique index on (accountId, effectiveFrom).
+  // find both accounts AS OF today.  We date the seed rows 7 days
+  // ago so a reassign that fires today lands on a DIFFERENT
+  // effectiveFrom and never collides with the
+  // AccountFinancialStatementAssignment unique index on
+  // (accountId, effectiveFrom).
   const start = new Date();
   start.setUTCHours(0, 0, 0, 0);
   start.setUTCDate(start.getUTCDate() - 7);
-  await prisma.accountFinancialStatementAssignment.create({
-    data: {
-      clubId,
-      accountId: account.id,
-      fsGroupId: groupA.id,
-      effectiveFrom: start,
-    },
+  await prisma.accountFinancialStatementAssignment.createMany({
+    data: [
+      { clubId, accountId: account.id,  fsGroupId: groupA.id, effectiveFrom: start },
+      { clubId, accountId: anchorB.id,  fsGroupId: groupB.id, effectiveFrom: start },
+    ],
   });
 
   return NextResponse.json({
     fixtureKey,
     account,
+    anchorB,
     groupA,
     groupB,
   });

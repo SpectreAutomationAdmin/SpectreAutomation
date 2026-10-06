@@ -157,20 +157,20 @@ describe("COA-MAP-2A §E — disposable test fixture endpoint", () => {
     expect(src).toMatch(/hasClubAccess\(/);
   });
 
-  it("creates exactly two BALANCE_SHEET groups + one ASSET account", () => {
-    // Two groups.
+  it("creates exactly two BALANCE_SHEET groups + two ASSET accounts (COA-MAP-2B: anchor on Group B)", () => {
     const grpCount = (src.match(/prisma\.financialStatementGroup\.create\(/g) ?? []).length;
     expect(grpCount).toBe(2);
-    // One account.
+    // COA-MAP-2B — the fixture now seeds TWO accounts (one on A,
+    // one on B) so the Account List renders both group sub-headers
+    // (sub-headers only render for groups with ≥1 account).
     const accCount = (src.match(/prisma\.account\.create\(/g) ?? []).length;
-    expect(accCount).toBe(1);
-    // Both groups are BS; account is ASSET.
+    expect(accCount).toBe(2);
     expect(src).toMatch(/statement:\s*"BALANCE_SHEET"/);
     expect(src).toMatch(/type:\s*"ASSET"/);
   });
 
-  it("seeds an effective-dated assignment so the AS-OF resolver finds it today", () => {
-    expect(src).toMatch(/prisma\.accountFinancialStatementAssignment\.create\(/);
+  it("seeds effective-dated assignments for both accounts so the AS-OF resolver finds them today", () => {
+    expect(src).toMatch(/prisma\.accountFinancialStatementAssignment\.createMany/);
     expect(src).toMatch(/effectiveFrom:\s*start/);
   });
 
