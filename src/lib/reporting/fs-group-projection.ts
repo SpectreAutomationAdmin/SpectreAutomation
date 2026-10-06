@@ -57,6 +57,10 @@ import { prisma } from "@/lib/prisma";
 import { reportingAccountBalances } from "@/lib/accounting/reporting-balances";
 import { resolveBudget } from "@/lib/reporting/budget-resolver";
 import type { ReportingPeriod } from "@/lib/reporting/reporting-period";
+// COA-MAP-1A (2026-10-06) — canonical Board reporting resolves FS Group
+// AS OF the reporting-period end via the effective-dated assignment
+// table rather than the latest Account.fsGroup pointer.
+import { resolveFinancialStatementGroupAsOfBatch } from "@/lib/coa-mapping/fs-group-asof-resolver";
 import {
   classifyFsGroupPresentation,
   presentationCategoryFor,
@@ -217,10 +221,17 @@ export async function resolveFsGroupProjection(args: {
   const budgetResult = await resolveBudget({ clubId, fiscalYear, throughMonth });
 
   // -- Collect every account referenced in Actual or Budget, plus the
-  //    account's fsGroup + type + fundApplicability. We don't trust
-  //    the ReportingBalanceRow fsGroupKey alone because it reflects
-  //    the snapshot-time classification; the current COA is the
-  //    source of truth for presentation grouping.
+  //    account's fsGroup AS OF the reporting-period end + type +
+  //    fundApplicability. We don't trust the ReportingBalanceRow
+  //    fsGroupKey alone because it reflects the snapshot-time
+  //    classification. We also don't use `Account.fsGroup` because
+  //    that is the LATEST assignment, not the one effective for this
+  //    period. COA-MAP-1A (2026-10-06) — canonical Board reporting
+  //    now resolves the FS Group via `AccountFinancialStatementAssignment`
+  //    AS OF `period.periodEnd`. Published packages remain frozen
+  //    (MonthlyPackage.packagePayloadJson); only unpublished live
+  //    preview and the active package build consume this as-of
+  //    resolver.
   const accountNumbers = new Set<string>();
   for (const r of cmActualResult.balances) accountNumbers.add(r.accountNumber);
   for (const r of ytdActualResult.balances) accountNumbers.add(r.accountNumber);
@@ -229,14 +240,40 @@ export async function resolveFsGroupProjection(args: {
   const accounts = await prisma.account.findMany({
     where: { clubId, accountNumber: { in: Array.from(accountNumbers) } },
     select: {
+      id: true,
       accountNumber: true,
       name: true,
       type: true,
       fundApplicability: true,
+      // Fallback: when no AccountFinancialStatementAssignment covers
+      // periodEnd (e.g. pre-backfill tenant), use current Account.fsGroup
+      // so reporting still renders rather than returning (Unassigned).
       fsGroup: { select: { key: true, name: true, sortOrder: true, statement: true } },
     },
   });
   const acctByNumber = new Map(accounts.map((a) => [a.accountNumber, a]));
+
+  // COA-MAP-1A — resolve each account's effective-dated FS Group
+  // for `periodEnd`. One batch call, N+1-free.
+  const asOfBatch = await resolveFinancialStatementGroupAsOfBatch({
+    clubId,
+    accountIds: accounts.map((a) => a.id),
+    asOf: periodEnd,
+  });
+  const asOfByAccountNumber = new Map<string, { key: string; name: string; sortOrder: number; statement: string } | null>();
+  for (const a of accounts) {
+    const asOf = asOfBatch.get(a.id);
+    if (asOf) {
+      asOfByAccountNumber.set(a.accountNumber, {
+        key: asOf.fsGroupKey,
+        name: asOf.fsGroupName,
+        sortOrder: asOf.sortOrder,
+        statement: asOf.statement,
+      });
+    } else {
+      asOfByAccountNumber.set(a.accountNumber, null);
+    }
+  }
 
   // -- Build account-level aggregation first. One entry per account,
   //    with cmActual + ytdActual + cmBudget + ytdBudget resolved.
@@ -262,15 +299,23 @@ export async function resolveFsGroupProjection(args: {
     if (existing) return existing;
     const meta = acctByNumber.get(accountNumber);
     if (!meta) return null; // unknown account — never auto-create
+    // COA-MAP-1A — prefer the effective-dated as-of resolution;
+    // fall back to current Account.fsGroup only when no assignment
+    // exists (pre-backfill tenants).
+    const asOf = asOfByAccountNumber.get(accountNumber) ?? null;
+    const fsGroupKey = asOf?.key ?? meta.fsGroup?.key ?? null;
+    const fsGroupName = asOf?.name ?? meta.fsGroup?.name ?? "(Unassigned)";
+    const fsGroupSortOrder = asOf?.sortOrder ?? meta.fsGroup?.sortOrder ?? 0;
+    const statement = asOf?.statement ?? meta.fsGroup?.statement ?? null;
     const agg: AcctAgg = {
       accountNumber: meta.accountNumber,
       accountName: meta.name,
       accountType: meta.type,
       fundApplicability: meta.fundApplicability,
-      fsGroupKey: meta.fsGroup?.key ?? null,
-      fsGroupName: meta.fsGroup?.name ?? "(Unassigned)",
-      fsGroupSortOrder: meta.fsGroup?.sortOrder ?? 0,
-      statement: meta.fsGroup?.statement ?? null,
+      fsGroupKey,
+      fsGroupName,
+      fsGroupSortOrder,
+      statement,
       cmActual: 0,
       cmBudget: 0,
       ytdActual: 0,

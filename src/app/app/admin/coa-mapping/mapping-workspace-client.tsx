@@ -165,7 +165,20 @@ export default function MappingWorkspaceClient(props: Props) {
     await requestPreview(dragging.id, groupId);
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // COA-MAP-1A (2026-10-06) — period-aware default effective-from
+  // dates. Financial statement mappings normally change on reporting
+  // boundaries, not literal "today". We expose:
+  //   - current reporting period start
+  //   - fiscal year start
+  //   - custom date
+  // When the first two resolve to the same date, the UI collapses
+  // them intelligently.
+  const today = new Date();
+  const currentPeriodStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const fiscalYearStart = new Date(Date.UTC(today.getUTCFullYear(), 0, 1));
+  const currentPeriodIso = currentPeriodStart.toISOString().slice(0, 10);
+  const fiscalYearIso = fiscalYearStart.toISOString().slice(0, 10);
+  const todayIso = today.toISOString().slice(0, 10);
 
   return (
     <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -253,7 +266,9 @@ export default function MappingWorkspaceClient(props: Props) {
               if (!selected || !pendingTargetGroupId) return;
               await applyReassignment(pendingTargetGroupId, selected.id, effectiveFromISO, confirmWarnings);
             }}
-            defaultEffectiveFromISO={todayIso}
+            currentPeriodIso={currentPeriodIso}
+            fiscalYearIso={fiscalYearIso}
+            todayIso={todayIso}
             applying={state === "applying"}
           />
         )}
@@ -416,16 +431,49 @@ function AccountInspector(props: {
   );
 }
 
+type EffectiveMode = "current-period" | "fiscal-year" | "custom";
+
 function PreviewPanel(props: {
   preview: PreviewResult;
   errorText: string | null;
   confirmWarnings: boolean;
   onApply: (effectiveFromISO: string) => Promise<void>;
   onCancel: () => void;
-  defaultEffectiveFromISO: string;
+  currentPeriodIso: string;
+  fiscalYearIso: string;
+  todayIso: string;
   applying: boolean;
 }) {
-  const [effectiveFrom, setEffectiveFrom] = useState<string>(props.defaultEffectiveFromISO);
+  // COA-MAP-1A (2026-10-06) — period-aware effective-date picker.
+  //
+  // Default = current reporting period start (the common case).
+  // When the current period start === fiscal year start (e.g.
+  // Coulee January), collapse the two radio options into one so the
+  // Controller doesn't see redundant choices.
+  const collapsePeriodAndFiscalYear = props.currentPeriodIso === props.fiscalYearIso;
+  const [mode, setMode] = useState<EffectiveMode>("current-period");
+  const [customIso, setCustomIso] = useState<string>(props.todayIso);
+  const effectiveFromIso =
+    mode === "current-period" ? props.currentPeriodIso
+    : mode === "fiscal-year" ? props.fiscalYearIso
+    : customIso;
+
+  const prettyDate = (iso: string) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+      year: "numeric", month: "long", day: "numeric", timeZone: "UTC",
+    });
+  };
+
+  // Historical-consequence note. Quiet, non-alarming.
+  const effectiveFromDate = new Date(effectiveFromIso);
+  const todayDate = new Date(props.todayIso);
+  const isHistorical = effectiveFromDate.getTime() < todayDate.getTime();
+  const historicalNote = isHistorical
+    ? `This change will update unpublished reporting from ${prettyDate(effectiveFromIso)} forward. ` +
+      `Published Board packages will not change.`
+    : null;
+
   return (
     <section className="card" data-testid="coa-mapping-preview">
       <div className="card-body space-y-3">
@@ -450,20 +498,76 @@ function PreviewPanel(props: {
             <li key={`delta-${r.key}`}>{r.deltaLabel}</li>
           ))}
         </ul>
-        <label className="block text-xs text-stone-600">
-          Effective from
-          <input
-            type="date"
-            data-testid="coa-mapping-preview-effective-from"
-            value={effectiveFrom}
-            onChange={(e) => setEffectiveFrom(e.target.value)}
-            className="mt-1 block w-full rounded border border-club-sand px-2 py-1"
-          />
-          <span className="mt-1 block text-[11px] text-stone-500">
-            Historical dates (before today) restate unpublished reporting. Published packages
-            remain immutable.
-          </span>
-        </label>
+
+        <fieldset className="rounded border border-club-sand p-3" data-testid="coa-mapping-preview-effective-fieldset">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-stone-500">
+            Apply this mapping from
+          </legend>
+          <label className="mt-1 flex items-start gap-2 text-xs">
+            <input
+              type="radio"
+              name="effective-mode"
+              checked={mode === "current-period"}
+              onChange={() => setMode("current-period")}
+              data-testid="coa-mapping-effective-current-period"
+            />
+            <span>
+              <strong>
+                {collapsePeriodAndFiscalYear
+                  ? "Current reporting period / fiscal year"
+                  : "Current reporting period"}
+              </strong>
+              <br />
+              <span className="text-stone-500">{prettyDate(props.currentPeriodIso)}</span>
+            </span>
+          </label>
+          {!collapsePeriodAndFiscalYear && (
+            <label className="mt-1 flex items-start gap-2 text-xs">
+              <input
+                type="radio"
+                name="effective-mode"
+                checked={mode === "fiscal-year"}
+                onChange={() => setMode("fiscal-year")}
+                data-testid="coa-mapping-effective-fiscal-year"
+              />
+              <span>
+                <strong>Beginning of fiscal year</strong>
+                <br />
+                <span className="text-stone-500">{prettyDate(props.fiscalYearIso)}</span>
+              </span>
+            </label>
+          )}
+          <label className="mt-1 flex items-start gap-2 text-xs">
+            <input
+              type="radio"
+              name="effective-mode"
+              checked={mode === "custom"}
+              onChange={() => setMode("custom")}
+              data-testid="coa-mapping-effective-custom"
+            />
+            <span className="flex-1">
+              <strong>Choose another date</strong>
+              <br />
+              <input
+                type="date"
+                data-testid="coa-mapping-preview-effective-from"
+                value={customIso}
+                onChange={(e) => { setMode("custom"); setCustomIso(e.target.value); }}
+                className="mt-1 block w-full rounded border border-club-sand px-2 py-1"
+              />
+            </span>
+          </label>
+        </fieldset>
+
+        {historicalNote && (
+          <div
+            className="rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700"
+            data-testid="coa-mapping-historical-note"
+          >
+            {historicalNote}
+          </div>
+        )}
+
         {props.errorText && (
           <div className="rounded border border-amber-400 bg-amber-50 p-2 text-xs text-amber-900">
             {props.errorText}
@@ -480,7 +584,7 @@ function PreviewPanel(props: {
             className="btn-primary"
             disabled={props.applying}
             data-testid="coa-mapping-preview-apply"
-            onClick={() => void props.onApply(effectiveFrom)}
+            onClick={() => void props.onApply(effectiveFromIso)}
           >
             {props.applying ? "Applying…" : props.confirmWarnings ? "Apply (confirm warning)" : "Apply"}
           </button>

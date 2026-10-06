@@ -21,6 +21,10 @@ export type AsOfGroupMetadata = {
   fsGroupKey: string;
   fsGroupName: string;
   statement: string;
+  // COA-MAP-1A (2026-10-06) — sortOrder exposed so canonical
+  // consumers (fs-group-projection) can preserve presentation
+  // ordering without a second DB round-trip.
+  sortOrder: number;
   reportingRole: string | null;
 };
 
@@ -59,6 +63,7 @@ export async function resolveFinancialStatementGroupAsOf(
           key: true,
           name: true,
           statement: true,
+          sortOrder: true,
           reportingRole: true,
         },
       },
@@ -70,6 +75,7 @@ export async function resolveFinancialStatementGroupAsOf(
     fsGroupKey: row.fsGroup.key,
     fsGroupName: row.fsGroup.name,
     statement: row.fsGroup.statement,
+    sortOrder: row.fsGroup.sortOrder,
     reportingRole: row.fsGroup.reportingRole,
   };
 }
@@ -111,6 +117,7 @@ export async function resolveFinancialStatementGroupAsOfBatch(
           key: true,
           name: true,
           statement: true,
+          sortOrder: true,
           reportingRole: true,
         },
       },
@@ -127,6 +134,7 @@ export async function resolveFinancialStatementGroupAsOfBatch(
       fsGroupKey: r.fsGroup.key,
       fsGroupName: r.fsGroup.name,
       statement: r.fsGroup.statement,
+      sortOrder: r.fsGroup.sortOrder,
       reportingRole: r.fsGroup.reportingRole,
     });
   }
