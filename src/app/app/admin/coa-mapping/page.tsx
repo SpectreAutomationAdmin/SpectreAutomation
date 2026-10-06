@@ -14,6 +14,7 @@ import { hasPermission } from "@/lib/rbac";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { prisma } from "@/lib/prisma";
 
+import { CoaModeSwitch } from "@/components/coa/CoaModeSwitch";
 import MappingWorkspaceClient from "./mapping-workspace-client";
 
 export const dynamic = "force-dynamic";
@@ -108,19 +109,22 @@ export default async function CoaMappingPage(props: {
   return (
     <div className="space-y-8">
       <header className="space-y-5" data-testid="coa-mapping-header">
-        <div className="space-y-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
-            Chart of Accounts
-          </p>
-          <h1 className="text-[26px] font-semibold leading-tight tracking-tight text-stone-900">
-            Financial Statement Mapping
-          </h1>
-          <p className="max-w-2xl text-sm leading-relaxed text-stone-600">
-            Organize how your accounts flow into financial reporting. Drag an
-            account between Financial Statement Groups, create a group for a
-            classification that doesn&apos;t exist, and see exactly what will
-            change before you apply.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500">
+              Chart of Accounts
+            </p>
+            <h1 className="text-[26px] font-semibold leading-tight tracking-tight text-stone-900">
+              Financial Statement Mapping
+            </h1>
+            <p className="max-w-2xl text-sm leading-relaxed text-stone-600">
+              Organize how your accounts flow into financial reporting. Drag an
+              account between Financial Statement Groups, create a group for a
+              classification that doesn&apos;t exist, and see exactly what will
+              change before you apply.
+            </p>
+          </div>
+          <CoaModeSwitch active="mapping" />
         </div>
 
         <dl

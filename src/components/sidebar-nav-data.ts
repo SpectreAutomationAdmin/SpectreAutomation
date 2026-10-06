@@ -91,6 +91,10 @@ export const ADMIN_SECTIONS: NavSection[] = [
       { href: "/app/admin/gl", label: "General Ledger", perm: "gl:read" },
       { href: "/app/admin/periods", label: "Periods", perm: "gl:read" },
       { href: "/app/admin/coa", label: "Chart of Accounts", perm: "coa:read" },
+      // COA-MAP-2A (2026-10-06) — Financial Statement Mapping is a
+      // view mode of the Chart of Accounts module; also surfaced here
+      // so Controllers can navigate to it directly.
+      { href: "/app/admin/coa-mapping", label: "Financial Statement Mapping", perm: "settings:write" },
       { href: "/app/admin/ops/budgets", label: "Budgets", perm: "budget:read" },
       { href: "/app/admin/opening-balances", label: "Opening balances", perm: "gl:post" },
       { href: "/app/admin/reports", label: "Reports", perm: ["reports:read", "reports:operating", "reports:financial"] },

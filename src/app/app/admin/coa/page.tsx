@@ -5,6 +5,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { InfoTip } from "@/components/InfoTip";
+import { CoaModeSwitch } from "@/components/coa/CoaModeSwitch";
 import { checkAccountDeletionSafety } from "@/lib/accounting/coa";
 import { accountBalances } from "@/lib/accounting/balance";
 import {
@@ -373,6 +374,7 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
             </div>
           </div>
           <div className="spectre-dw-header-actions">
+            <CoaModeSwitch active="list" />
             <Link
               href={`/app/admin/coa?${showInactive ? "" : "showInactive=1&"}${fundMode ? "mode=fund" : ""}`.replace(/[?&]$/, "")}
               className="spectre-dw-btn tertiary"

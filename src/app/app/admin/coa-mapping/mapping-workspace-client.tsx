@@ -184,38 +184,75 @@ export default function MappingWorkspaceClient(props: Props) {
   }
 
   // -------- drag + edge-triggered auto-scroll ---------------------
+  //
+  // COA-MAP-2A (2026-10-06) — repair.  The previous implementation
+  // only triggered auto-scroll from `handleDragOverGroup`, which
+  // fires only when the pointer is *over* a group row.  Once a user
+  // held the pointer against the bottom edge of the viewport over
+  // dead space (section borders, inspector aside, below the last
+  // row), dragover stopped firing and the scroll loop stopped.
+  //
+  // The fix: a GLOBAL `window.dragover` listener mounted for the
+  // lifetime of the drag.  It reads `clientY` against `innerHeight`
+  // on every pointer tick regardless of which element is under the
+  // pointer.  Edge velocity ramps linearly from 6 px/frame near
+  // the 100 px threshold to 24 px/frame at the exact edge.
+  //
+  // Scroll owner on the Mapping Studio is `document.scrollingElement`
+  // (the page is a plain Spectre workspace, not the locked
+  // `.spectre-dw-table-wrap` the Chart of Accounts list uses).  We
+  // defensively ALSO scroll any `.spectre-dw-table-wrap` ancestor
+  // if present, so this logic is portable if the module ever gets
+  // nested inside the data-workspace shell.
   const scrollRafRef = useRef<number | null>(null);
-  const scrollDirRef = useRef<number>(0);
+  const scrollVelRef = useRef<number>(0);
 
   const stopAutoScroll = useCallback(() => {
     if (scrollRafRef.current != null) {
       cancelAnimationFrame(scrollRafRef.current);
       scrollRafRef.current = null;
     }
-    scrollDirRef.current = 0;
+    scrollVelRef.current = 0;
   }, []);
 
   const stepAutoScroll = useCallback(() => {
-    const dir = scrollDirRef.current;
-    if (dir === 0) {
+    const dy = scrollVelRef.current;
+    if (dy === 0) {
       scrollRafRef.current = null;
       return;
     }
-    window.scrollBy({ top: dir * 18, left: 0, behavior: "auto" });
+    // Primary scroll owner.
+    const el = (document.scrollingElement ?? document.documentElement) as HTMLElement;
+    const before = el.scrollTop;
+    el.scrollTop = before + dy;
+    // Defensive fallback: also scroll any `.spectre-dw-table-wrap`
+    // ancestor if the Mapping Studio ever renders nested inside the
+    // data-workspace shell.
+    const tableWrap = document.querySelector(".spectre-dw-table-wrap") as HTMLElement | null;
+    if (tableWrap && tableWrap.scrollHeight > tableWrap.clientHeight) {
+      tableWrap.scrollTop += dy;
+    }
     scrollRafRef.current = requestAnimationFrame(stepAutoScroll);
   }, []);
 
   const updateAutoScroll = useCallback(
     (clientY: number) => {
       const vh = window.innerHeight;
-      const edge = 80;
-      let dir = 0;
-      if (clientY < edge) dir = -1;
-      else if (clientY > vh - edge) dir = 1;
-      scrollDirRef.current = dir;
-      if (dir !== 0 && scrollRafRef.current == null) {
+      const edge = 100; // generous zone (directive: 70-100 px)
+      const maxV = 24;  // px/frame at the exact edge
+      const minV = 6;   // px/frame at the zone boundary
+      let v = 0;
+      if (clientY < edge) {
+        const t = Math.max(0, Math.min(1, 1 - clientY / edge));
+        v = -Math.round(minV + t * (maxV - minV));
+      } else if (clientY > vh - edge) {
+        const t = Math.max(0, Math.min(1, (clientY - (vh - edge)) / edge));
+        v = Math.round(minV + t * (maxV - minV));
+      }
+      scrollVelRef.current = v;
+      if (v !== 0 && scrollRafRef.current == null) {
         scrollRafRef.current = requestAnimationFrame(stepAutoScroll);
-      } else if (dir === 0) {
+      } else if (v === 0) {
         stopAutoScroll();
       }
     },
@@ -235,6 +272,8 @@ export default function MappingWorkspaceClient(props: Props) {
   function handleDragOverGroup(e: React.DragEvent, groupId: string) {
     e.preventDefault();
     setHoverGroupId(groupId);
+    // Local update kept for responsiveness; the global window listener
+    // is the authoritative driver (fires over dead space too).
     updateAutoScroll(e.clientY);
   }
   function handleDragLeaveGroup(groupId: string) {
@@ -249,6 +288,31 @@ export default function MappingWorkspaceClient(props: Props) {
     setSelected(dragging);
     await requestPreview(dragging.id, groupId);
   }
+
+  // COA-MAP-2A: GLOBAL dragover listener while dragging.  This is
+  // the authoritative edge-detector; it fires on EVERY pointer tick
+  // during drag, regardless of which element is under the pointer.
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const onDragOver = (e: DragEvent) => {
+      // Allow drop (default-prevent) so dragover keeps firing in
+      // some browsers; this is also what makes window the active
+      // drop surface at the OS level.
+      e.preventDefault();
+      updateAutoScroll(e.clientY);
+    };
+    const onDragEnd = () => stopAutoScroll();
+    const onDrop = () => stopAutoScroll();
+    window.addEventListener("dragover", onDragOver, { passive: false });
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDrop);
+      stopAutoScroll();
+    };
+  }, [dragging, updateAutoScroll, stopAutoScroll]);
 
   useEffect(() => () => stopAutoScroll(), [stopAutoScroll]);
 
