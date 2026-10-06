@@ -117,6 +117,11 @@ runAt("FB-LIVE-1 · Section XIII live F&B financials (no demo leakage)", async (
   const golfAfter = await countCommittedGolf(page);
   expect(golfAfter).toBe(golfBefore);
 
-  await page.screenshot({ path: "test-results/fb-live-1-section-xiii.png", fullPage: true });
+  // Capture a viewport-only screenshot (not fullPage — a full-page
+  // capture on this chapter can trigger the Playwright `End of
+  // central directory record` trace-zip teardown flake when the DOM
+  // is tall. The assertions above are the real acceptance proof;
+  // this screenshot is reference material.
+  await page.screenshot({ path: "test-results/fb-live-1-section-xiii.png" }).catch(() => undefined);
   await ctx.close();
 });
