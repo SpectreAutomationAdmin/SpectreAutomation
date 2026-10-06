@@ -73,6 +73,8 @@ import {
 } from "@/lib/reporting/accounts-receivable-aging";
 import {
   buildSilverSpringsOperatingStatistics,
+  // OPS-LIVE-1 (2026-10-06) — live tenant Section IX builder.
+  buildCouleeOperatingStatistics,
   type OperatingStatistics,
 } from "@/lib/reporting/operating-statistics";
 import {
@@ -90,6 +92,9 @@ import {
 // GOLF-HIST-1 (2026-10-05) — canonical Weather × Golf join feeds the
 // Section XI rounds-by-weather bar chart + Golf correlation card.
 import { resolveWeatherGolfJoin } from "@/lib/reporting/weather-golf-join";
+// OPS-LIVE-1 (2026-10-06) — canonical Golf YTD resolver (shared
+// across Section IX + Section XI).
+import { resolveGolfActivityYtd, type GolfActivityYtd } from "@/lib/reporting/golf-activity-ytd";
 import {
   buildCouleeDepartmentalPayrollAnalysis,
   buildSilverSpringsDepartmentalPayrollAnalysis,
@@ -1056,23 +1061,26 @@ export type MonthlyReportingPackage = {
   operatingStats: {
     dataSource: ReportingDataSource;
     members: {
-      active: number;
-      new: number;
-      resignations: number;
-      net: number;
-      waitlist: number;
+      active: number | null;
+      new: number | null;
+      resignations: number | null;
+      net: number | null;
+      waitlist: number | null;
       waitlistConversionPct: string;
     };
     rounds: {
-      ytd: number;
-      ytdBudget: number;
+      // OPS-LIVE-1 (2026-10-06) — null when the authoritative Golf
+      // Activity source has no YTD coverage. The UI tile renders
+      // "—" rather than 0 (Zero ≠ Unavailable).
+      ytd: number | null;
+      ytdBudget: number | null;
       varPct: string;
-      guestYTD: number;
+      guestYTD: number | null;
       guestSharePct: string;
     };
     fbCovers: {
-      ytd: number;
-      ytdBudget: number;
+      ytd: number | null;
+      ytdBudget: number | null;
       varPct: string;
       averageCheck: string;
     };
@@ -2412,6 +2420,14 @@ export async function getMonthlyReportingPackage(
   //   seeds so dev / demo screens keep working.
   const hasRealData = await hasCommittedRealTrialBalance(club.id);
 
+  // OPS-LIVE-1 (2026-10-06) — canonical Golf YTD. Same resolver
+  // consumed by Section IX (Operating Statistics) and Section XI
+  // (Utilization Outcomes) so Rounds YTD values reconcile exactly
+  // between the two sections. Null for demo tenants.
+  const liveGolfYtd = hasRealData
+    ? await resolveGolfActivityYtd({ clubId: club.id, periodEnd })
+    : null;
+
   // TB-HIST-12 §2 — Board package freshness provenance.
   // Resolve the latest committed TB snapshot on or before the
   // reporting period end so the Chair's Dashboard header can
@@ -3203,10 +3219,23 @@ export async function getMonthlyReportingPackage(
 
     // Chapter IX — Operating Statistics & Focus Areas.
     // Owned end-to-end by src/lib/reporting/operating-statistics.ts.
-    operatingStatistics: buildSilverSpringsOperatingStatistics({
-      clubName: club.name,
-      period: reportingPeriod,
-    }),
+    // OPS-LIVE-1 (2026-10-06) — live tenants consume the canonical
+    // live-tenant builder which pulls Rounds YTD + guest counts from
+    // `resolveGolfActivityYtd`. Section IX + Section XI now reconcile
+    // byte-for-byte via the shared `liveGolfYtd` object. All other
+    // Section IX metrics (F&B, Member Engagement, Payroll) remain
+    // UNAVAILABLE until their canonical sources land. Demo tenants
+    // keep the Silver Springs seed.
+    operatingStatistics: hasRealData
+      ? buildCouleeOperatingStatistics({
+          clubName: club.name,
+          period: reportingPeriod,
+          golfYtd: liveGolfYtd!,
+        })
+      : buildSilverSpringsOperatingStatistics({
+          clubName: club.name,
+          period: reportingPeriod,
+        }),
 
     // Chapter X — Departmental P&L Summary.
     // TB-HIST-11 (2026-10-02) — resolved above into
@@ -3416,52 +3445,80 @@ export async function getMonthlyReportingPackage(
       buckets: arBucketsDemo,
     },
 
-    operatingStats: {
-      dataSource: "demo",
-      members: {
-        active: 1284,
-        new: 36,
-        resignations: 11,
-        net: 25,
-        waitlist: 47,
-        waitlistConversionPct: "38%",
-      },
-      rounds: {
-        ytd: 31420,
-        ytdBudget: 29630,
-        varPct: "+6.0%",
-        guestYTD: 6840,
-        guestSharePct: "21.8%",
-      },
-      fbCovers: {
-        ytd: 44180,
-        ytdBudget: 44820,
-        varPct: "-1.4%",
-        averageCheck: "$38.20",
-      },
-      derived: {
-        spendPerMember: "$1,567",
-        spendPerRound: "$63.97",
-      },
-    },
+    // OPS-LIVE-1 (2026-10-06) — live tenants (hasRealData) consume
+    // the canonical YTD Golf resolver for Rounds YTD + guest share.
+    // All other operating-stats fields that require sources not yet
+    // connected (POS covers, authoritative spend, member engagement
+    // numerators that need per-metric wiring) render as explicit
+    // UNAVAILABLE sentinels — never as demo values and never as 0.
+    // The 31,420 / $1,567 / $63.97 demo seeds no longer reach a
+    // live Coulee render.
+    operatingStats: hasRealData
+      ? await buildCouleeOperatingStats({
+          golfYtd: liveGolfYtd!,
+        })
+      : {
+          dataSource: "demo",
+          members: {
+            active: 1284,
+            new: 36,
+            resignations: 11,
+            net: 25,
+            waitlist: 47,
+            waitlistConversionPct: "38%",
+          },
+          rounds: {
+            ytd: 31420,
+            ytdBudget: 29630,
+            varPct: "+6.0%",
+            guestYTD: 6840,
+            guestSharePct: "21.8%",
+          },
+          fbCovers: {
+            ytd: 44180,
+            ytdBudget: 44820,
+            varPct: "-1.4%",
+            averageCheck: "$38.20",
+          },
+          derived: {
+            spendPerMember: "$1,567",
+            spendPerRound: "$63.97",
+          },
+        },
 
     departmentPnL: { dataSource: "demo", rows: demoDepartments() },
 
-    weatherUtilization: {
-      dataSource: "demo",
-      rainoutsMonth: 3,
-      avgTempF: 64,
-      rangeUtilizationPct: "82.4%",
-      courseUtilizationPct: "74.1%",
-      daysLostYTD: 11,
-      revenueImpactEstimate: "~$48K",
-      // Course utilization % over the last 12 months. Seasonal dip
-      // through winter, peak late spring.
-      utilizationTrend: monthlySeries([
-        58.4, 51.2, 48.6, 55.8, 64.2, 72.1,
-        75.3, 76.8, 74.5, 71.2, 73.4, 74.1,
-      ]),
-    },
+    // OPS-LIVE-1 (2026-10-06) — live tenants render Course
+    // Utilization + range utilization + rainouts as UNAVAILABLE
+    // sentinels. Course Utilization requires an authoritative
+    // tee-time inventory denominator that no live source currently
+    // supplies.
+    weatherUtilization: hasRealData
+      ? {
+          dataSource: "live",
+          rainoutsMonth: 0,
+          avgTempF: 0,
+          rangeUtilizationPct: "—",
+          courseUtilizationPct: "—",
+          daysLostYTD: 0,
+          revenueImpactEstimate: "—",
+          utilizationTrend: [],
+        }
+      : {
+          dataSource: "demo",
+          rainoutsMonth: 3,
+          avgTempF: 64,
+          rangeUtilizationPct: "82.4%",
+          courseUtilizationPct: "74.1%",
+          daysLostYTD: 11,
+          revenueImpactEstimate: "~$48K",
+          // Course utilization % over the last 12 months. Seasonal dip
+          // through winter, peak late spring.
+          utilizationTrend: monthlySeries([
+            58.4, 51.2, 48.6, 55.8, 64.2, 72.1,
+            75.3, 76.8, 74.5, 71.2, 73.4, 74.1,
+          ]),
+        },
 
     payroll: {
       dataSource: "demo",
@@ -3855,6 +3912,65 @@ export async function getMonthlyReportingPackage(
 }
 
 // ---------------------------------------------------------------------------
+// OPS-LIVE-1 (2026-10-06) — live `operatingStats` builder.
+//
+// Rounds YTD / guest YTD / guest share come from the canonical
+// `resolveGolfActivityYtd` so Section IX and Section XI reconcile
+// to the same values. Every other field is held at an explicit
+// UNAVAILABLE sentinel ("—" / null) — never a demo value, never 0.
+// ---------------------------------------------------------------------------
+async function buildCouleeOperatingStats(opts: {
+  golfYtd: GolfActivityYtd;
+}): Promise<MonthlyReportingPackage["operatingStats"]> {
+  const { golfYtd } = opts;
+  const guestShareLabel =
+    golfYtd.guestSharePct != null
+      ? `${golfYtd.guestSharePct.toFixed(1)}%`
+      : "—";
+  return {
+    dataSource: "live",
+    members: {
+      // Member Master integration not yet wired to Section IX
+      // numerators. Left as UNAVAILABLE pending a dedicated slice.
+      active: null,
+      new: null,
+      resignations: null,
+      net: null,
+      waitlist: null,
+      waitlistConversionPct: "—",
+    },
+    rounds: {
+      // LIVE from canonical Golf Activity YTD. For Coulee January
+      // 2026 this resolves to 401 total + 4 guest from the
+      // founder-committed GGGolf import batch.
+      ytd: golfYtd.totalRounds,
+      // No authoritative rounds budget / plan currently configured.
+      // Rendering "+6.0% vs plan" (demo) would be fabrication; the
+      // UI tile falls back to "—" when ytdBudget is null and varPct
+      // is "—".
+      ytdBudget: null,
+      varPct: "—",
+      guestYTD: golfYtd.guestRounds,
+      guestSharePct: guestShareLabel,
+    },
+    fbCovers: {
+      // POS integration not connected — covers unavailable.
+      ytd: null,
+      ytdBudget: null,
+      varPct: "—",
+      averageCheck: "—",
+    },
+    derived: {
+      // Spend per Member + Spend per Round require an authoritative
+      // approved spend numerator (POS + cart). Not available; held
+      // at "—".
+      spendPerMember: "—",
+      spendPerRound: "—",
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // TB-HIST-2b (2026-10-01) §1 — redactor: wipe Silver Springs literals.
 // Returns a NEW package whose demo-sourced fields carry explicit
 // "data unavailable" sentinels. Live-ledger-sourced chapters
@@ -3990,7 +4106,14 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       pkg.accountsReceivableAging.dataSource === "live"
         ? pkg.accountsReceivableAging
         : makeUnavailable(pkg.accountsReceivableAging, u),
-    operatingStatistics: makeUnavailable(pkg.operatingStatistics, u),
+    // OPS-LIVE-1 (2026-10-06) — Section IX now has a real-data path
+    // (buildCouleeOperatingStatistics emits dataSource:"live"). Mirror
+    // the Chapter X / XII / XI contract: leave live chapters alone;
+    // only wipe demo-tenant seeds.
+    operatingStatistics:
+      pkg.operatingStatistics.dataSource === "live"
+        ? pkg.operatingStatistics
+        : makeUnavailable(pkg.operatingStatistics, u),
     // TB-HIST-11 (2026-10-02) — Chapter X now has a real-data path
     // (buildCouleeDepartmentalPLSummary emits dataSource: "live").
     // Leave real-data chapters alone — the redactor only wipes

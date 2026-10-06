@@ -518,3 +518,144 @@ export function buildSilverSpringsOperatingStatistics(opts: {
     focusCards,
   };
 }
+
+// =============================================================================
+// OPS-LIVE-1 (2026-10-06) — live tenant Operating Statistics (Coulee).
+// =============================================================================
+//
+// Approved Section IX design preserved exactly — same bands, same
+// row set, same column headers, same focus-card shape. Values flow
+// from canonical shared resolvers for every metric where an
+// authoritative live source exists:
+//
+//   Total Rounds — All Categories   LIVE   (resolveGolfActivityYtd)
+//   Member Rounds — 18 Hole         UNAVAIL (GGGolf export has no
+//                                            18 / 9 split)
+//   Member Rounds — 9 Hole          UNAVAIL (same)
+//   Guest Rounds                    LIVE   (resolveGolfActivityYtd)
+//   Golf Merch Revenue/Round        UNAVAIL (POS / merch not connected)
+//   Food & Beverage band — all      UNAVAIL (POS not connected)
+//   Member Engagement band — all    UNAVAIL (per-metric wiring TBD)
+//   Payroll & Labor band — all      UNAVAIL (per-metric wiring TBD)
+//
+// Every metric WHICH ALSO APPEARS in Section XI (Rounds YTD + guest
+// count) consumes the SAME `GolfActivityYtd` object so the two
+// sections reconcile to the same values byte-for-byte.
+
+import type { GolfActivityYtd } from "@/lib/reporting/golf-activity-ytd";
+
+export function buildCouleeOperatingStatistics(opts: {
+  clubName: string;
+  period: ReportingPeriod;
+  golfYtd: GolfActivityYtd;
+}): OperatingStatistics {
+  const currentActualHeader   = `${opts.period.monthLong} ${opts.period.year} Actual`;
+  const priorYearActualHeader = `${opts.period.monthLong} ${opts.period.year - 1} Actual`;
+
+  const totalRounds = opts.golfYtd.totalRounds;
+  const guestRounds = opts.golfYtd.guestRounds;
+
+  const rows: ReadonlyArray<OperatingStatRow> = [
+    { key: "band-golf-operations", kind: "section-band", label: "Golf Operations" },
+    buildLiveStatRow({ key: "total-rounds-all",         label: "Total Rounds — All Categories",   current: totalRounds, format: "integer",         favorDirection: "higher" }),
+    buildLiveStatRow({ key: "member-rounds-18",         label: "Member Rounds — 18 Hole",         current: null,        format: "integer",         favorDirection: "higher" }),
+    buildLiveStatRow({ key: "member-rounds-9",          label: "Member Rounds — 9 Hole",          current: null,        format: "integer",         favorDirection: "higher" }),
+    buildLiveStatRow({ key: "guest-rounds",             label: "Guest Rounds",                     current: guestRounds, format: "integer",         favorDirection: "higher" }),
+    buildLiveStatRow({ key: "merch-revenue-per-round",  label: "Golf Merchandise — Revenue/Round", current: null,        format: "currency-cents",  favorDirection: "higher" }),
+
+    { key: "band-food-beverage", kind: "section-band", label: "Food & Beverage" },
+    buildLiveStatRow({ key: "total-covers",     label: "Total Covers",             current: null, format: "integer",        favorDirection: "higher" }),
+    buildLiveStatRow({ key: "avg-check-food",   label: "Average Check — Food",     current: null, format: "currency-cents", favorDirection: "higher" }),
+    buildLiveStatRow({ key: "avg-check-bev",    label: "Average Check — Beverage", current: null, format: "currency-cents", favorDirection: "higher" }),
+    buildLiveStatRow({ key: "banquet-covers",   label: "Banquet Covers",           current: null, format: "integer",        favorDirection: "higher" }),
+
+    { key: "band-member-engagement", kind: "section-band", label: "Member Engagement" },
+    buildLiveStatRow({ key: "active-member-count", label: "Active Member Count",   current: null, format: "integer",   favorDirection: "higher" }),
+    buildLiveStatRow({ key: "avg-visits",          label: "Avg Visits per Member", current: null, format: "decimal-1", favorDirection: "higher" }),
+    buildLiveStatRow({ key: "member-sat",          label: "Member Satisfaction",   current: null, format: "decimal-1", favorDirection: "higher" }),
+    buildLiveStatRow({ key: "new-memberships-ytd", label: "New Memberships — YTD", current: null, format: "integer",   favorDirection: "higher" }),
+    buildLiveStatRow({ key: "resignations-ytd",    label: "Resignations — YTD",    current: null, format: "integer",   favorDirection: "lower"  }),
+
+    { key: "band-payroll-labor", kind: "section-band", label: "Payroll & Labor" },
+    buildLiveStatRow({ key: "total-ftes",          label: "Total FTEs — All Departments", current: null, format: "decimal-1", favorDirection: "lower" }),
+    buildLiveStatRow({ key: "payroll-pct-revenue", label: "Payroll as % of Revenue",      current: null, format: "percent-1", favorDirection: "lower" }),
+    buildLiveStatRow({ key: "staff-turnover-ytd",  label: "Staff Turnover Rate — YTD",    current: null, format: "percent-1", favorDirection: "lower" }),
+  ];
+
+  const golfBody = totalRounds != null
+    ? `Live Golf Activity through ${opts.period.periodLabel}: ${totalRounds} rounds across ${opts.golfYtd.coverageDaysPresent} day(s) of authoritative source coverage. ` +
+      `F&B covers, member engagement, and payroll utilization remain unavailable until POS, Member Master, and Payroll integrations populate Section IX.`
+    : `Golf Activity source not connected for ${opts.period.periodLabel}. Operating Statistics will activate as authoritative sources land.`;
+
+  const focusCards: ReadonlyArray<FocusAreaCard> = [
+    {
+      key: "operating-focus",
+      eyebrow: "Operating Focus",
+      title: `Current / Next Operating Period (${opts.period.periodLabel} → ${opts.period.nextYearQuarterLabel})`,
+      accent: "rust",
+      paragraphs: [
+        { leadIn: "Golf Activity.", body: golfBody },
+      ],
+    },
+    {
+      key: "capital-focus",
+      eyebrow: "Capital Focus",
+      title: "Capital Projects & Reserve",
+      accent: "slate",
+      paragraphs: [
+        { leadIn: "Capital narrative unavailable.", body: "Capital Projects tracker not yet connected." },
+      ],
+    },
+  ];
+
+  return {
+    dataSource: "live",
+    eyebrow: `${opts.clubName} · Operations`,
+    title: "Operating Statistics & Focus Areas",
+    periodLabel: opts.period.statementHeaderLabel,
+    introNote:
+      "Member utilization, engagement metrics, and the focus areas driving operational priorities.",
+    statementNumber: "Statement 07 of 14",
+    documentChip: "Operations",
+    preparedFor: "GM & Management Level",
+    columnHeaders: {
+      statistic: "Operating Statistic",
+      currentActual: currentActualHeader,
+      priorYearActual: priorYearActualHeader,
+      change: "Change",
+      budget: "Budget",
+      vsBudget: "Vs. Budget",
+    },
+    rows,
+    focusCards,
+  };
+}
+
+type LiveStatRowInputs = {
+  key: string;
+  label: string;
+  current: number | null;
+  format: OperatingStatFormat;
+  favorDirection: "higher" | "lower" | "neutral";
+};
+
+function buildLiveStatRow(inputs: LiveStatRowInputs): OperatingStatRow {
+  return {
+    key: inputs.key,
+    kind: "stat",
+    label: inputs.label,
+    format: inputs.format,
+    favorDirection: inputs.favorDirection,
+    values: {
+      currentActualLabel: inputs.current != null ? formatValue(inputs.current, inputs.format) : "—",
+      priorYearActualLabel: "—",
+      changeLabel: "—",
+      budgetLabel: "—",
+      vsBudgetLabel: "—",
+    },
+    tones: {
+      change: "neutral",
+      vsBudget: "neutral",
+    },
+  };
+}

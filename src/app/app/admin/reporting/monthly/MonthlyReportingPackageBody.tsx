@@ -7117,25 +7117,39 @@ function MonthlyWeatherSummaryPanel({
           <OperatingHeadlineTile
             testId="weather-rounds-ytd"
             label="Rounds YTD"
-            value={stats.rounds.ytd.toLocaleString()}
+            value={stats.rounds.ytd != null ? stats.rounds.ytd.toLocaleString() : "—"}
             context="Total course rounds played YTD (member + guest)."
-            sub={`${stats.rounds.varPct} vs plan · ${stats.rounds.guestSharePct} guest share`}
-            tone="green"
+            sub={
+              stats.rounds.ytd != null
+                ? (stats.rounds.varPct === "—"
+                    ? `${stats.rounds.guestSharePct} guest share`
+                    : `${stats.rounds.varPct} vs plan · ${stats.rounds.guestSharePct} guest share`)
+                : "Golf Activity source not connected"
+            }
+            tone={stats.rounds.ytd != null ? "green" : "neutral"}
           />
           <OperatingHeadlineTile
             testId="weather-course-utilization"
             label="Course utilization"
             value={wx.courseUtilizationPct}
             context="Share of tee-time inventory used during open hours YTD."
-            sub="70% Pillar 5 target · 4.1pp above"
-            tone="green"
+            sub={
+              wx.courseUtilizationPct === "—"
+                ? "Tee-time inventory source not connected"
+                : "70% Pillar 5 target · 4.1pp above"
+            }
+            tone={wx.courseUtilizationPct === "—" ? "neutral" : "green"}
           />
           <OperatingHeadlineTile
             testId="weather-spend-per-member"
             label="Spend per member"
             value={stats.derived.spendPerMember}
             context="Annualized F&B + cart spend per active member."
-            sub="franchise engagement read"
+            sub={
+              stats.derived.spendPerMember === "—"
+                ? "Member spend source not connected"
+                : "franchise engagement read"
+            }
             tone="neutral"
           />
           <OperatingHeadlineTile
@@ -7143,7 +7157,11 @@ function MonthlyWeatherSummaryPanel({
             label="Spend per round"
             value={stats.derived.spendPerRound}
             context="F&B + cart spend captured per round played."
-            sub="ancillary revenue per round"
+            sub={
+              stats.derived.spendPerRound === "—"
+                ? "Round spend source not connected"
+                : "ancillary revenue per round"
+            }
             tone="neutral"
           />
         </div>
