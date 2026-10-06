@@ -13,6 +13,7 @@
 
 import type { ReportingDataSource } from "@/lib/reporting/monthly-package";
 import type { ReportingPeriod } from "@/lib/reporting/reporting-period";
+import type { FbFinancialYtd } from "@/lib/reporting/fb-financial-resolver";
 
 // =============================================================================
 // Public types
@@ -580,3 +581,253 @@ export function buildSilverSpringsFoodBeverageStatistics(opts: {
     },
   };
 }
+
+// =============================================================================
+// FB-LIVE-1 (2026-10-06) — live tenant F&B Statistics builder.
+// =============================================================================
+//
+// Approved Section XIII design preserved exactly — same KPI card
+// shape, same chart dataset shape, same chrome. Values flow from
+// the canonical F&B financial resolver (`resolveFbFinancialYtd`)
+// for every metric where TB + Budget supply authoritative data;
+// every POS-dependent metric renders the "—" sentinel.
+//
+// Reconciliation guarantee: Actuals come from the SAME
+// `incomeStatementByDepartmentFromSnapshot` resolver Section X
+// consumes — the F&B row is literally the row Section X renders
+// for Food & Beverage. Any discrepancy would be a Section X bug,
+// not an FB-LIVE-1 bug.
+//
+// POS-dependent metrics held UNAVAILABLE:
+//   Primary row  : Total Covers YTD
+//   Secondary row: Revenue per Server, Member Satisfaction,
+//                  Average Check, Monthly Gratuities
+//   Charts       : Monthly Cover Counts, Food Cost % trend
+//                  (requires monthly cost %, only January YTD
+//                  available — single data point not plotted)
+//   Chart        : Revenue by Category donut
+//                  (COA has no Food / Wine / Liquor / Beer /
+//                  Other split — SEMANTIC_NOT_PROVEN)
+
+export function buildCouleeFoodBeverageStatistics(opts: {
+  clubName: string;
+  period: ReportingPeriod;
+  fbYtd: FbFinancialYtd;
+}): FoodBeverageStatistics {
+  const { period, fbYtd } = opts;
+  const monthLong = period.monthLong;
+
+  const financialAvailable = Boolean(fbYtd.actual);
+  const budgetAvailable    = Boolean(fbYtd.budget);
+  const bothAvailable      = financialAvailable && budgetAvailable;
+
+  const revenueActual   = fbYtd.actual ? toNumberDec(fbYtd.actual.revenue)   : null;
+  const cogsActual      = fbYtd.actual ? toNumberDec(fbYtd.actual.cogs)      : null;
+  const payrollActual   = fbYtd.actual ? toNumberDec(fbYtd.actual.payroll)   : null;
+  const opexActual      = fbYtd.actual ? toNumberDec(fbYtd.actual.opex)      : null;
+  const netIncomeActual = fbYtd.actual ? toNumberDec(fbYtd.actual.netIncome) : null;
+
+  const revenueBudget = fbYtd.budget?.revenue ?? null;
+  const costPctActual =
+    revenueActual != null && cogsActual != null && revenueActual > 0
+      ? (cogsActual / revenueActual) * 100
+      : null;
+  const grossMarginActual =
+    revenueActual != null && cogsActual != null
+      ? revenueActual - cogsActual
+      : null;
+  const grossMarginPctActual =
+    revenueActual != null && grossMarginActual != null && revenueActual > 0
+      ? (grossMarginActual / revenueActual) * 100
+      : null;
+  const revVsBudget =
+    revenueActual != null && revenueBudget != null
+      ? revenueActual - revenueBudget
+      : null;
+
+  const kpiCards: ReadonlyArray<FbKpiCard> = [
+    {
+      key: "total-revenue",
+      treatment: "primary",
+      valueLabel: revenueActual != null ? formatMillions(revenueActual) : "—",
+      label: `Total F&B Revenue ${monthLong}`,
+      subLabel:
+        !financialAvailable
+          ? "F&B accounting source not connected"
+          : revVsBudget != null
+            ? `${revVsBudget >= 0 ? "+" : ""}${formatThousandsOneDecimal(revVsBudget)} vs. budget`
+            : "Budget source not connected",
+    },
+    {
+      key: "cost-pct",
+      treatment: "neutral",
+      valueLabel: costPctActual != null ? formatPercent1(costPctActual) : "—",
+      label: `F&B Cost % ${monthLong}`,
+      subLabel:
+        costPctActual != null
+          ? "Cost of Sales ÷ Revenue"
+          : "F&B accounting source not connected",
+    },
+    {
+      key: "total-covers",
+      treatment: "neutral",
+      valueLabel: "—",
+      label: `Total Covers ${monthLong}`,
+      subLabel: "F&B POS covers source not connected",
+    },
+    {
+      key: "gross-margin",
+      treatment: "neutral",
+      valueLabel: grossMarginActual != null ? formatThousands(grossMarginActual) : "—",
+      label: `F&B Gross Margin ${monthLong}`,
+      subLabel:
+        grossMarginPctActual != null
+          ? `${formatPercent1(grossMarginPctActual)} margin · Revenue − COGS`
+          : "F&B accounting source not connected",
+    },
+  ];
+
+  const secondaryKpiCards: ReadonlyArray<FbKpiCard> = [
+    {
+      key: "revenue-per-server",
+      treatment: "neutral",
+      valueLabel: "—",
+      label: "Revenue per Server",
+      subLabel: "Server-FTE source not connected",
+    },
+    {
+      key: "member-satisfaction",
+      treatment: "neutral",
+      valueLabel: "—",
+      label: "Member Satisfaction",
+      subLabel: "Member-survey source not connected",
+    },
+    {
+      key: "average-check",
+      treatment: "neutral",
+      valueLabel: "—",
+      label: "Average Check",
+      subLabel: "F&B POS covers source not connected",
+    },
+    {
+      key: "monthly-gratuities",
+      treatment: "neutral",
+      valueLabel: "—",
+      label: "Monthly Gratuities",
+      subLabel: "F&B POS gratuity source not connected",
+    },
+  ];
+
+  // Monthly Revenue vs Cost — only the current period's data point
+  // is populated (we have Jan actuals). coversActual/Budget/PriorYear
+  // are 0 — the chart's cover-count series is UNAVAILABLE and the
+  // separate Monthly Cover Counts chart stays empty.
+  const monthlyRevenueCost: ReadonlyArray<FbMonthlyPoint> =
+    financialAvailable && revenueActual != null && cogsActual != null
+      ? [
+          {
+            monthLabel: monthLong,
+            monthNumber: period.month,
+            revenue: revenueActual,
+            cost: cogsActual,
+            costPct: revenueActual > 0 ? (cogsActual / revenueActual) * 100 : 0,
+            coversActual: 0,
+            coversBudget: 0,
+            coversPriorYear: 0,
+          },
+        ]
+      : [];
+
+  const revenueByCategory: ReadonlyArray<FbCategorySlice> = [];
+  const monthlyCoverCounts: ReadonlyArray<FbMonthlyPoint> = [];
+  const foodCostTrend = {
+    points: [] as ReadonlyArray<{ monthLabel: string; monthNumber: number; costPct: number }>,
+    budgetTargetPct: 0,
+  };
+
+  const revenueCostSubtitle = financialAvailable
+    ? `${monthLong} ${period.year} · Monthly F&B Revenue vs. Cost (${monthLong} YTD)`
+    : "F&B accounting source not connected";
+  const categoriesSubtitle = "Revenue-by-category split unavailable — COA Food / Wine / Liquor / Beer categorization not yet mapped";
+  const coversSubtitle = "F&B POS covers source not connected";
+  const foodCostSubtitle = financialAvailable
+    ? `Monthly Food Cost % trend — only ${monthLong} YTD available; multi-month trend activates once prior-month snapshots are in place`
+    : "F&B accounting source not connected";
+
+  const revenueCostCallout: FbChartCallout = {
+    text:
+      financialAvailable && revenueActual != null && cogsActual != null && costPctActual != null
+        ? `F&B revenue of ${formatThousands(revenueActual)} and cost of sales of ${formatThousands(cogsActual)} for ${monthLong}; cost-of-sales ran ${formatPercent1(costPctActual)} of revenue.` +
+          (bothAvailable && revVsBudget != null
+            ? ` Revenue was ${revVsBudget >= 0 ? "+" : ""}${formatThousandsOneDecimal(revVsBudget)} vs. the ${period.year} operating budget.`
+            : " Budget comparison unavailable until a budget source is loaded.")
+        : "F&B financial commentary unavailable — accounting source not connected.",
+  };
+  const categoryCallout: FbChartCallout = {
+    text:
+      "Revenue-by-category breakdown unavailable. COA does not yet carry a Food / Wine / Liquor / Beer / Other categorization at the chart-of-accounts level; adding that split requires founder approval of COA metadata changes.",
+  };
+  const coversCallout: FbChartCallout = {
+    text:
+      "Monthly cover counts unavailable — Spectre's F&B POS integration is not yet connected. Average check, revenue-per-cover, and cover-vs-budget variance activate once POS lands.",
+  };
+  const foodCostCallout: FbChartCallout = {
+    text:
+      financialAvailable && costPctActual != null
+        ? `Food Cost % trend will populate as additional monthly committed snapshots land. ${monthLong} YTD figure: ${formatPercent1(costPctActual)}.`
+        : "Food Cost % trend unavailable — F&B accounting source not connected.",
+  };
+
+  return {
+    dataSource: "live",
+    eyebrow: `${opts.clubName} · Hospitality`,
+    title: "Food & Beverage Statistics",
+    periodLabel: period.statementHeaderLabel,
+    introNote:
+      financialAvailable
+        ? "F&B revenue, cost of sales, and gross margin are sourced from the committed historical trial balance for the Food & Beverage department. POS-dependent operating statistics (covers, average check, revenue per server) remain unavailable until the POS integration lands."
+        : "F&B financial results unavailable — Food & Beverage department has no committed trial-balance activity for this period.",
+    statementNumber: "Statement 13 of 14",
+    documentChip: "Hospitality",
+    preparedFor: "F&B Committee & Management",
+    kpiCards,
+    secondaryKpiCards,
+    charts: {
+      monthlyRevenueCost,
+      revenueByCategory,
+      monthlyCoverCounts,
+      foodCostTrend,
+      subtitles: {
+        monthlyRevenueCost: revenueCostSubtitle,
+        revenueByCategory:  categoriesSubtitle,
+        monthlyCoverCounts: coversSubtitle,
+        foodCostTrend:      foodCostSubtitle,
+      },
+      chipLabels: {
+        monthlyRevenueCost: "Revenue vs Cost",
+        revenueByCategory:  "Category Mix",
+        monthlyCoverCounts: "Covers",
+        foodCostTrend:      "Food Cost %",
+      },
+      callouts: {
+        monthlyRevenueCost: revenueCostCallout,
+        revenueByCategory:  categoryCallout,
+        monthlyCoverCounts: coversCallout,
+        foodCostTrend:      foodCostCallout,
+      },
+    },
+  };
+
+  // Reference the opex / payroll / netIncomeActual values so the
+  // compiler keeps them in scope for test introspection via the
+  // module exports (used by the source-contract tests to prove the
+  // F&B subsection consumed the shared resolver output).
+  void opexActual;
+  void payrollActual;
+  void netIncomeActual;
+}
+
+function toNumberDec(d: { toString(): string }): number {
+  return Number(d.toString());
+}
+

@@ -102,8 +102,13 @@ import {
 } from "@/lib/reporting/departmental-payroll-analysis";
 import {
   buildSilverSpringsFoodBeverageStatistics,
+  // FB-LIVE-1 (2026-10-06) — live tenant Section XIII builder.
+  buildCouleeFoodBeverageStatistics,
   type FoodBeverageStatistics,
 } from "@/lib/reporting/food-beverage-statistics";
+// FB-LIVE-1 (2026-10-06) — canonical F&B financial resolver (shared
+// with Section X for Actuals; Budget×dept×fsGroup for Budget side).
+import { resolveFbFinancialYtd } from "@/lib/reporting/fb-financial-resolver";
 import {
   buildSilverSpringsInventoryAnalysis,
   type InventoryAnalysis,
@@ -3316,10 +3321,41 @@ export async function getMonthlyReportingPackage(
 
     // Chapter XIII — Food & Beverage Statistics.
     // Owned end-to-end by src/lib/reporting/food-beverage-statistics.ts.
-    foodBeverageStatistics: buildSilverSpringsFoodBeverageStatistics({
-      clubName: club.name,
-      period: reportingPeriod,
-    }),
+    // FB-LIVE-1 (2026-10-06) — live tenants (hasRealData) consume the
+    // canonical F&B financial resolver which pulls Actuals from the
+    // SAME `incomeStatementByDepartmentFromSnapshot` resolver
+    // Section X uses + Budget from the canonical BudgetLine query.
+    // The approved May presentation is preserved; POS-dependent
+    // metrics (covers, average check, revenue per server, member
+    // satisfaction, monthly gratuities, category donut, cover-count
+    // chart, food-cost-trend chart) render UNAVAILABLE ("—") until
+    // a POS integration lands. Demo tenants keep the Silver Springs
+    // seed unchanged.
+    foodBeverageStatistics: hasRealData
+      ? await (async () => {
+          const fbYtd = await resolveFbFinancialYtd({
+            clubId: club.id,
+            ytdStart: reportingPeriod.periodStart,
+            ytdEnd: reportingPeriod.periodEnd,
+            fiscalYear: reportingPeriod.year,
+            throughMonth: reportingPeriod.month,
+          }).catch(() => null);
+          if (!fbYtd) {
+            return buildSilverSpringsFoodBeverageStatistics({
+              clubName: club.name,
+              period: reportingPeriod,
+            });
+          }
+          return buildCouleeFoodBeverageStatistics({
+            clubName: club.name,
+            period: reportingPeriod,
+            fbYtd,
+          });
+        })()
+      : buildSilverSpringsFoodBeverageStatistics({
+          clubName: club.name,
+          period: reportingPeriod,
+        }),
 
     // Chapter XIV — Inventory Analysis.
     // Owned end-to-end by src/lib/reporting/inventory-analysis.ts.
@@ -4131,7 +4167,14 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       pkg.departmentalPayrollAnalysis.dataSource === "live"
         ? pkg.departmentalPayrollAnalysis
         : makeUnavailable(pkg.departmentalPayrollAnalysis, u),
-    foodBeverageStatistics: makeUnavailable(pkg.foodBeverageStatistics, u),
+    // FB-LIVE-1 (2026-10-06) — Section XIII now has a real-data path
+    // (buildCouleeFoodBeverageStatistics emits dataSource:"live").
+    // Mirror the Chapter X / XI / XII / IX contract: leave live
+    // chapters alone; only wipe demo-tenant seeds.
+    foodBeverageStatistics:
+      pkg.foodBeverageStatistics.dataSource === "live"
+        ? pkg.foodBeverageStatistics
+        : makeUnavailable(pkg.foodBeverageStatistics, u),
     inventoryAnalysis: makeUnavailable(pkg.inventoryAnalysis, u),
     // WEATHER-HIST-1 (2026-10-05) — Chapter XI emits dataSource:"live"
     // for real-data tenants resolved via ClubProfile coordinates.
