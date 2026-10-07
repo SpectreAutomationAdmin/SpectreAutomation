@@ -3276,7 +3276,15 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-dw-inspector-foot .actions { display: flex; gap: 6px; }
 
   /* Inspector empty state */
-  .spectre-dw-inspector-empty { display: flex; flex-direction: column; justify-content: center; padding: 32px 24px; height: 100%; }
+  /* COA-MAP-2D (2026-10-06) — restore top alignment.  The previous
+     `justify-content: center` vertically centred the Inspector empty
+     state inside its full-height column, which created a tall blank
+     band between the toolbar and the "INSPECTOR" label that read as
+     a regression (founder: "enormous blank vertical area ... column
+     header near bottom").  Top-aligning anchors the empty state
+     directly beneath the toolbar so the Inspector column reads as
+     a sibling of the Account List, not a floating island. */
+  .spectre-dw-inspector-empty { display: flex; flex-direction: column; justify-content: flex-start; padding: 32px 24px; height: 100%; }
   .spectre-dw-inspector-empty h3 { font-size: 15px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.008em; margin-bottom: 8px; }
   .spectre-dw-inspector-empty p { font-size: 12.5px; color: var(--spectre-text-secondary); line-height: 18px; margin-bottom: 10px; }
   .spectre-dw-inspector-empty ul { list-style: none; padding: 0; margin: 12px 0 20px; font-size: 12px; color: var(--spectre-text-secondary); }
