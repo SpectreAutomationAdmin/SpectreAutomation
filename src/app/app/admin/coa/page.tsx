@@ -5,7 +5,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { InfoTip } from "@/components/InfoTip";
-import { CoaModeSwitch } from "@/components/coa/CoaModeSwitch";
+import { CreateFsGroupButton } from "@/components/coa-mapping/CreateFsGroupButton";
 import { checkAccountDeletionSafety } from "@/lib/accounting/coa";
 import { accountBalances } from "@/lib/accounting/balance";
 import {
@@ -256,6 +256,55 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
   const totalCount = accounts.length;
   const activeCount = accounts.filter((a) => a.isActive).length;
 
+  // COA-MAP-3 (2026-10-07) — compute empty Financial Statement Groups
+  // so the client hierarchy can render them as drop targets.  Before
+  // this slice, an FS Group with 0 accounts was invisible in the
+  // Account List (bucketing was driven by rows), which meant a
+  // newly-created group couldn't receive drag/drop reassignments
+  // until something was already in it.  Now the client receives the
+  // full group inventory and injects empty groups into a "Custom
+  // groups" sub-section under the inferred TYPE.
+  const nonEmptyFsGroupIds = new Set(
+    allAccounts.map((a) => a.fsGroupId).filter((id): id is string => !!id),
+  );
+  type EmptyFsGroup = {
+    id: string;
+    key: string;
+    name: string;
+    statement: string;
+    reportingRole: string | null;
+    sortOrder: number;
+    isTenantCreated: boolean;
+    inferredType: AccountType;
+  };
+  function inferTypeForEmptyGroup(
+    statement: string,
+    role: string | null,
+  ): AccountType {
+    if (statement === "BALANCE_SHEET") {
+      if (role && ["ACCOUNTS_PAYABLE","ACCRUED_LIABILITIES","DEFERRED_REVENUE","DEBT","CAPITAL_RESERVE","DEFERRED_CAPITAL_CONTRIBUTIONS","OTHER_LIABILITIES"].includes(role)) return "LIABILITY";
+      if (role && ["SHARE_CAPITAL","CONTRIBUTED_SURPLUS","RETAINED_EARNINGS","OTHER_EQUITY"].includes(role)) return "EQUITY";
+      return "ASSET";
+    }
+    if (statement === "INCOME_STATEMENT") {
+      if (role && ["COGS","PAYROLL","OPERATING_EXPENSE","DEPRECIATION","INTEREST_EXPENSE","FINANCING_OTHER","OTHER_EXPENSE"].includes(role)) return "EXPENSE";
+      return "REVENUE";
+    }
+    return "REVENUE";
+  }
+  const emptyFsGroups: EmptyFsGroup[] = fsGroups
+    .filter((g) => !nonEmptyFsGroupIds.has(g.id))
+    .map((g) => ({
+      id: g.id,
+      key: g.key,
+      name: g.name,
+      statement: g.statement,
+      reportingRole: g.reportingRole,
+      sortOrder: g.sortOrder,
+      isTenantCreated: g.isTenantCreated,
+      inferredType: inferTypeForEmptyGroup(g.statement, g.reportingRole),
+    }));
+
   // Modal / inspector state — driven entirely by URL search params.
   //   ?modal=new     → New Account modal (create only)
   //   ?delete=<id>   → Delete confirmation (with safety preflight)
@@ -377,7 +426,6 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
             </div>
           </div>
           <div className="spectre-dw-header-actions">
-            <CoaModeSwitch active="list" />
             <Link
               href={`/app/admin/coa?${showInactive ? "" : "showInactive=1&"}${fundMode ? "mode=fund" : ""}`.replace(/[?&]$/, "")}
               className="spectre-dw-btn tertiary"
@@ -439,6 +487,10 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/><path d="M12 3v13"/><path d="M7 8l5-5 5 5"/></svg>
               Export
             </a>
+            {/* COA-MAP-3 (2026-10-07) — Create Financial Statement
+                Group moved here from the (now-retired) Mapping Studio.
+                Hidden entirely for view-only roles via `canCreate`. */}
+            <CreateFsGroupButton clubId={clubId} canCreate={canEdit} />
             {canEdit ? (
               <Link className="spectre-dw-btn primary" href="/app/admin/coa?modal=new" data-testid="coa-new-account-btn">
                 + New account
@@ -502,6 +554,7 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
       <ChartOfAccountsClient
         clubId={clubId}
         rows={clientRows}
+        emptyFsGroups={emptyFsGroups}
         canEdit={canEdit}
         disabledTooltip={DISABLED_TOOLTIP}
         fundMode={fundMode}

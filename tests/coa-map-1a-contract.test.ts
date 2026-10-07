@@ -18,7 +18,12 @@ import { describe, expect, it } from "vitest";
 const REPO = path.resolve(__dirname, "..");
 const PROJECTION = path.join(REPO, "src/lib/reporting/fs-group-projection.ts");
 const RESOLVER   = path.join(REPO, "src/lib/coa-mapping/fs-group-asof-resolver.ts");
-const UI         = path.join(REPO, "src/app/app/admin/coa-mapping/mapping-workspace-client.tsx");
+// COA-MAP-3 (2026-10-07) — Mapping Studio UI retired; the period-
+// aware fieldset lives in the shared `MappingPreviewPanel` which is
+// now mounted directly by the Chart of Accounts drawer.  The "UI"
+// path points to the consolidated Chart of Accounts client so the
+// period-aware integration pins still land somewhere real.
+const UI         = path.join(REPO, "src/components/data-workspace/ChartOfAccountsClient.tsx");
 
 function stripComments(src: string): string {
   return src
@@ -65,8 +70,12 @@ describe("COA-MAP-1A §B — Account.fsGroupId retained as compat column", () =>
   }
 });
 
-describe("COA-MAP-1A §C — Mapping Studio period-aware UX", () => {
-  const src = readFileSync(UI, "utf8");
+describe("COA-MAP-1A §C — period-aware UX (post COA-MAP-3)", () => {
+  // Period-aware date math moved into AccountListMappingDrawer when
+  // the standalone Mapping Studio was retired.  Point the "src"
+  // haystack at the drawer (where the period math now lives), so
+  // the pre-existing pins continue to protect behaviour.
+  const src = readFileSync(path.join(REPO, "src/components/coa-mapping/AccountListMappingDrawer.tsx"), "utf8");
 
   it("builds currentPeriodIso from the first of the current month", () => {
     expect(src).toMatch(/currentPeriodStart\s*=\s*new Date\(Date\.UTC\(today\.getUTCFullYear\(\),\s*today\.getUTCMonth\(\),\s*1\)\)/);

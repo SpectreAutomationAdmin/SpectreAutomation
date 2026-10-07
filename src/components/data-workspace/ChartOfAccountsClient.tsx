@@ -48,6 +48,7 @@ import { updateAccountInspectorAction, bulkArchiveAccountsAction } from "@/app/a
 import { KNOWN_FUND_KEYS } from "@/lib/accounting/fund-applicability";
 import { AccountListMappingDrawer } from "@/components/coa-mapping/AccountListMappingDrawer";
 import { useAccountDrag, AccountDragOverlay } from "@/components/coa-mapping/useAccountDrag";
+import { AccountReportingHistory } from "@/components/coa-mapping/AccountReportingHistory";
 
 // ----- Public row shape (serialised from the RSC) ---------------------
 
@@ -96,6 +97,17 @@ export type DwAccountRow = {
 export type DwOption = { key: string; label: string; type?: string; statement?: string };
 export type DwParentOption = { id: string; accountNumber: string; name: string };
 
+export type EmptyFsGroupLite = {
+  id: string;
+  key: string;
+  name: string;
+  statement: string;
+  reportingRole: string | null;
+  sortOrder: number;
+  isTenantCreated: boolean;
+  inferredType: DwAccountRow["type"];
+};
+
 export type ChartOfAccountsClientProps = {
   // COA-MAP-2B (2026-10-06) — the active tenant's clubId.  Threaded
   // down so Account List drag/drop can call the shared mapping
@@ -103,6 +115,12 @@ export type ChartOfAccountsClientProps = {
   // the correct tenant scope.
   clubId: string;
   rows: DwAccountRow[];
+  // COA-MAP-3 (2026-10-07) — the subset of Financial Statement Groups
+  // that currently have NO accounts.  The hierarchy renderer injects
+  // these into a "Custom groups" sub-section under their inferred
+  // TYPE so a newly created group is immediately visible AND a valid
+  // drag/drop target.
+  emptyFsGroups?: EmptyFsGroupLite[];
   canEdit: boolean;
   disabledTooltip: string;
   fundMode: boolean;
@@ -1203,10 +1221,12 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
                 </p>
               )}
               {inspectorTab === "audit" && (
-                <p style={{ fontSize: 12.5, color: "var(--spectre-text-secondary)", lineHeight: "18px" }}>
-                  Change history for this account record. Wired to the existing audit-log
-                  service in a follow-up sprint.
-                </p>
+                /* COA-MAP-3 (2026-10-07) — reporting history migrated
+                   from the (now-retired) Mapping Studio Inspector.
+                   Fetches /api/admin/coa-mapping/accounts/{id}/history
+                   and shows every effective-dated Financial Statement
+                   Group assignment the account has ever belonged to. */
+                <AccountReportingHistory clubId={props.clubId} accountId={inspectorRow.id} />
               )}
             </div>
 
@@ -1515,6 +1535,32 @@ function renderCategorySubgroups(
     let g = c.fsGroups.get(r.fsGroupKey);
     if (!g) { g = { id: r.fsGroupId, key: r.fsGroupKey, label: r.fsGroupLabel, sortOrder: r.fsGroupSortOrder, rows: [] }; c.fsGroups.set(r.fsGroupKey, g); }
     g.rows.push(r);
+  }
+
+  // COA-MAP-3 (2026-10-07) — inject empty Financial Statement Groups
+  // into a dedicated "Custom groups" sub-section under this TYPE so
+  // a newly created group is immediately visible AND a valid
+  // drag/drop target (data-fs-group-id survives for the useAccountDrag
+  // elementFromPoint hit test).
+  const emptyForType = (props.emptyFsGroups ?? []).filter((g) => g.inferredType === type);
+  if (emptyForType.length > 0) {
+    const CUSTOM_CAT_KEY = "__coa_map_3_empty_groups__";
+    let catBucket = cats.get(CUSTOM_CAT_KEY);
+    if (!catBucket) {
+      catBucket = { label: "Custom groups", sortOrder: 10_000, fsGroups: new Map() };
+      cats.set(CUSTOM_CAT_KEY, catBucket);
+    }
+    for (const g of emptyForType) {
+      // Skip if some tenant collision already placed this key (defensive).
+      if (catBucket.fsGroups.has(g.key)) continue;
+      catBucket.fsGroups.set(g.key, {
+        id: g.id,
+        key: g.key,
+        label: g.name,
+        sortOrder: g.sortOrder,
+        rows: [],
+      });
+    }
   }
   const catList = Array.from(cats.entries()).sort((a, b) => a[1].sortOrder - b[1].sortOrder || a[1].label.localeCompare(b[1].label));
   const out: React.ReactNode[] = [];

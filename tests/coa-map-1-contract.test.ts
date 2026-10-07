@@ -29,7 +29,15 @@ const VALIDATION    = path.join(REPO, "src/lib/coa-mapping/validation.ts");
 const ASSIGN_SVC    = path.join(REPO, "src/lib/coa-mapping/assignment-service.ts");
 const GROUP_SVC     = path.join(REPO, "src/lib/coa-mapping/group-service.ts");
 const ROLE          = path.join(REPO, "src/lib/coa-mapping/reporting-role.ts");
-const UI            = path.join(REPO, "src/app/app/admin/coa-mapping/mapping-workspace-client.tsx");
+// COA-MAP-3 (2026-10-07) — Mapping Studio UI retired.  The pins that
+// described its testids / drag-handler names are now obsolete; the
+// pins that described SHARED behaviour (preview panel, create-group
+// drawer, API endpoints, resolver, validation, humanize helpers)
+// still apply and now scan the consolidated locations.
+const UI            = path.join(REPO, "src/components/data-workspace/ChartOfAccountsClient.tsx");
+const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
+const CREATE_DRAWER  = path.join(REPO, "src/components/coa-mapping/CreateFsGroupDrawer.tsx");
+const DRAG_HOOK      = path.join(REPO, "src/components/coa-mapping/useAccountDrag.tsx");
 
 function stripComments(src: string): string {
   return src
@@ -217,50 +225,38 @@ describe("COA-MAP-1 §G — No account-name regex in COA mapping classification"
   }
 });
 
-describe("COA-MAP-1 §H — Mapping Studio UI contract", () => {
+describe("COA-MAP-1 §H — mapping UI contract (post COA-MAP-3 consolidation)", () => {
   const src = readFileSync(UI, "utf8");
-  // COA-MAP-2B — the Preview panel + its period-aware fieldset are
-  // now in a SHARED component mounted by both the Mapping Studio and
-  // Account List drag/drop.  Preview testids live in the shared file.
-  const SHARED_PREVIEW = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
   const sharedPreview = readFileSync(SHARED_PREVIEW, "utf8");
+  const createDrawer  = readFileSync(CREATE_DRAWER, "utf8");
+  const dragHook      = readFileSync(DRAG_HOOK, "utf8");
 
+  // Testids that MUST survive the consolidation.  Each one is
+  // searched across every file that could host it after the Mapping
+  // Studio was retired in COA-MAP-3.
   for (const testid of [
-    "coa-mapping-workspace",
-    "coa-mapping-unmapped",
-    "coa-mapping-inspector",
-    "coa-mapping-inspector-empty",
-    "coa-mapping-inspector-filled",
-    "coa-mapping-inspector-group-select",
-    "coa-mapping-inspector-preview-button",
     "coa-mapping-preview",
     "coa-mapping-preview-effective-from",
     "coa-mapping-preview-apply",
     "coa-mapping-preview-cancel",
-    "coa-mapping-create-group-open",
     "coa-mapping-create-group-form",
     "coa-mapping-create-group-submit",
   ]) {
-    it(`exposes [data-testid="${testid}"]`, () => {
+    it(`exposes [data-testid="${testid}"] (shared panel / create drawer / COA client)`, () => {
       const slug = testid.replace(/-/g, "\\-");
-      // Match either `data-testid="X"` (direct attribute) or
-      // `??"X"` / `: "X"` (string literal passed through a prop
-      // default inside the shared Preview component).
       const re = new RegExp(`(data-testid="|\\?\\?\\s*"|:\\s*")${slug}"`);
-      expect(src.match(re) || sharedPreview.match(re)).toBeTruthy();
+      expect(
+        src.match(re) || sharedPreview.match(re) || createDrawer.match(re),
+      ).toBeTruthy();
     });
   }
 
-  it("drag-and-drop is wired: onDragStart + onDragOver + onDrop + onDragEnd", () => {
-    expect(src).toMatch(/handleDragStart/);
-    expect(src).toMatch(/handleDragOverGroup/);
-    expect(src).toMatch(/handleDropOnGroup/);
-    expect(src).toMatch(/handleDragEnd/);
-    expect(src).toMatch(/draggable[\r\n]/);
-  });
-
-  it("keyboard alternative: Account Inspector exposes a group <select> + Preview button", () => {
-    expect(src).toMatch(/data-testid="coa-mapping-inspector-group-select"/);
-    expect(src).toMatch(/data-testid="coa-mapping-inspector-preview-button"/);
+  // Drag + drop lives in the pointer-driven hook; the row is wired
+  // via the ChartOfAccountsClient directly.  Mapping Studio HTML5
+  // drag handler names are OBSOLETE and no longer required.
+  it("pointer-driven drag wired via useAccountDrag + row onPointerDown", () => {
+    expect(dragHook).toMatch(/export function useAccountDrag/);
+    expect(src).toMatch(/const drag = useAccountDrag\(\);/);
+    expect(src).toMatch(/onPointerDown=\{dragEnabled/);
   });
 });

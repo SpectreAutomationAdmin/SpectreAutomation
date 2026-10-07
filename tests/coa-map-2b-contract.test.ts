@@ -25,7 +25,9 @@ const COA_UI  = path.join(REPO, "src/components/data-workspace/ChartOfAccountsCl
 const COA_PAGE= path.join(REPO, "src/app/app/admin/coa/page.tsx");
 const SHARED  = path.join(REPO, "src/components/coa-mapping/MappingPreviewPanel.tsx");
 const DRAWER  = path.join(REPO, "src/components/coa-mapping/AccountListMappingDrawer.tsx");
-const MAP_UI  = path.join(REPO, "src/app/app/admin/coa-mapping/mapping-workspace-client.tsx");
+// COA-MAP-3 (2026-10-07) — Mapping Studio UI retired; its former
+// client file is removed.  The pins that scanned it are updated to
+// confirm the retirement rather than the removed content.
 
 function stripComments(src: string): string {
   return src
@@ -43,21 +45,15 @@ describe("COA-MAP-2B §A — shared MappingPreviewPanel", () => {
     expect(shared).toMatch(/export type MappingPreviewResult = /);
   });
 
-  const mapUi = readFileSync(MAP_UI, "utf8");
   const drawer = readFileSync(DRAWER, "utf8");
 
-  it("Mapping Studio imports MappingPreviewPanel from the shared file", () => {
-    expect(mapUi).toMatch(/import \{ MappingPreviewPanel, type MappingPreviewResult \} from "@\/components\/coa-mapping\/MappingPreviewPanel"/);
-    expect(mapUi).toMatch(/<MappingPreviewPanel\s/);
-  });
-
-  it("Account List drawer also imports MappingPreviewPanel from the shared file", () => {
+  it("Account List drawer imports MappingPreviewPanel from the shared file", () => {
     expect(drawer).toMatch(/import \{\s*MappingPreviewPanel,\s*type MappingPreviewResult,\s*\} from "@\/components\/coa-mapping\/MappingPreviewPanel"/);
     expect(drawer).toMatch(/<MappingPreviewPanel\s/);
   });
 
-  it("Mapping Studio no longer defines its own local PreviewPanel", () => {
-    expect(mapUi).not.toMatch(/^function PreviewPanel\(/m);
+  it("standalone Mapping Studio client has been deleted (COA-MAP-3 retirement)", () => {
+    expect(existsSync(path.join(REPO, "src/app/app/admin/coa-mapping/mapping-workspace-client.tsx"))).toBe(false);
   });
 });
 
