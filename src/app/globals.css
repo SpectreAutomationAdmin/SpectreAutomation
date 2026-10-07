@@ -2871,7 +2871,22 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
      in the `1fr` track regardless of how many `auto` rows are present
      above it. */
   .spectre-dw-root { display: grid; grid-template-rows: repeat(3, auto) 1fr; height: calc(100vh - var(--spectre-topbar-h, 64px)); overflow: hidden; }
-  .spectre-dw-body { grid-row: -1; display: grid; grid-template-columns: minmax(0, 1fr) 400px; height: 100%; min-height: 0; overflow: hidden; }
+  /* COA-MAP-2E (2026-10-07) — anchor body to the `1fr` row, not past it.
+     The previous `grid-row: -1` resolved to `grid-row-start: -1;
+     grid-row-end: auto` → start at line 5 (last explicit line) + span 1
+     → end at line 6 → an IMPLICIT row 5 was created to hold the body.
+     The explicit `1fr` row (row 4) then had no occupant but still
+     claimed all remaining space, creating a 400+ px empty band
+     between the toolbar and the body whenever the body content
+     (table) was shorter than the viewport — the exact defect the
+     founder reproduced by collapsing every top-level section.
+     Fix: `grid-row-end: -1` ends the cell at the last explicit line
+     (line 5).  With auto start, auto-flow places the body in the
+     next empty explicit row (row 4 = `1fr`), spanning to line 5.
+     No implicit row is created; the `1fr` row is correctly
+     occupied by the body regardless of how many `auto` banners
+     render above it. */
+  .spectre-dw-body { grid-row-end: -1; display: grid; grid-template-columns: minmax(0, 1fr) 400px; height: 100%; min-height: 0; overflow: hidden; }
   .spectre-dw-main { min-width: 0; background: var(--spectre-canvas); border-right: 1px solid var(--spectre-border-hairline); display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
   .spectre-dw-inspector-slot { background: var(--spectre-surface); border-left: 1px solid var(--spectre-border-hairline); overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 0; }
   @media (max-width: 1279px) { .spectre-dw-body { grid-template-columns: minmax(0, 1fr); } .spectre-dw-inspector-slot { display: none; } }
