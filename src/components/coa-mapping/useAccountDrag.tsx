@@ -48,12 +48,26 @@ type SelectableLike = Element & { tagName: string };
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   // Walk up a few parents to catch nested wrappers around a control.
+  //
+  // COA-MAP-3C (2026-10-08) — `A` (links) and `role="link"` are
+  // DELIBERATELY NOT in this exclusion list.  The Chart of Accounts
+  // Name column wraps the account name in a <Link> to the GL
+  // account page, and the founder's natural grab point on an
+  // account row is its name.  Blocking drag on <a> was the exact
+  // regression the founder reported: "lost ability to drag and
+  // drop accounts between Financial Statement Groups."
+  //
+  // The DRAG vs CLICK disambiguation is preserved by the 6 px
+  // movement threshold + the synthetic-click suppression window
+  // the hook installs on pointerup (see useEffect below).  A pure
+  // click (no movement) still lets the Link navigate; a drag
+  // (movement > 6 px) activates mapping and suppresses the Link.
   let el: Element | null = target;
   for (let i = 0; i < 4 && el; i++, el = el.parentElement) {
     const t = (el as SelectableLike).tagName;
-    if (t === "INPUT" || t === "BUTTON" || t === "A" || t === "SELECT" || t === "TEXTAREA" || t === "LABEL") return true;
+    if (t === "INPUT" || t === "BUTTON" || t === "SELECT" || t === "TEXTAREA" || t === "LABEL") return true;
     const role = el.getAttribute("role");
-    if (role === "button" || role === "link" || role === "menuitem" || role === "checkbox") return true;
+    if (role === "button" || role === "menuitem" || role === "checkbox") return true;
     if (el.hasAttribute("data-no-row-drag")) return true;
   }
   return false;
@@ -224,6 +238,23 @@ export function useAccountDrag(): UseAccountDrag {
       const wasActive = activeRef.current;
       const info = startRef.current.info;
       if (wasActive) {
+        // COA-MAP-3C — suppress the synthetic `click` the browser
+        // will dispatch next-tick for the pointerdown/up sequence.
+        // Without this, dropping an account on a Financial
+        // Statement Group that happens to overlap a <Link> (the
+        // Name column) would navigate the user away mid-drop.
+        // One-shot capturing click listener + preventDefault +
+        // stopPropagation, auto-removed on fire or on the next
+        // tick (whichever comes first).
+        const suppressClick = (ce: MouseEvent) => {
+          ce.preventDefault();
+          ce.stopPropagation();
+          ce.stopImmediatePropagation();
+          window.removeEventListener("click", suppressClick, true);
+        };
+        window.addEventListener("click", suppressClick, true);
+        setTimeout(() => window.removeEventListener("click", suppressClick, true), 0);
+
         const targetGroupId = findFsGroupIdAtPoint(e.clientX, e.clientY);
         cleanup();
         if (targetGroupId && dropHandlerRef.current) {
@@ -231,7 +262,8 @@ export function useAccountDrag(): UseAccountDrag {
         }
       } else {
         // Below threshold — treat as a plain click.  Don't swallow;
-        // the row's own onClick fires naturally.
+        // the row's own onClick fires naturally, and if the pointer
+        // was over a <Link> the Link navigation happens next-tick.
         startRef.current = null;
       }
     };

@@ -138,12 +138,19 @@ describe("COA-MAP-2C §E — drop target detection via elementFromPoint", () => 
 describe("COA-MAP-2C §F — interactive child exclusions", () => {
   const src = readFileSync(HOOK, "utf8");
 
-  it("isInteractiveTarget covers inputs, buttons, links, selects, textareas, labels", () => {
-    expect(src).toMatch(/t === "INPUT" \|\| t === "BUTTON" \|\| t === "A" \|\| t === "SELECT" \|\| t === "TEXTAREA" \|\| t === "LABEL"/);
+  it("isInteractiveTarget covers inputs, buttons, selects, textareas, labels (COA-MAP-3C REMOVED <a>)", () => {
+    // Links were intentionally removed from the exclusion list in
+    // COA-MAP-3C: the account Name column wraps the name in a
+    // <Link> to the GL account page; blocking drag on <a> broke
+    // the founder's natural grab point on account rows.  See
+    // tests/coa-map-3c-contract.test.ts for the full justification.
+    expect(src).toMatch(/t === "INPUT" \|\| t === "BUTTON" \|\| t === "SELECT" \|\| t === "TEXTAREA" \|\| t === "LABEL"/);
+    expect(src).not.toMatch(/t === "A"/);
   });
 
-  it("role=button / role=link / role=menuitem / role=checkbox are excluded", () => {
-    expect(src).toMatch(/role === "button" \|\| role === "link" \|\| role === "menuitem" \|\| role === "checkbox"/);
+  it("role=button / role=menuitem / role=checkbox are excluded (COA-MAP-3C REMOVED role=link)", () => {
+    expect(src).toMatch(/role === "button" \|\| role === "menuitem" \|\| role === "checkbox"/);
+    expect(src).not.toMatch(/role === "link"/);
   });
 
   it("data-no-row-drag attribute lets callers opt a wrapper out of drag", () => {
