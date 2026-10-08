@@ -155,7 +155,8 @@ describe("COA-MAP-3A §F — whoami diagnostic (read-only, staging-only)", () =>
 
   it("returns the principal + memberships + permission booleans", () => {
     expect(src).toMatch(/isSuperAdmin\(principal\)/);
-    expect(src).toMatch(/principal\.memberships\.map\(/);
+    // COA-MAP-3B tightened this to a null-safe (memberships ?? []).map(…)
+    expect(src).toMatch(/\(principal\.memberships \?\? \[\]\)\.map\(/);
     expect(src).toMatch(/hasPermission\(principal, clubId \|\| null, perm\)/);
   });
 

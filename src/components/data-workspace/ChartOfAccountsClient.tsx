@@ -1156,11 +1156,67 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
                 <span className="num">{inspectorRow.accountNumber}</span>
                 <span className="name">{inspectorRow.name}</span>
               </div>
-              <div className="spectre-dw-inspector-meta">
+              <div className="spectre-dw-inspector-meta" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <StatusPillLifecycle isActive={inspectorRow.isActive} />
                 {inspectorRow.isControl && <span className="spectre-dw-pill control">Control</span>}
                 {inspectorRow.fundValidation === "blocked" && <ValidationBadge tone="blocked" />}
                 {inspectorRow.fundValidation === "warn" && <ValidationBadge tone="warn" />}
+                {/* COA-MAP-3B (2026-10-07) — primary Edit / Save /
+                    Cancel action promoted from the Inspector footer
+                    to the header so the Controller doesn't have to
+                    scroll past the Details tab + every field to
+                    find Edit.  The footer status / secondary
+                    discard affordance is unchanged. */}
+                <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+                  {inspectorMode === "viewing" && props.canEdit && (
+                    <button
+                      type="button"
+                      className="spectre-dw-btn primary sm"
+                      onClick={startEditing}
+                      data-testid={`coa-inspector-head-edit-${inspectorRow.accountNumber}`}
+                    >
+                      <PencilIcon /> Edit
+                    </button>
+                  )}
+                  {inspectorMode === "viewing" && !props.canEdit && (
+                    <span
+                      className="spectre-dw-btn secondary sm"
+                      aria-disabled="true"
+                      title={props.disabledTooltip}
+                      data-testid={`coa-inspector-head-edit-${inspectorRow.accountNumber}`}
+                      data-disabled-reason="no-coa-write"
+                    >
+                      Edit (permission required)
+                    </span>
+                  )}
+                  {(inspectorMode === "editing" || inspectorMode === "saved" || inspectorMode === "validation") && props.canEdit && (
+                    <>
+                      <button
+                        type="button"
+                        className="spectre-dw-btn tertiary sm"
+                        onClick={discardEdits}
+                        disabled={savePending}
+                        data-testid="coa-inspector-head-discard"
+                      >
+                        {isDirty() ? "Discard" : "Cancel"}
+                      </button>
+                      <button
+                        type="button"
+                        className="spectre-dw-btn primary sm"
+                        onClick={saveInspector}
+                        disabled={savePending || !isDirty() || inspectorMode === "validation"}
+                        data-testid="coa-inspector-head-save"
+                      >
+                        <CheckIcon /> Save
+                      </button>
+                    </>
+                  )}
+                  {inspectorMode === "saving" && (
+                    <button type="button" className="spectre-dw-btn primary sm" disabled data-testid="coa-inspector-head-save">
+                      Saving…
+                    </button>
+                  )}
+                </span>
               </div>
             </div>
 
