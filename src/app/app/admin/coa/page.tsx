@@ -249,7 +249,10 @@ export default async function COAPage({ searchParams }: { searchParams: SearchPa
   // Phase B — dropdown option lists for the inspector's inline edit
   // form. Pass the SAME lookups the legacy modal used.
   const categoryOptions = categories.map((c) => ({ key: c.key, label: c.name, type: c.type }));
-  const fsGroupOptions  = fsGroups.map((g) => ({ key: g.key, label: g.name, statement: g.statement }));
+  // COA-MAP-3A — expose `id` so the Inspector reassign drawer can
+  // call the canonical /preview + /reassign endpoints (which take
+  // targetFsGroupId, not key).
+  const fsGroupOptions  = fsGroups.map((g) => ({ id: g.id, key: g.key, label: g.name, statement: g.statement }));
   const departmentOptions = departments.map((d) => ({ key: d.code, label: d.name }));
   const parentOptions = accounts.map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name }));
 

@@ -49,6 +49,7 @@ import { KNOWN_FUND_KEYS } from "@/lib/accounting/fund-applicability";
 import { AccountListMappingDrawer } from "@/components/coa-mapping/AccountListMappingDrawer";
 import { useAccountDrag, AccountDragOverlay } from "@/components/coa-mapping/useAccountDrag";
 import { AccountReportingHistory } from "@/components/coa-mapping/AccountReportingHistory";
+import { InspectorReassignFsGroupDrawer } from "@/components/coa-mapping/InspectorReassignFsGroupDrawer";
 
 // ----- Public row shape (serialised from the RSC) ---------------------
 
@@ -94,7 +95,7 @@ export type DwAccountRow = {
 // Category / FS Group / Department option lists shipped from the RSC
 // so the inspector's edit form can populate the same dropdowns the
 // legacy modal did. No new lookups; the page already fetches them.
-export type DwOption = { key: string; label: string; type?: string; statement?: string };
+export type DwOption = { key: string; label: string; type?: string; statement?: string; id?: string };
 export type DwParentOption = { id: string; accountNumber: string; name: string };
 
 export type EmptyFsGroupLite = {
@@ -305,6 +306,9 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
   // calls back with (accountId, fsGroupId) and we open the shared
   // AccountListMappingDrawer (same canonical preview + reassign).
   const [mappingDrop, setMappingDrop] = useState<{ accountId: string; targetFsGroupId: string } | null>(null);
+  // COA-MAP-3A — canonical FS Group reassign drawer, opened from
+  // the Inspector "Change…" button.
+  const [reassignOpen, setReassignOpen] = useState<boolean>(false);
   const drag = useAccountDrag();
   drag.onDrop((accountId, targetFsGroupId) => {
     setMappingDrop({ accountId, targetFsGroupId });
@@ -1201,6 +1205,7 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
                     canEdit={props.canEdit}
                     onPatch={patchEdit}
                     onToggleFund={toggleFund}
+                    onRequestReassignFsGroup={() => setReassignOpen(true)}
                   />
                 ) : null
               )}
@@ -1326,6 +1331,25 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
           accountId={mappingDrop.accountId}
           targetFsGroupId={mappingDrop.targetFsGroupId}
           onClose={() => setMappingDrop(null)}
+        />
+      )}
+
+      {/* COA-MAP-3A — canonical reassign-FS-Group drawer.  Opened
+          from the Inspector FS Group "Change…" button when a
+          Controller (coa:write) wants to change the account's FS
+          Group through the shared mapping workflow instead of the
+          now-forbidden direct-write <select>. */}
+      {reassignOpen && inspectorRow && (
+        <InspectorReassignFsGroupDrawer
+          clubId={props.clubId}
+          accountId={inspectorRow.id}
+          accountNumber={inspectorRow.accountNumber}
+          accountName={inspectorRow.name}
+          currentFsGroupLabel={inspectorRow.fsGroupLabel}
+          availableGroups={props.fsGroupOptions
+            .filter((g): g is DwOption & { statement: string } => typeof g.statement === "string" && g.statement.length > 0)
+            .map((g) => ({ id: (g as unknown as { id?: string }).id ?? g.key, key: g.key, name: g.label, statement: g.statement! }))}
+          onClose={() => setReassignOpen(false)}
         />
       )}
     </div>
@@ -1971,7 +1995,7 @@ function FlagLabel({ checked, label }: { checked: boolean; label: string }) {
 // `mode === "viewing"`, and controlled form inputs otherwise.
 function EditableDetails({
   form, mode, row, categoryOptions, fsGroupOptions, departmentOptions, parentOptions,
-  canEdit, onPatch, onToggleFund,
+  canEdit, onPatch, onToggleFund, onRequestReassignFsGroup,
 }: {
   form: EditFormState;
   mode: "viewing" | "editing" | "saving" | "saved" | "validation" | "permission-denied";
@@ -1983,6 +2007,8 @@ function EditableDetails({
   canEdit: boolean;
   onPatch: <K extends keyof EditFormState>(key: K, value: EditFormState[K]) => void;
   onToggleFund: (key: "OPERATING" | "CAPITAL") => void;
+  /** COA-MAP-3A — opens the shared canonical reassign drawer. */
+  onRequestReassignFsGroup?: () => void;
 }) {
   const editing = mode === "editing" || mode === "saved" || mode === "validation" || mode === "saving";
   const disabled = !canEdit || mode === "saving";
@@ -2093,19 +2119,34 @@ function EditableDetails({
           ))}
         </select>
       </Field>
+      {/* COA-MAP-3A (2026-10-07) — the Inspector's FS Group field
+          is NO LONGER an inline <select>.  Direct-writing
+          `Account.fsGroupId` bypasses the canonical effective-dated
+          mapping workflow, Reporting Impact preview, VALID/WARNING/
+          BLOCKED validation, and MappingChangeAudit.  The field is
+          now display-only; the "Change…" button opens the shared
+          `InspectorReassignFsGroupDrawer` which uses the SAME API
+          path as drag/drop (/preview + /reassign). */}
       <Field label="FS Group">
-        <select
-          className="spectre-dw-input"
-          value={form.fsGroupKey}
-          onChange={(e) => onPatch("fsGroupKey", e.target.value)}
-          disabled={disabled}
-          data-testid="coa-inspector-field-fsgroup"
-        >
-          <option value="">— None —</option>
-          {fsGroupOptions.map((g) => (
-            <option key={g.key} value={g.key}>{g.label}{g.statement ? ` (${g.statement})` : ""}</option>
-          ))}
-        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span data-testid="coa-inspector-field-fsgroup-display" style={{ fontSize: 13 }}>
+            {row.fsGroupLabel}
+          </span>
+          {canEdit && onRequestReassignFsGroup && (
+            <button
+              type="button"
+              className="spectre-dw-btn tertiary sm"
+              onClick={onRequestReassignFsGroup}
+              data-testid="coa-inspector-field-fsgroup-change-btn"
+            >
+              Change…
+            </button>
+          )}
+        </div>
+        <span className="help">
+          Changing the Financial Statement Group opens the canonical mapping workflow
+          (effective date, reporting impact preview, apply or cancel).
+        </span>
       </Field>
       <Field label="Fund applicability">
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }} data-testid="coa-inspector-field-fund">

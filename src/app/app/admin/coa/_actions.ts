@@ -236,13 +236,21 @@ export async function updateAccountInspectorAction(
   try {
     const fundSubmitted = formData.has("_fundApplicabilityForm");
     const explicitFund = fundSubmitted ? fdFundApplicability(formData) : undefined;
+    // COA-MAP-3A (2026-10-07) — `fsGroupKey` is INTENTIONALLY NOT
+    // forwarded.  Direct-writing `Account.fsGroupId` from the
+    // Inspector would bypass the canonical effective-dated mapping
+    // workflow (AccountFinancialStatementAssignment + Reporting
+    // Impact + VALID/WARNING/BLOCKED validation + audit).  FS
+    // Group reassignment goes through the Inspector's "Change…"
+    // button, which opens the shared `InspectorReassignFsGroupDrawer`
+    // and calls /api/admin/coa-mapping/accounts/{id}/reassign.
     const { account, warnings } = await updateAccount(p, accountId, {
       accountNumber: fdString(formData, "accountNumber") ?? undefined,
       name: fdString(formData, "name") ?? undefined,
       description: fdString(formData, "description"),
       type: fdString(formData, "type") ?? undefined,
       categoryKey: fdString(formData, "categoryKey"),
-      fsGroupKey: fdString(formData, "fsGroupKey"),
+      // fsGroupKey intentionally omitted — see note above.
       parentAccountNumber: fdString(formData, "parentAccountNumber"),
       defaultDepartmentCode: fdString(formData, "defaultDepartmentCode"),
       fundApplicability: fundSubmitted ? explicitFund : undefined,
