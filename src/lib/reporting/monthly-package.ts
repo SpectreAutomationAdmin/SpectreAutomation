@@ -1892,6 +1892,12 @@ function buildFinancialHealthBriefing(
  *  without affecting its neighbor. */
 function buildStewardshipTiles(
   metrics?: import("./ratio-registry").JanuaryMetricSet,
+  // MBR-FIX-1 (2026-10-09) — period-derived label replaces the
+  // hardcoded "January 31, 2026 trial-balance snapshot" footer that
+  // appeared on every reporting month regardless of selection.
+  // Optional for backwards compat with any legacy callers in tests;
+  // production always passes it.  See MBR-AUDIT-1 DEF-3.
+  snapshotDateLabel?: string,
 ): NonNullable<MonthlyReportingPackage["stewardshipTiles"]> {
   if (!metrics) {
     return {
@@ -1924,10 +1930,13 @@ function buildStewardshipTiles(
     resolve(metrics.arCurrentPct),
     resolve(metrics.reserveCoverage),
   ];
+  const dateLabel = snapshotDateLabel ?? "trial-balance snapshot";
   return {
     tiles,
     footerNote:
-      "Each tile resolves independently from the January 31, 2026 trial-balance snapshot. Policy targets are not configured for this tenant; benchmark figures remain unavailable until a benchmark source is loaded.",
+      `Each tile resolves independently from the ${dateLabel} trial-balance snapshot. ` +
+      "Policy targets are not configured for this tenant; benchmark figures remain " +
+      "unavailable until a benchmark source is loaded.",
   };
 }
 
@@ -2467,10 +2476,24 @@ export async function getMonthlyReportingPackage(
         periodEnd: reportingPeriod.periodEnd,
       });
       const registryMod = await import("./ratio-registry");
+      // MBR-FIX-1 (2026-10-09) — fiscal-YTD income-statement reads
+      // must match the Jonas snapshot's own `periodStart`
+      // (fiscal-year start), not the current-month start.  Jonas TBs
+      // import with `periodStart = Jan 1`.  Passing Feb 1 (the
+      // current-month start) used to silently fail the YTD-slice
+      // same-day gate in `reportingAccountBalances` and return no
+      // balances, which cascaded into every KPI reading "Unavailable"
+      // on Feb+ periods.  See MBR-AUDIT-1 DEF-4 for the full trace.
+      const fiscalYearStart = new Date(Date.UTC(
+        reportingPeriod.periodEnd.getUTCFullYear(), 0, 1,
+      ));
+      const periodSourceLabel =
+        `${reportingPeriod.monthShort} ${reportingPeriod.year} Jonas Trial Balance`;
       januaryMetricSet = await registryMod.resolveJanuaryMetricSet({
         clubId: club.id,
-        periodStart: reportingPeriod.periodStart,
+        periodStart: fiscalYearStart,
         periodEnd: reportingPeriod.periodEnd,
+        sourceLabel: periodSourceLabel,
       });
     } catch {
       operationsPartial = undefined;
@@ -2925,11 +2948,16 @@ export async function getMonthlyReportingPackage(
     reportingDataAsOfIso,
     // TB-HIST-12B §4-5 — tile-level Stewardship Dashboard, driven
     // by the ratio registry on live tenants only.
-    stewardshipTiles: hasRealData ? buildStewardshipTiles(januaryMetricSet) : null,
+    stewardshipTiles: hasRealData
+      ? buildStewardshipTiles(januaryMetricSet, reportingPeriod.periodEndShortLabel)
+      : null,
     // REPORT-LIVE-1 — Section II authoritative source panel.
     financialPerformanceAuthoritative: hasRealData && januaryMetricSet
       ? {
-          sourceLabel: "Jan 2026 Jonas Trial Balance",
+          // MBR-FIX-1 (2026-10-09) — label + note derived from the
+          // actual reporting period, not a hardcoded "Jan 2026" /
+          // "January" literal.  See MBR-AUDIT-1 DEF-1 / DEF-2.
+          sourceLabel: `${reportingPeriod.monthShort} ${reportingPeriod.year} Jonas Trial Balance`,
           sourceEffectiveDateIso: reportingPeriod.periodEnd.toISOString().slice(0, 10),
           revenueDisplay: januaryMetricSet.revenue.metric.display,
           cogsDisplay: januaryMetricSet.cogs.metric.display,
@@ -2945,9 +2973,9 @@ export async function getMonthlyReportingPackage(
             priorYear: "SOURCE_NOT_LOADED",
           },
           note:
-            "Actual values derive from the committed January Jonas Trial Balance. " +
+            `Actual values derive from the committed ${reportingPeriod.monthLong} Jonas Trial Balance (fiscal YTD). ` +
             "Budget comparison is unavailable (no budget source loaded for this tenant). " +
-            "Prior-year monthly comparison is unavailable (no January 2025 operating snapshot).",
+            `Prior-year monthly comparison is unavailable (no ${reportingPeriod.priorYearLabel} operating snapshot).`,
         }
       : null,
 

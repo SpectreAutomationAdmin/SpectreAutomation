@@ -191,16 +191,34 @@ function metric(opts: {
 // PUBLIC — resolve the January metric set from the committed TB
 // -------------------------------------------------------------------
 
-/** Resolve every Board-level metric for the January reporting period
- *  from the committed Jonas Trial Balance. Called ONCE per package
+/** Resolve every Board-level metric for the reporting period from
+ *  the committed Jonas Trial Balance.  Called ONCE per package
  *  build; downstream chapter builders consume `JanuaryMetricSet`
- *  rather than re-deriving formulas. */
+ *  rather than re-deriving formulas.
+ *
+ *  MBR-FIX-1 (2026-10-09) — `periodStart` MUST be the fiscal-year
+ *  start that the covering Jonas snapshot was imported with
+ *  (`snapshot.periodStart`).  Jonas TBs carry fiscal-YTD windows:
+ *  the Feb 28 snapshot has `periodStart = Jan 1`, not Feb 1.  The
+ *  caller is responsible for resolving the covering snapshot's own
+ *  periodStart (`resolveFiscalYearStart`) before invoking this
+ *  resolver — passing a current-month start used to silently drop
+ *  every income-statement row (see MBR-AUDIT-1 DEF-4).
+ *
+ *  `sourceLabel` is the period-derived string that provenance
+ *  reasons weave into their text ("Feb 2026 Jonas TB · …").  When
+ *  omitted it defaults to "Jonas TB" (period-neutral).  See
+ *  monthly-package.ts for how the label is built from
+ *  `reportingPeriod.monthLong + ' ' + reportingPeriod.year`. */
 export async function resolveJanuaryMetricSet(opts: {
   clubId: string;
   periodStart: Date;
   periodEnd: Date;
+  /** MBR-FIX-1 — e.g. "Feb 2026 Jonas Trial Balance". */
+  sourceLabel?: string;
 }): Promise<JanuaryMetricSet> {
   const { clubId, periodStart, periodEnd } = opts;
+  const srcLabel = opts.sourceLabel ?? "Jonas Trial Balance";
 
   // ---------------------------------------------------------
   // Income Statement reads (exact-period match)
@@ -380,7 +398,7 @@ export async function resolveJanuaryMetricSet(opts: {
       provenance: isAvailable
         ? (revenue.isZero()
             ? inputMissing("Snapshot period has no REVENUE rows")
-            : AVAILABLE_REASON("Jan Jonas TB · sum(REVENUE naturalBalance)"))
+            : AVAILABLE_REASON(`${srcLabel} · sum(REVENUE naturalBalance)`))
         : inputMissing("No committed TB snapshot covering the period"),
     }),
     cogs: metric({
@@ -390,7 +408,7 @@ export async function resolveJanuaryMetricSet(opts: {
       value: isAvailable ? cogs : null,
       display: isAvailable ? fmtMoneyDec(cogs) : "Unavailable",
       provenance: isAvailable
-        ? AVAILABLE_REASON("Jan Jonas TB · IS_COGS classification")
+        ? AVAILABLE_REASON(`${srcLabel} · IS_COGS classification`)
         : inputMissing("No committed TB snapshot covering the period"),
     }),
     opex: metric({
@@ -400,7 +418,7 @@ export async function resolveJanuaryMetricSet(opts: {
       value: isAvailable ? opex : null,
       display: isAvailable ? fmtMoneyDec(opex) : "Unavailable",
       provenance: isAvailable
-        ? AVAILABLE_REASON("Jan Jonas TB · EXPENSE accounts classified non-COGS")
+        ? AVAILABLE_REASON(`${srcLabel} · EXPENSE accounts classified non-COGS`)
         : inputMissing("No committed TB snapshot covering the period"),
     }),
     noi: metric({
@@ -436,7 +454,7 @@ export async function resolveJanuaryMetricSet(opts: {
       value: duesToRevenuePct,
       display: fmtPct(duesToRevenuePct),
       provenance: duesToRevenuePct != null
-        ? AVAILABLE_REASON("Jan Jonas TB · DUES_AND_CHARGES dimensional ÷ total REVENUE")
+        ? AVAILABLE_REASON(`${srcLabel} · DUES_AND_CHARGES dimensional ÷ total REVENUE`)
         : (revenueNum === 0
             ? denominatorZero("Dues-to-Revenue requires non-zero revenue")
             : inputMissing("DUES_AND_CHARGES dimensional revenue not present on this snapshot")),
@@ -450,7 +468,7 @@ export async function resolveJanuaryMetricSet(opts: {
       value: payrollRatioPct,
       display: fmtPct(payrollRatioPct),
       provenance: payrollRatioPct != null
-        ? AVAILABLE_REASON("Jan Jonas TB · IS_PAYROLL ÷ total REVENUE")
+        ? AVAILABLE_REASON(`${srcLabel} · IS_PAYROLL ÷ total REVENUE`)
         : (revenueNum === 0
             ? denominatorZero("Payroll ratio requires non-zero revenue")
             : inputMissing("No accounts classified IS_PAYROLL on this snapshot")),

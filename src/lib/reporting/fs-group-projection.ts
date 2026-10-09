@@ -210,11 +210,35 @@ export async function resolveFsGroupProjection(args: {
 
   const fiscalYearStart = new Date(Date.UTC(fiscalYear, 0, 1));
 
-  // -- Load Actual (CM window + YTD window) via the canonical
-  //    reportingAccountBalances resolver that ratio-registry uses.
-  const [cmActualResult, ytdActualResult] = await Promise.all([
-    reportingAccountBalances(clubId, { from: period.periodStart, to: periodEnd }),
+  // -- Load Actual via the canonical reportingAccountBalances
+  //    resolver that ratio-registry uses.
+  //
+  //    MBR-FIX-1 (2026-10-09) — current-month (CM) activity is now
+  //    derived from the fiscal-YTD snapshot DIFFERENCE
+  //    (`ytdActual − priorYtdActual`) instead of a direct
+  //    `{ from: periodStart, to: periodEnd }` query.  Jonas Trial
+  //    Balance snapshots are imported with
+  //    `snapshot.periodStart = fiscal-year start`, so the YTD-slice
+  //    matcher in `reportingAccountBalances` only serves a slice when
+  //    `filter.from === snapshot.periodStart`.  Passing a current-
+  //    month start (e.g. Feb 1) used to silently drop every IS row
+  //    on Feb+ periods, leaving Statement of Activities and every
+  //    FS-Group dependent surface empty.  See MBR-AUDIT-1 DEF-4.
+  //
+  //    The subtraction preserves the identity:
+  //      CM(month N) = YTD(month N) − YTD(month N − 1)
+  //    with the edge case `isFirstFiscalMonth` → CM = YTD (no prior
+  //    snapshot in this fiscal year).
+  const isFirstFiscalMonth = periodEnd.getUTCMonth() === 0;
+  const priorMonthEnd = new Date(Date.UTC(
+    periodEnd.getUTCFullYear(), periodEnd.getUTCMonth(), 0,
+    23, 59, 59, 999,
+  ));
+  const [ytdActualResult, priorYtdActualResult] = await Promise.all([
     reportingAccountBalances(clubId, { from: fiscalYearStart, to: periodEnd }),
+    isFirstFiscalMonth
+      ? Promise.resolve(null)
+      : reportingAccountBalances(clubId, { from: fiscalYearStart, to: priorMonthEnd }),
   ]);
 
   // -- Load Budget. YTD = sum through throughMonth; CM = monthlyTotals[throughMonth-1].
@@ -233,8 +257,10 @@ export async function resolveFsGroupProjection(args: {
   //    preview and the active package build consume this as-of
   //    resolver.
   const accountNumbers = new Set<string>();
-  for (const r of cmActualResult.balances) accountNumbers.add(r.accountNumber);
   for (const r of ytdActualResult.balances) accountNumbers.add(r.accountNumber);
+  if (priorYtdActualResult) {
+    for (const r of priorYtdActualResult.balances) accountNumbers.add(r.accountNumber);
+  }
   for (const b of budgetResult.byAccount) accountNumbers.add(b.accountNumber);
 
   const accounts = await prisma.account.findMany({
@@ -291,6 +317,11 @@ export async function resolveFsGroupProjection(args: {
     ytdActual: number;
     ytdBudget: number;
     annualBudget: number;
+    // MBR-FIX-1 (2026-10-09) — transient prior-month YTD actual
+    // used by the CM subtraction pass.  Not emitted on the public
+    // projection shape — only consumed inside `resolveFsGroupProjection`
+    // to compute `cmActual = ytdActual − priorYtdActual`.
+    priorYtdActual: number;
   };
   const acctAgg = new Map<string, AcctAgg>();
 
@@ -321,6 +352,7 @@ export async function resolveFsGroupProjection(args: {
       ytdActual: 0,
       ytdBudget: 0,
       annualBudget: 0,
+      priorYtdActual: 0,
     };
     acctAgg.set(accountNumber, agg);
     return agg;
@@ -329,15 +361,32 @@ export async function resolveFsGroupProjection(args: {
   // Actual amounts arrive as Prisma.Decimal naturalBalance. Convert to
   // Number — Section IV already uses number arithmetic throughout the
   // v2 schema, so keeping Number here avoids a cross-type refactor.
-  for (const r of cmActualResult.balances) {
-    const a = ensureAgg(r.accountNumber);
-    if (!a) continue;
-    a.cmActual += Number(r.naturalBalance.toString());
-  }
+  //
+  // MBR-FIX-1 (2026-10-09) — Pass 1 reads YTD into `ytdActual` and
+  // Pass 2 reads prior-month YTD into a transient `priorYtd` on the
+  // agg (initialised to 0 in `ensureAgg`).  CM is then derived
+  // `cmActual = ytdActual − priorYtd` after both passes complete.
+  // Accounts that only exist in the prior-month snapshot (e.g. an
+  // account retired this month that still has prior-YTD activity)
+  // still get an agg entry so their reversal shows up in CM.
   for (const r of ytdActualResult.balances) {
     const a = ensureAgg(r.accountNumber);
     if (!a) continue;
     a.ytdActual += Number(r.naturalBalance.toString());
+  }
+  if (priorYtdActualResult) {
+    for (const r of priorYtdActualResult.balances) {
+      const a = ensureAgg(r.accountNumber);
+      if (!a) continue;
+      a.priorYtdActual += Number(r.naturalBalance.toString());
+    }
+  }
+  // Derive CM from the YTD difference for every account the
+  // aggregation touched.  First fiscal month → CM === YTD.
+  for (const a of acctAgg.values()) {
+    a.cmActual = isFirstFiscalMonth
+      ? a.ytdActual
+      : a.ytdActual - a.priorYtdActual;
   }
   for (const b of budgetResult.byAccount) {
     const a = ensureAgg(b.accountNumber);

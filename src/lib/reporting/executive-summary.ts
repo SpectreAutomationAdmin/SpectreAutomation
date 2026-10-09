@@ -305,6 +305,32 @@ function buildCapitalIncomeCard(input: AccountingMetricInput): KpiCard {
 }
 
 function buildReserveCoverageCard(input: AccountingMetricInput): KpiCard {
+  // MBR-FIX-1 (2026-10-09) — on live tenants with no reserve
+  // classification committed, `buildExecutiveSummaryInputFromSnapshots`
+  // now emits `actual: NaN` as an explicit "unavailable" sentinel
+  // (the demo input builder keeps `dataSource: "demo"` for a real
+  // seeded 1.42x, so we cannot use `dataSource === "demo"` as the
+  // signal).  Rendering `formatRatio(0)` as "0.00x" was the
+  // misleading fallback the founder flagged in MBR-AUDIT-1 DEF-5:
+  // a Board member reads "0.00x" as a real zero when in fact
+  // Reserve Coverage is Unavailable (no `BS_CAPITAL_RESERVE`
+  // account classified + no reserve policy).  NaN is produced by
+  // the live-input builder only; the demo builder always supplies
+  // a finite number.
+  if (!Number.isFinite(input.actual)) {
+    return {
+      key: "reserve-coverage",
+      label: "Reserve Coverage",
+      value: "Unavailable",
+      context: "Reserve balance relative to three-year average capital spend.",
+      comparison: {
+        label: "Policy target",
+        value: "Pending",
+        variance: "reserve classification + policy not configured",
+      },
+      tone: "neutral",
+    };
+  }
   if (input.comparator === null) {
     return {
       key: "reserve-coverage",
@@ -955,7 +981,13 @@ export function buildExecutiveSummaryInputFromSnapshots(args: {
       dataSource: accountingTag,
     },
     reserveCoverage: {
-      actual: aux.reserveCoverage.actual ?? 0,
+      // MBR-FIX-1 (2026-10-09) — explicit NaN sentinel when the
+      // live reserve is unavailable so `buildReserveCoverageCard`
+      // renders "Unavailable" instead of the misleading
+      // `formatRatio(0) === "0.00x"` seen in MBR-AUDIT-1.  The
+      // demo input path always supplies a finite number, so this
+      // branch runs only on the live-tenant snapshots path.
+      actual: aux.reserveCoverage.actual ?? Number.NaN,
       comparator: aux.reserveCoverage.floor,
       dataSource: aux.reserveCoverage.actual === null ? "demo" : "derived",
     },
