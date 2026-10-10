@@ -261,6 +261,11 @@ type DeptRow = {
   revenue: { toString: () => string };
   cogs: { toString: () => string };
   opex: { toString: () => string };
+  /** MBR-FIX-2E (2026-10-10) — additive subset of `opex` carrying
+   *  the department's IS_PAYROLL spend.  `netIncome` identity stays
+   *  `revenue − cogs − opex`; payroll is surfaced as its own row
+   *  for Section X readability. */
+  payroll: { toString: () => string };
   netIncome: { toString: () => string };
 };
 
@@ -285,8 +290,18 @@ export function buildCouleeDepartmentalPLSummary(opts: {
   clubName: string;
   period: ReportingPeriod;
   rows: ReadonlyArray<DeptRow>;
+  /** MBR-FIX-2E (2026-10-10) — per-dept budgeted operating NOI
+   *  Before Depreciation, keyed by uppercase departmentCode.
+   *  Supplied by the canonical budget resolver's
+   *  `byDepartmentOperatingNoi`.  When present AND non-null for a
+   *  dept, the card renders Budget YTD + Variance rows.  When
+   *  empty / dept not found → "Unavailable" (preserves back-compat
+   *  for tenants without a committed budget). */
+  budgetByDeptCode?: ReadonlyMap<string, number>;
 }): DepartmentalPLSummary {
   const { period, clubName, rows } = opts;
+  const budgetByDeptCode = opts.budgetByDeptCode ?? new Map<string, number>();
+  const budgetConnected = budgetByDeptCode.size > 0;
 
   // Build one card per real Spectre Department. Nondepartmental (null
   // departmentCode) rolls up here as its own card too — this surface
@@ -298,6 +313,24 @@ export function buildCouleeDepartmentalPLSummary(opts: {
     const pillLabel = netVal >= 0
       ? `+${fmtMoney(r.netIncome)} YTD`
       : `${fmtMoney(r.netIncome)} YTD`;
+
+    // MBR-FIX-2E — resolve budget YTD for this dept from the
+    // supplied map.  Non-dept rows (null code) never carry a
+    // budget — "Unavailable" sentinel renders instead.
+    const budgetYtd = r.departmentCode
+      ? budgetByDeptCode.get(r.departmentCode.toUpperCase())
+      : undefined;
+    const hasBudget = budgetYtd != null && Number.isFinite(budgetYtd);
+    const varianceVal = hasBudget ? netVal - (budgetYtd as number) : null;
+
+    const fmtVariance = (v: number): string => {
+      const abs = Math.abs(v);
+      const sign = v >= 0 ? "+" : "−";
+      return `${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+    const fmtPlain = (v: number): string =>
+      `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
     return {
       key: (r.departmentCode ?? "nondepartmental").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name: r.departmentName,
@@ -305,14 +338,22 @@ export function buildCouleeDepartmentalPLSummary(opts: {
       rows: [
         { key: "revenue",      label: "Revenue",              value: fmtMoney(r.revenue),  tone: toneForSigned(r.revenue, false) },
         { key: "cost-of-sales", label: "Cost of Sales",       value: fmtMoney(r.cogs) },
+        { key: "payroll",      label: "Payroll & Benefits",   value: fmtMoney(r.payroll) },
         { key: "operating-expenses", label: "Operating Expenses", value: fmtMoney(r.opex) },
         { key: "net-income",   label: "Net Income",           value: fmtMoney(r.netIncome), tone: netTone },
-        // TB-HIST-11 §2 — Budget / Variance explicitly unavailable
-        // (Coulee has no committed budget source yet). Rows render
-        // the "—" sentinel + neutral tone so the eye reads them as
-        // "data not available", not as $0 budget.
-        { key: "budget-ytd",   label: "Budget YTD",           value: "Unavailable" },
-        { key: "variance-vs-budget", label: "Variance vs. Budget", value: "Unavailable" },
+        {
+          key: "budget-ytd",
+          label: "Budget YTD",
+          value: hasBudget ? fmtPlain(budgetYtd as number) : "Unavailable",
+        },
+        {
+          key: "variance-vs-budget",
+          label: "Variance vs. Budget",
+          value: varianceVal != null ? fmtVariance(varianceVal) : "Unavailable",
+          tone: varianceVal == null
+            ? undefined
+            : varianceVal >= 0 ? "favorable" : "risk",
+        },
       ],
     };
   });
@@ -322,15 +363,17 @@ export function buildCouleeDepartmentalPLSummary(opts: {
     eyebrow: `${clubName} · Departmental Detail`,
     title: "Departmental P&L Summary",
     periodLabel: period.statementHeaderLabel,
-    introNote:
-      "How each department is performing in the current period. Values are sourced directly from the committed historical trial balance; budget comparisons are shown as unavailable until a budget source is loaded.",
+    introNote: budgetConnected
+      ? "How each department is performing in the current period. Values are sourced directly from the committed historical trial balance; budget comparisons use the committed FY budget."
+      : "How each department is performing in the current period. Values are sourced directly from the committed historical trial balance; budget comparisons are shown as unavailable until a budget source is loaded.",
     statementNumber: "Statement 08 of 14",
     documentChip: "Departmental Detail",
     preparedFor: "Management Level",
     managementNotice: {
       eyebrow: "Management Document",
-      body:
-        "This statement renders real department-level activity from the committed Jonas Trial Balance snapshot. The Board sees the combined Income Statement; this surface decomposes it by Spectre Department. Budget comparisons are omitted until a tenant budget importer lands.",
+      body: budgetConnected
+        ? "This statement renders real department-level activity from the committed Jonas Trial Balance snapshot alongside the committed FY budget.  The Board sees the combined Income Statement; this surface decomposes it by Spectre Department."
+        : "This statement renders real department-level activity from the committed Jonas Trial Balance snapshot.  The Board sees the combined Income Statement; this surface decomposes it by Spectre Department.  Budget comparisons are omitted until a tenant budget importer lands.",
     },
     cards,
     notes: {

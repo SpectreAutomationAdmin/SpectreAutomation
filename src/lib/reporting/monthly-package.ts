@@ -2897,15 +2897,51 @@ export async function getMonthlyReportingPackage(
   // acceptance; this call site does not need to re-prove it.
   let departmentalPLSummary: ReturnType<typeof buildSilverSpringsDepartmentalPLSummary>;
   if (hasRealData) {
+    // MBR-FIX-2E (2026-10-10) — pass fiscal-year start to the dept
+    // resolver.  Reporting-period's `periodStart` defaults to the
+    // current-month start (Feb 1 on Feb package), which hits the
+    // same DEF-4 YTD-slice `sameDay(snapshot.periodStart, filter.from)`
+    // gate the ratio-registry hit — the Jonas TB snapshot carries
+    // `periodStart = Jan 1`, so Feb 1 fails the match and the
+    // resolver returned empty balances → Section X showed only a
+    // "Nondepartmental $0" placeholder.  Match the fix MBR-FIX-1 /
+    // 2B / 2A / 2C / 2D applied in every other reporting path:
+    // compute fiscal-year start from the reporting-period year.
+    const deptFiscalYearStart = new Date(Date.UTC(
+      reportingPeriod.periodEnd.getUTCFullYear(), 0, 1,
+    ));
     const deptPL = await incomeStatementByDepartmentFromSnapshot(
       club.id,
-      reportingPeriod.periodStart,
+      deptFiscalYearStart,
       reportingPeriod.periodEnd,
     );
+    // MBR-FIX-2E — budget per-department from the canonical resolver.
+    // The chapter builder renders Budget YTD + Variance rows if we
+    // supply a per-dept-code map (empty map keeps the pre-fix
+    // "Unavailable" semantics).
+    const budgetByDeptCode = new Map<string, number>();
+    try {
+      const { resolveBudget } = await import("./budget-resolver");
+      const throughMonth = reportingPeriod.periodEnd.getUTCMonth() + 1;
+      const b = await resolveBudget({
+        clubId: club.id,
+        fiscalYear: reportingPeriod.periodEnd.getUTCFullYear(),
+        throughMonth,
+      });
+      if (b.budget) {
+        for (const row of b.byDepartmentOperatingNoi) {
+          if (row.departmentCode == null) continue;
+          budgetByDeptCode.set(row.departmentCode.toUpperCase(), row.ytdNoi);
+        }
+      }
+    } catch {
+      /* budget resolver unavailable → leave map empty, "Unavailable" renders */
+    }
     departmentalPLSummary = buildCouleeDepartmentalPLSummary({
       clubName: club.name,
       period: reportingPeriod,
       rows: deptPL.rows,
+      budgetByDeptCode,
     });
   } else {
     departmentalPLSummary = buildSilverSpringsDepartmentalPLSummary({

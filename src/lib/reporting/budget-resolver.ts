@@ -92,6 +92,24 @@ export type ResolveBudgetResult = {
     ytdTotal: number;
     annualTotal: number;
   }>;
+  /** MBR-FIX-2E (2026-10-10) — per-department operating NOI Before
+   *  Depreciation (authoritative NOI definition — operating-fund
+   *  only, excludes `IS_DEPRECIATION` + `IS_INTEREST_EXPENSE`,
+   *  display-sign so revenue is positive).  Keyed by
+   *  departmentCode.  Null-dept rows (budget lines with no
+   *  department) are reported under `departmentCode: null`.  Values
+   *  are DOLLARS in the display convention: `ytdNoi > 0` = planned
+   *  departmental surplus; `< 0` = planned departmental loss. */
+  byDepartmentOperatingNoi: Array<{
+    departmentCode: string | null;
+    departmentName: string | null;
+    monthlyNoi: number[];
+    ytdNoi: number;
+    annualNoi: number;
+    monthlyPayroll: number[];
+    ytdPayroll: number;
+    annualPayroll: number;
+  }>;
 };
 
 export const DEFAULT_BUDGET_NAME = "Coulee 2026 Operating Budget";
@@ -131,6 +149,7 @@ export async function resolveBudget(
       byDepartment: [],
       byAccount: [],
       byFsGroup: [],
+      byDepartmentOperatingNoi: [],
     };
   }
 
@@ -273,6 +292,69 @@ export async function resolveBudget(
     annualTotal: v.annualTotal,
   }));
 
+  // ---------- By department · OPERATING NOI Before Depreciation ----------
+  // MBR-FIX-2E (2026-10-10) — per-dept operating NOI Before Dep for
+  // Section X Departmental P&L.  Operating-fund only; excludes
+  // IS_DEPRECIATION + IS_INTEREST_EXPENSE; display-sign.
+  //
+  //   per-month per-account contribution:
+  //     REVENUE  → +(-monthly[m])    (credit-normal → flip to positive)
+  //     EXPENSE  → -(monthly[m])     (debit-normal, subtracted from NOI)
+  //
+  //   depreciation + financing expenses: SKIPPED (not part of NOI).
+  //   payroll (subset of OpEx):          tallied additively on
+  //                                       `monthlyPayroll[]`.
+  type NoiAgg = {
+    departmentCode: string | null;
+    departmentName: string | null;
+    monthlyNoi: number[];
+    monthlyPayroll: number[];
+  };
+  const noiMap = new Map<string | null, NoiAgg>();
+  const noiKeyFor = (l: Line): string | null => l.departmentCode ?? null;
+  for (const l of parsed) {
+    if (!isOperatingFundTag(l.fundApplicability)) continue;
+    if (l.accountType !== "REVENUE" && l.accountType !== "EXPENSE") continue;
+    const key = noiKeyFor(l);
+    let agg = noiMap.get(key);
+    if (!agg) {
+      agg = {
+        departmentCode: l.departmentCode,
+        departmentName: l.departmentName,
+        monthlyNoi: Array(12).fill(0),
+        monthlyPayroll: Array(12).fill(0),
+      };
+      noiMap.set(key, agg);
+    }
+    const key2 = l.fsGroupKey ?? "";
+    const isDepOrFin = key2 === "IS_DEPRECIATION" || key2 === "IS_INTEREST_EXPENSE";
+    if (isDepOrFin) continue;
+    const sign = l.accountType === "REVENUE" ? -1 : 1;
+    // Display-sign: REVENUE contributes +amt, EXPENSE contributes −amt
+    //   contrib_display = -sign * monthly[m]  because:
+    //     REVENUE  sign = -1  →  contrib = +monthly   (monthly is credit-normal negative → +(-x) = -x, hmm)
+    // Simpler: compute NI identity directly: NI = −Σ(signed) = −monthly for all P&L lines.
+    //   For REVENUE: monthly is negative → NI += -monthly = +|rev|.
+    //   For EXPENSE: monthly is positive → NI += -monthly = -|exp|.
+    void sign;
+    for (let m = 0; m < 12; m++) {
+      agg.monthlyNoi[m] += -l.monthly[m];
+    }
+    if (key2 === "IS_PAYROLL") {
+      for (let m = 0; m < 12; m++) agg.monthlyPayroll[m] += l.monthly[m];
+    }
+  }
+  const byDepartmentOperatingNoi = Array.from(noiMap.values()).map((a) => ({
+    departmentCode: a.departmentCode,
+    departmentName: a.departmentName,
+    monthlyNoi: a.monthlyNoi,
+    ytdNoi: a.monthlyNoi.slice(0, throughMonth).reduce((s, x) => s + x, 0),
+    annualNoi: a.monthlyNoi.reduce((s, x) => s + x, 0),
+    monthlyPayroll: a.monthlyPayroll,
+    ytdPayroll: a.monthlyPayroll.slice(0, throughMonth).reduce((s, x) => s + x, 0),
+    annualPayroll: a.monthlyPayroll.reduce((s, x) => s + x, 0),
+  }));
+
   return {
     budget: {
       id: budget.id,
@@ -287,6 +369,7 @@ export async function resolveBudget(
     byDepartment,
     byAccount,
     byFsGroup,
+    byDepartmentOperatingNoi,
   };
 }
 
