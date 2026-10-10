@@ -1065,7 +1065,37 @@ async function resolveSnapshotsForExecutiveSummary(args: {
   // snapshot's `periodStart` (populated by v14.11 synth to the
   // covering fiscal year start) so the IS query returns the full
   // YTD window even for mid-year periods.
+  //
+  // MBR-FIX-2C (2026-10-10) — cached IS snapshot bypass.
+  //
+  // The cached `IncomeStatementSnapshot` is served from
+  // `ReportingLedgerSnapshot` where `entityKind = "income-statement"`.
+  // Any snapshot written BEFORE MBR-FIX-2C used the pre-fix NOI
+  // formula (depreciation + interest expense silently subtracted
+  // from NOI Before Depreciation when the account number didn't
+  // match the hardcoded 6500-6599 depreciation range).  Serving a
+  // stale cached snapshot would persist the $2.48M vs $2.54M
+  // discrepancy the founder flagged.
+  //
+  // Fix: ALWAYS run the IS Projection first.  The projection is
+  // idempotent-by-payload-hash — identical content produces no new
+  // write; different content writes a new snapshot with a newer
+  // `capturedAt` which the ledger's "latest capturedAt wins" read
+  // then serves.  One extra Prisma read per package build is a
+  // negligible cost vs the correctness guarantee.
   const directBs = await args.ledger.getBalanceSheet(args.clubId, asOf);
+  const isProjInline = new IncomeStatementProjection({
+    ledger: args.ledger,
+    writer: args.ledger,
+  });
+  await isProjInline.getIncomeStatementSnapshot({
+    clubId: args.clubId,
+    periodStart: tb.periodStart,
+    periodEnd: asOf,
+    fiscalYearLabel: tb.fiscalYearLabel,
+    fiscalPeriodSequence: tb.fiscalPeriodSequence,
+    mode: "ytd",
+  });
   const directIs = await args.ledger.getIncomeStatement(
     args.clubId,
     tb.periodStart,
