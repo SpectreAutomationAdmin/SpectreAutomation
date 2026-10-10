@@ -309,11 +309,13 @@ export class IncomeStatementProjection {
     const accountCodes = Array.from(currentLinesByCode.keys());
     const fsGroupKeyByCode = new Map<string, string | null>();
     const fundApplicabilityByCode = new Map<string, string | null>();
+    const spectreTypeByCode = new Map<string, string>();
     try {
       const rows = await prisma.account.findMany({
         where: { clubId: input.clubId, accountNumber: { in: accountCodes } },
         select: {
           accountNumber: true,
+          type: true,
           fundApplicability: true,
           fsGroup: { select: { key: true } },
         },
@@ -321,6 +323,7 @@ export class IncomeStatementProjection {
       for (const r of rows) {
         fsGroupKeyByCode.set(r.accountNumber, r.fsGroup?.key ?? null);
         fundApplicabilityByCode.set(r.accountNumber, r.fundApplicability ?? null);
+        spectreTypeByCode.set(r.accountNumber, r.type);
       }
     } catch {
       /* Enrichment unavailable — proceed with payload-only metadata. */
@@ -339,7 +342,22 @@ export class IncomeStatementProjection {
     for (const tbLine of currentLinesByCode.values()) {
       const account = currentAccountsByCode.get(tbLine.accountCode);
       if (!account) continue; // (shouldn't happen — TB invariant)
-      if (account.category !== "revenue" && account.category !== "expense") {
+      // MBR-FIX-2C — authoritative category.  The TB payload's
+      // `category` is derived by the Jonas import's account-number
+      // range rules (5000-8999 → expense), which misclassifies
+      // Spectre REVENUE accounts whose number falls in that range
+      // (e.g. 7000 "LRP Capital Improvement Dues" is a Spectre
+      // REVENUE account that Jonas labelled expense).  Spectre's
+      // Account.type is the source of truth — override the payload
+      // category when the enrichment lookup supplies a different
+      // type.  `category` stays lower-case throughout the resolver;
+      // Spectre's type is upper-case so we normalise.
+      const spectreType = spectreTypeByCode.get(tbLine.accountCode);
+      const authoritativeCategory: typeof account.category =
+        spectreType === "REVENUE" ? "revenue"
+          : spectreType === "EXPENSE" ? "expense"
+            : account.category;
+      if (authoritativeCategory !== "revenue" && authoritativeCategory !== "expense") {
         continue; // skip BS accounts
       }
 
@@ -379,7 +397,7 @@ export class IncomeStatementProjection {
         {
           accountNumber: account.accountCode,
           accountName: account.accountName,
-          accountCategory: account.category,
+          accountCategory: authoritativeCategory,
           accountFundApplicability: normalisedFundApplicability,
         },
         this.mapping,
@@ -426,13 +444,13 @@ export class IncomeStatementProjection {
         unmappedFundAccounts.push({
           accountCode: mapped.accountCode,
           accountName: mapped.accountName,
-          category: account.category,
+          category: authoritativeCategory,
           amount,
         });
         isLines.push({
           accountCode: mapped.accountCode,
           accountName: mapped.accountName,
-          category: account.category,
+          category: authoritativeCategory,
           fund: "operating",
           departmentCode: mapped.departmentCode,
           amount,
@@ -462,7 +480,7 @@ export class IncomeStatementProjection {
       isLines.push({
         accountCode: mapped.accountCode,
         accountName: mapped.accountName,
-        category: bucketToCategory(effectiveBucket, account.category),
+        category: bucketToCategory(effectiveBucket, authoritativeCategory),
         fund,
         departmentCode: mapped.departmentCode,
         amount,
