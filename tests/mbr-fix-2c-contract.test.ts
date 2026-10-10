@@ -46,14 +46,24 @@ describe("MBR-FIX-2C §A — Prisma lookup for fsGroupKey", () => {
 
   it("batched lookup over currentLinesByCode keys", () => {
     expect(src).toMatch(/const accountCodes = Array\.from\(currentLinesByCode\.keys\(\)\);/);
-    expect(src).toMatch(
-      /prisma\.account\.findMany\(\{\s*where: \{ clubId: input\.clubId, accountNumber: \{ in: accountCodes \} \},\s*select: \{ accountNumber: true, fsGroup: \{ select: \{ key: true \} \} \},\s*\}\)/,
-    );
+    expect(src).toMatch(/prisma\.account\.findMany\(\{/);
+    expect(src).toMatch(/accountNumber: \{ in: accountCodes \}/);
+    expect(src).toMatch(/fsGroup: \{ select: \{ key: true \} \}/);
+    // MBR-FIX-2C — fundApplicability must also come through so
+    // capital-fund promotion fires on Jonas-imported snapshots.
+    expect(src).toMatch(/fundApplicability: true/);
   });
 
-  it("results projected into a per-account Map<string, string | null>", () => {
+  it("results projected into per-account Maps for fsGroupKey + fundApplicability", () => {
     expect(src).toMatch(/const fsGroupKeyByCode = new Map<string, string \| null>\(\);/);
+    expect(src).toMatch(/const fundApplicabilityByCode = new Map<string, string \| null>\(\);/);
     expect(src).toMatch(/fsGroupKeyByCode\.set\(r\.accountNumber, r\.fsGroup\?\.key \?\? null\);/);
+    expect(src).toMatch(/fundApplicabilityByCode\.set\(r\.accountNumber, r\.fundApplicability \?\? null\);/);
+  });
+
+  it("mapper call uses the enriched fundApplicability when available", () => {
+    expect(src).toMatch(/const enrichedFundApplicability =\s*fundApplicabilityByCode\.get\(account\.accountCode\) \?\? payloadFundApplicability;/);
+    expect(src).toMatch(/accountFundApplicability: enrichedFundApplicability,/);
   });
 });
 
@@ -123,6 +133,6 @@ describe("MBR-FIX-2C §F — graceful degradation when Prisma unavailable", () =
     expect(idx).toBeGreaterThan(0);
     const block = src.slice(idx, idx + 1500);
     expect(block).toMatch(/try \{[\s\S]+?prisma\.account\.findMany\(/);
-    expect(block).toMatch(/\} catch \{[\s\S]+?fsGroup lookup unavailable/);
+    expect(block).toMatch(/\} catch \{[\s\S]+?Enrichment unavailable/);
   });
 });

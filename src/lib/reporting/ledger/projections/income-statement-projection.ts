@@ -288,29 +288,42 @@ export class IncomeStatementProjection {
       noi: 0,
     };
 
-    // MBR-FIX-2C (2026-10-10) — load the fsGroup.key for every
-    // operating revenue/expense account in the current TB.  Used
-    // to promote IS_DEPRECIATION-tagged accounts from the range-
-    // bucketed `operating-expense` to the `depreciation` bucket
-    // (so they are correctly carved out of NOI) and to tally
-    // IS_INTEREST_EXPENSE-tagged accounts in a `financing` side-
-    // bucket (so they are carved out of NOI without altering the
-    // operating-expense roll-up).  Guarded try/catch: when Prisma
-    // isn't reachable (unit tests with in-memory ledger), the
-    // lookup silently degrades to an empty map and the resolver
-    // falls back to the pre-fix range-only bucketing path.
+    // MBR-FIX-2C (2026-10-10) — authoritative-metadata enrichment.
+    //
+    // The Jonas-imported TB payload does NOT carry fsGroup.key or
+    // Account.fundApplicability on individual `account` entries
+    // (confirmed via `scratchpad/mbr-fix-2c-payload-check.js`).
+    // Without these:
+    //   • IS_DEPRECIATION / IS_INTEREST_EXPENSE promotion silently
+    //     fails, understating NOI by $92K on Coulee Feb 2026.
+    //   • Capital-fund accounts (fundApplicability = CAPITAL) land
+    //     under their account-number range bucket instead of being
+    //     promoted to `capital-income` / `capital-expense`, inflating
+    //     operating revenue by ~$190K on Coulee Feb 2026.
+    //
+    // Both failures previously cancelled out via a lossy pre-fix NOI
+    // formula.  MBR-FIX-2C restores both signals with a single bulk
+    // Prisma lookup (one `findMany` across every account code in
+    // the current TB), guarded against unit-test paths that use the
+    // in-memory ledger (no Prisma in scope).
     const accountCodes = Array.from(currentLinesByCode.keys());
     const fsGroupKeyByCode = new Map<string, string | null>();
+    const fundApplicabilityByCode = new Map<string, string | null>();
     try {
       const rows = await prisma.account.findMany({
         where: { clubId: input.clubId, accountNumber: { in: accountCodes } },
-        select: { accountNumber: true, fsGroup: { select: { key: true } } },
+        select: {
+          accountNumber: true,
+          fundApplicability: true,
+          fsGroup: { select: { key: true } },
+        },
       });
       for (const r of rows) {
         fsGroupKeyByCode.set(r.accountNumber, r.fsGroup?.key ?? null);
+        fundApplicabilityByCode.set(r.accountNumber, r.fundApplicability ?? null);
       }
     } catch {
-      /* fsGroup lookup unavailable — proceed with range-only bucketing. */
+      /* Enrichment unavailable — proceed with payload-only metadata. */
     }
 
     const unmappedFundAccounts: Array<{
@@ -330,19 +343,19 @@ export class IncomeStatementProjection {
         continue; // skip BS accounts
       }
 
+      // MBR-FIX-2C — resolve fundApplicability from Prisma if the
+      // payload didn't carry it (Jonas path), falling back to the
+      // payload value when enrichment is unavailable.
+      const payloadFundApplicability =
+        (account as LedgerAccount & { fundApplicability?: string | null }).fundApplicability ?? null;
+      const enrichedFundApplicability =
+        fundApplicabilityByCode.get(account.accountCode) ?? payloadFundApplicability;
       const mapped = mapIncomeStatementAccount(
         {
           accountNumber: account.accountCode,
           accountName: account.accountName,
           accountCategory: account.category,
-          // Founder rule 2026-07-02 v15.0 — Fund Applicability is
-          // sourced from the CoA (`LedgerAccount.fund` field is
-          // populated by the projection reader from the stored
-          // fundApplicability). Legacy snapshot readers that
-          // haven't caught up to v15.0 pass an empty string
-          // here — the mapper treats that as "not set" and
-          // routes the line to the unmapped-fund diagnostic.
-          accountFundApplicability: (account as LedgerAccount & { fundApplicability?: string | null }).fundApplicability ?? null,
+          accountFundApplicability: enrichedFundApplicability,
         },
         this.mapping,
       );
