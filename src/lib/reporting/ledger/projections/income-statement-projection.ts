@@ -39,6 +39,17 @@ import type {
 } from "@/lib/reporting/ledger/contracts";
 import type { ReportingLedger } from "@/lib/reporting/ledger/read-api";
 import type { ReportingLedgerWriter } from "@/lib/reporting/ledger/write-api";
+// MBR-FIX-2C (2026-10-10) — Prisma lookup used to enrich accounts
+// with their authoritative `fsGroupKey` for NOI classification.  The
+// TB payload the ledger abstraction returns does not carry fsGroupKey
+// (Jonas import path predates v15.15 account-level enrichment), so
+// bucketing solely by account-number ranges misclassified Coulee's
+// 6115 "Depreciation" and 6083 "Interest Expense" as operating
+// expense — understating NOI Before Depreciation by $92,136.19 on
+// the Feb 2026 package vs the fsGroup-aware resolvers.  Lookup is
+// batched + guarded; a Prisma failure degrades gracefully to the
+// pre-fix range-only path.
+import { prisma } from "@/lib/prisma";
 
 import {
   DEFAULT_INCOME_STATEMENT_MAPPING,
@@ -63,13 +74,27 @@ export type IncomeStatementMappingError = {
 /**
  * Per-bucket dollar roll-ups. These mirror the user-facing
  * categories (revenue / departmental revenue / payroll / operating
- * expenses / depreciation / capital income / capital expense) plus
- * the computed NOI.
+ * expenses / depreciation / financing / capital income / capital
+ * expense) plus the computed NOI.
+ *
+ * MBR-FIX-2C (2026-10-10) — `financing` is NEW: a sidecar tally of
+ * accounts tagged `fsGroup.key = IS_INTEREST_EXPENSE`.  Those
+ * accounts also appear in `operatingExpense` (they fall through
+ * the account-number range rules); the financing sidecar lets the
+ * NOI formula carve interest expense back out so NOI Before
+ * Depreciation reconciles to the Operating Results chart +
+ * ratio-registry + Statement of Activities.  Field is defaulted to
+ * 0 on legacy consumers to preserve back-compat.
  *
  * Total operating revenue = revenue + departmental-revenue
  * Total operating expense = payroll + operating-expense + depreciation
- * NOI before depreciation = total operating revenue − (payroll + operating-expense)
- * NOI                     = total operating revenue − total operating expense
+ * NOI before depreciation = total operating revenue
+ *                           − (payroll + operating-expense − financing)
+ *                         = total operating revenue
+ *                           − payroll − operating-expense + financing
+ * NOI                     = total operating revenue
+ *                           − total operating expense + financing
+ *                         = NOI before depreciation − depreciation
  */
 export type IncomeStatementBucketTotals = {
   revenue: number;
@@ -77,6 +102,11 @@ export type IncomeStatementBucketTotals = {
   payroll: number;
   operatingExpense: number;
   depreciation: number;
+  /** MBR-FIX-2C — side-tally of IS_INTEREST_EXPENSE amounts that
+   *  were already added to `operatingExpense`.  Carved out of the
+   *  NOI formula so NOI matches the authoritative Spectre
+   *  definition (excludes financing). */
+  financing: number;
   capitalIncome: number;
   capitalExpense: number;
   totalOperatingRevenue: number;
@@ -249,6 +279,7 @@ export class IncomeStatementProjection {
       payroll: 0,
       operatingExpense: 0,
       depreciation: 0,
+      financing: 0,
       capitalIncome: 0,
       capitalExpense: 0,
       totalOperatingRevenue: 0,
@@ -256,6 +287,31 @@ export class IncomeStatementProjection {
       noiBeforeDepreciation: 0,
       noi: 0,
     };
+
+    // MBR-FIX-2C (2026-10-10) — load the fsGroup.key for every
+    // operating revenue/expense account in the current TB.  Used
+    // to promote IS_DEPRECIATION-tagged accounts from the range-
+    // bucketed `operating-expense` to the `depreciation` bucket
+    // (so they are correctly carved out of NOI) and to tally
+    // IS_INTEREST_EXPENSE-tagged accounts in a `financing` side-
+    // bucket (so they are carved out of NOI without altering the
+    // operating-expense roll-up).  Guarded try/catch: when Prisma
+    // isn't reachable (unit tests with in-memory ledger), the
+    // lookup silently degrades to an empty map and the resolver
+    // falls back to the pre-fix range-only bucketing path.
+    const accountCodes = Array.from(currentLinesByCode.keys());
+    const fsGroupKeyByCode = new Map<string, string | null>();
+    try {
+      const rows = await prisma.account.findMany({
+        where: { clubId: input.clubId, accountNumber: { in: accountCodes } },
+        select: { accountNumber: true, fsGroup: { select: { key: true } } },
+      });
+      for (const r of rows) {
+        fsGroupKeyByCode.set(r.accountNumber, r.fsGroup?.key ?? null);
+      }
+    } catch {
+      /* fsGroup lookup unavailable — proceed with range-only bucketing. */
+    }
 
     const unmappedFundAccounts: Array<{
       accountCode: string;
@@ -346,26 +402,57 @@ export class IncomeStatementProjection {
         continue;
       }
 
-      const fund = bucketToFund(mapped.bucket) ?? "operating";
+      // MBR-FIX-2C (2026-10-10) — fsGroup-aware bucket promotion.
+      // When the account's authoritative `fsGroup.key` is
+      // IS_DEPRECIATION, override the range-rule bucket to
+      // `depreciation` so the carve-out survives Coulee-style
+      // non-standard numbering (6115 Depreciation lands in the
+      // 6000-6499 operating-expense range by number).  For
+      // IS_INTEREST_EXPENSE, keep the range-rule bucket (the
+      // amount still appears in the operating-expense roll-up on
+      // the Statement of Activities) but tally it to a
+      // `financing` sidecar that the NOI formula subtracts back
+      // out below, matching the authoritative NOI Before
+      // Depreciation definition.
+      const fsKey = fsGroupKeyByCode.get(mapped.accountCode) ?? null;
+      let effectiveBucket: IncomeStatementBucket = mapped.bucket;
+      if (fsKey === "IS_DEPRECIATION" && effectiveBucket !== "depreciation"
+          && effectiveBucket !== "capital-income" && effectiveBucket !== "capital-expense") {
+        effectiveBucket = "depreciation";
+      }
+      const fund = bucketToFund(effectiveBucket) ?? "operating";
       isLines.push({
         accountCode: mapped.accountCode,
         accountName: mapped.accountName,
-        category: bucketToCategory(mapped.bucket, account.category),
+        category: bucketToCategory(effectiveBucket, account.category),
         fund,
         departmentCode: mapped.departmentCode,
         amount,
       });
 
-      addToBucket(buckets, mapped.bucket, amount);
+      addToBucket(buckets, effectiveBucket, amount);
+      if (fsKey === "IS_INTEREST_EXPENSE"
+          && (effectiveBucket === "operating-expense" || effectiveBucket === "payroll")) {
+        buckets.financing += amount;
+      }
     }
 
     // Finalise computed roll-ups.
     buckets.totalOperatingRevenue = buckets.revenue + buckets.departmentalRevenue;
     buckets.totalOperatingExpense =
       buckets.payroll + buckets.operatingExpense + buckets.depreciation;
+    // MBR-FIX-2C — carve financing (IS_INTEREST_EXPENSE) out of
+    // NOI Before Depreciation.  The amount is still part of
+    // `operatingExpense` so the Section IV / Capital Fund / detail
+    // listings continue to show it, but NOI matches the
+    // authoritative Spectre definition (above-the-line NOI
+    // excludes both depreciation AND financing).
     buckets.noiBeforeDepreciation =
-      buckets.totalOperatingRevenue - (buckets.payroll + buckets.operatingExpense);
-    buckets.noi = buckets.totalOperatingRevenue - buckets.totalOperatingExpense;
+      buckets.totalOperatingRevenue
+      - buckets.payroll
+      - buckets.operatingExpense
+      + buckets.financing;
+    buckets.noi = buckets.noiBeforeDepreciation - buckets.depreciation;
 
     const diagnostics: IncomeStatementProjectionDiagnostics = {
       trialBalanceRevenueExpenseLineCount: tbCurrent.lines.filter((l) => {
