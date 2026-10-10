@@ -270,16 +270,45 @@ export async function getOperatingResults(
   };
 }
 
-/** REPORT-CHART-1 §7-9 (2026-10-03) — committed-snapshot fallback
- *  for the Operating Results chart. Reads each committed TB snapshot
- *  on-or-before `asOf` and derives per-month NOI + Revenue from the
- *  snapshot's YTD slice. Returns `OperatingMonth[]` without
- *  zero-filling months that have no snapshot.
+/** MBR-FIX-2A (2026-10-09) — committed-snapshot fallback for the
+ *  Operating Results 12-Month Rolling Trend chart.  Reads each
+ *  committed TB snapshot on-or-before `asOf` and derives per-month
+ *  (monthly, not YTD) NOI + Revenue from the FISCAL-YTD slice.
  *
- *  NOI metric (REPORT-WIRING-1B): Revenue − COGS − OpEx-excluding-
- *  depreciation. The depreciation carve-out matches the IS projection's
- *  `noiBeforeDepreciation` definition and the ratio-registry +
- *  budget-resolver canonical. Operating-fund filter per REPORT-WIRING-1A.
+ *  Monthly NOI contract (per the founder's MBR-FIX-2A directive §3):
+ *
+ *     First fiscal month                 : monthlyNoi = YTD(month)
+ *     Any subsequent month in the same FY: monthlyNoi = YTD(month) − YTD(prevMonth)
+ *     First month of a new fiscal year   : monthlyNoi = YTD(month)
+ *       (priorYTD resets on fiscal-year boundary)
+ *
+ *  Prior to MBR-FIX-2A this function queried
+ *  `reportingAccountBalances({ from: calendar-month-start, to: asOf })`
+ *  which hit the same YTD-slice `sameDay(snapshot.periodStart, from)`
+ *  gate the ratio-registry hit (MBR-AUDIT-1 DEF-4): Jonas TBs carry
+ *  `snapshot.periodStart = fiscal-year start`, so every month after
+ *  the first silently returned zero balances and the month was
+ *  OMITTED from the chart.  Live Coulee Feb 2026 was the first
+ *  observable case — the only Actual bar on the chart was Jan.
+ *
+ *  Scoping guard (per directive §3): this function MUST use the
+ *  "NOI Before Depreciation" definition shared by the IS Projection
+ *  and the ratio-registry:
+ *
+ *     NOI = sum(REVENUE naturalBalance)
+ *         − sum(EXPENSE where fsGroupKey startsWith "IS_COGS")
+ *         − sum(EXPENSE where fsGroupKey ∉ {IS_COGS*, IS_DEPRECIATION, IS_INTEREST_EXPENSE})
+ *
+ *     — operating-fund filter via `isOperatingFundTag(fundApplicability)`
+ *     — depreciation + financing excluded (above-the-line NOI)
+ *
+ *  Any `getOperatingMonthsFromCommittedSnapshots` call now matches
+ *  the NOI definition used by `resolveJanuaryMetricSet` and by
+ *  `IncomeStatementProjection.noiBeforeDepreciation`.  The
+ *  `january-partial-availability.ts` resolver uses a different NOI
+ *  (does NOT carve depreciation out of OpEx); unifying that
+ *  resolver is explicitly out of scope for MBR-FIX-2A per the
+ *  directive's "do not expand" guard.
  */
 async function getOperatingMonthsFromCommittedSnapshots(
   clubId: string,
@@ -287,7 +316,7 @@ async function getOperatingMonthsFromCommittedSnapshots(
 ): Promise<OperatingMonth[]> {
   const { reportingAccountBalances } = await import("@/lib/accounting/reporting-balances");
   const { consolidateAccountBalances } = await import("@/lib/accounting/balance");
-  // End-of-day asOf (same reason as the equity resolver).
+  const { isOperatingFundTag } = await import("@/lib/reporting/budget-resolver");
   const asOfEod = new Date(Date.UTC(
     asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(),
     23, 59, 59, 999,
@@ -303,68 +332,139 @@ async function getOperatingMonthsFromCommittedSnapshots(
     select: { asOf: true },
   });
   if (snapshots.length === 0) return [];
-  // Period start = calendar-month-start of the snapshot's month.
-  const points: OperatingMonth[] = [];
-  for (let i = 0; i < snapshots.length; i++) {
-    const s = snapshots[i];
-    if (!s.asOf) continue;
-    const asOfDate = s.asOf;
-    const periodStart = new Date(Date.UTC(asOfDate.getUTCFullYear(), asOfDate.getUTCMonth(), 1, 0, 0, 0, 0));
+
+  type YtdPoint = {
+    asOfDate: Date;
+    ytdRevenue: number;
+    ytdCogs: number;
+    ytdOpex: number;
+    ytdNoi: number;
+    hasIsActivity: boolean;
+  };
+
+  /** Compute fiscal-YTD IS totals for a single snapshot by reading
+   *  `reportingAccountBalances({ from: fiscalYearStart, to: asOfDate })`.
+   *  Returns null when the snapshot is balance-sheet-only (no non-
+   *  zero REVENUE or EXPENSE rows — e.g. the TB-HIST-11 opening
+   *  Dec 31, 2025 import). */
+  async function ytdFor(asOfDate: Date): Promise<YtdPoint | null> {
+    const fiscalYearStart = new Date(Date.UTC(asOfDate.getUTCFullYear(), 0, 1));
     try {
-      const result = await reportingAccountBalances(clubId, { from: periodStart, to: asOfDate });
-      if (result.balances.length === 0) continue;
+      const result = await reportingAccountBalances(
+        clubId,
+        { from: fiscalYearStart, to: asOfDate },
+      );
+      if (result.balances.length === 0) return null;
       const consolidated = consolidateAccountBalances(result.balances);
-      const { isOperatingFundTag } = await import("@/lib/reporting/budget-resolver");
       let revenue = 0;
       let cogs = 0;
       let opex = 0;
       let hasRevenueAccount = false;
       let hasExpenseAccount = false;
       for (const b of consolidated) {
-        // REPORT-WIRING-1A §7-10 — Operating IS filter.
         if (!isOperatingFundTag(b.fundApplicability)) continue;
         if (b.accountType === "REVENUE") {
-          revenue += Number(b.naturalBalance.toString());
-          if (Number(b.naturalBalance.toString()) !== 0) hasRevenueAccount = true;
-        }
-        else if (b.accountType === "EXPENSE") {
+          const v = Number(b.naturalBalance.toString());
+          revenue += v;
+          if (v !== 0) hasRevenueAccount = true;
+        } else if (b.accountType === "EXPENSE") {
           const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
-          // REPORT-WIRING-1B §20-23 — carve depreciation out of opex
-          // so the chart's "NOI" label matches the canonical
-          // "NOI before depreciation" definition.
           const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
-          if (isDepreciation) continue;
-          // REPORT-PRESENTATION-1A.1 (2026-10-05) — IS_INTEREST_EXPENSE
-          // is financing, not operating. The Operating Results chart's
-          // "NOI" line must exclude financing so it reconciles to the
-          // Section IV + ratio-registry canonical NOI.
           const isFinancing = b.fsGroupKey === "IS_INTEREST_EXPENSE";
-          if (isFinancing) continue;
+          if (isDepreciation || isFinancing) continue;
           const v = Number(b.naturalBalance.toString());
           if (isCogs) cogs += v;
           else opex += v;
           if (v !== 0) hasExpenseAccount = true;
         }
       }
-      // REPORT-CHART-1A §1-2 (2026-10-03) — a committed TB snapshot
-      // can be balance-sheet-only (TB-HIST-11 opening-balance import
-      // for Dec 2025). Treat "no non-zero IS activity in the period"
-      // as SOURCE_NOT_LOADED and OMIT the month — the chart must not
-      // plot a $0 bar from a BS-only snapshot and must not imply the
-      // Club produced exactly zero revenue + zero expenses.
-      if (!hasRevenueAccount && !hasExpenseAccount) continue;
-      const noi = revenue - cogs - opex;
-      points.push({
-        endDate: asOfDate,
-        monthLabel: monthLabelFromDate(asOfDate),
-        sequence: i + 1,
-        noi,
-        revenue,
-        budgetNoi: null,
-      });
+      if (!hasRevenueAccount && !hasExpenseAccount) return null;
+      return {
+        asOfDate,
+        ytdRevenue: revenue,
+        ytdCogs: cogs,
+        ytdOpex: opex,
+        ytdNoi: revenue - cogs - opex,
+        hasIsActivity: true,
+      };
     } catch {
+      return null;
+    }
+  }
+
+  // Walk snapshots in asOf-asc order.  Track the running prior-YTD
+  // per fiscal year — reset to zero when the next snapshot crosses
+  // a fiscal-year boundary.
+  //
+  // Gap detection: a monthly value is only emitted when the
+  // snapshot's calendar month is month-after the LAST processed
+  // snapshot (within the same FY), OR is the first fiscal month
+  // (January for the current Spectre convention).  If there's a
+  // gap in the fiscal history (e.g. we have Jan + Mar but no Feb),
+  // we cannot compute Mar's monthly activity reliably — the "YTD −
+  // priorYTD" would collapse two months' activity into one Mar bar.
+  // In that case we EMIT NO POINT for the current snapshot (and
+  // every subsequent in-gap snapshot) rather than fabricate a
+  // misleading monthly value.
+  const points: OperatingMonth[] = [];
+  let priorYtdNoi = 0;
+  let priorYtdRevenue = 0;
+  let priorFiscalYear: number | null = null;
+  let priorMonthIndex: number | null = null; // calendar 0..11
+  for (let i = 0; i < snapshots.length; i++) {
+    const s = snapshots[i];
+    if (!s.asOf) continue;
+    const asOfDate = s.asOf;
+    const fy = asOfDate.getUTCFullYear();
+    const monthIdx = asOfDate.getUTCMonth();
+
+    if (priorFiscalYear !== null && fy !== priorFiscalYear) {
+      // Fiscal-year boundary: reset YTD tracker + prior-month cursor.
+      priorYtdNoi = 0;
+      priorYtdRevenue = 0;
+      priorMonthIndex = null;
+    }
+    priorFiscalYear = fy;
+
+    const ytd = await ytdFor(asOfDate);
+    if (ytd == null) {
+      // Balance-sheet-only snapshot (e.g. Dec 2025 opening import).
+      // Do NOT emit a month and do NOT advance any tracker — a
+      // BS-only snapshot has no YTD income activity to compare to.
       continue;
     }
+
+    // Enforce the "no fabricated monthly value" guard.
+    const expectedPrior = monthIdx === 0 ? null : monthIdx - 1;
+    const hasGap =
+      priorMonthIndex === null
+        ? monthIdx !== 0 // first-ever snapshot in this FY isn't January
+        : priorMonthIndex !== expectedPrior;
+    if (hasGap) {
+      // Advance the YTD tracker so the next contiguous snapshot (if
+      // any) still has a sensible prior-YTD to subtract from — but
+      // emit no point for this gap-starting snapshot.
+      priorYtdNoi = ytd.ytdNoi;
+      priorYtdRevenue = ytd.ytdRevenue;
+      priorMonthIndex = monthIdx;
+      continue;
+    }
+
+    const monthlyNoi = ytd.ytdNoi - priorYtdNoi;
+    const monthlyRevenue = ytd.ytdRevenue - priorYtdRevenue;
+
+    points.push({
+      endDate: asOfDate,
+      monthLabel: monthLabelFromDate(asOfDate),
+      sequence: i + 1,
+      noi: monthlyNoi,
+      revenue: monthlyRevenue,
+      budgetNoi: null,
+    });
+
+    priorYtdNoi = ytd.ytdNoi;
+    priorYtdRevenue = ytd.ytdRevenue;
+    priorMonthIndex = monthIdx;
   }
   return points;
 }

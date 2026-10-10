@@ -555,7 +555,11 @@ export type MonthlyReportingPackage = {
     departmentCount: number;    // 8 for Coulee Jan 2026
     availability: {
       actual: "AVAILABLE" | "UNAVAILABLE";
-      budget: "SOURCE_NOT_CONNECTED";       // Coulee has no budget source
+      // MBR-FIX-2A (2026-10-09) — Section II budget availability now
+      // reflects reality: AVAILABLE when the chart's committed-
+      // budget resolver returned a YTD figure, SOURCE_NOT_CONNECTED
+      // when no committed Budget row exists.
+      budget: "SOURCE_NOT_CONNECTED" | "AVAILABLE";
       priorYear: "SOURCE_NOT_LOADED";        // No prior-year monthly source
     };
     note: string;
@@ -2969,12 +2973,23 @@ export async function getMonthlyReportingPackage(
               januaryMetricSet.revenue.metric.provenance.availability === "AVAILABLE"
                 ? "AVAILABLE"
                 : "UNAVAILABLE",
-            budget: "SOURCE_NOT_CONNECTED",
+            // MBR-FIX-2A (2026-10-09) — Section II panel availability
+            // state reflects reality: a committed Budget is signalled
+            // by a non-null `operatingResults.ytdBudgetNoi` (the same
+            // signal the Operating Results chart's KPI tiles use).
+            // Prior to 2A this was hardcoded "SOURCE_NOT_CONNECTED",
+            // which contradicted the actual DB state (Coulee had a
+            // 199-line committed Budget) and misled the reader.
+            budget: operatingResults.ytdBudgetNoi == null
+              ? "SOURCE_NOT_CONNECTED"
+              : "AVAILABLE",
             priorYear: "SOURCE_NOT_LOADED",
           },
           note:
             `Actual values derive from the committed ${reportingPeriod.monthLong} Jonas Trial Balance (fiscal YTD). ` +
-            "Budget comparison is unavailable (no budget source loaded for this tenant). " +
+            (operatingResults.ytdBudgetNoi == null
+              ? "Budget comparison is unavailable (no budget source loaded for this tenant). "
+              : "Budget comparison is sourced from the committed FY budget. ") +
             `Prior-year monthly comparison is unavailable (no ${reportingPeriod.priorYearLabel} operating snapshot).`,
         }
       : null,
