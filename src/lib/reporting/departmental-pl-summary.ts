@@ -339,8 +339,28 @@ export function buildCouleeDepartmentalPLSummary(opts: {
         { key: "revenue",      label: "Revenue",              value: fmtMoney(r.revenue),  tone: toneForSigned(r.revenue, false) },
         { key: "cost-of-sales", label: "Cost of Sales",       value: fmtMoney(r.cogs) },
         { key: "payroll",      label: "Payroll & Benefits",   value: fmtMoney(r.payroll) },
-        { key: "operating-expenses", label: "Operating Expenses", value: fmtMoney(r.opex) },
-        { key: "net-income",   label: "Net Income",           value: fmtMoney(r.netIncome), tone: netTone },
+        // MBR-FIX-2F (2026-10-10) — "Other Operating Expenses" is
+        // the mutually-exclusive subset of `opex` that excludes
+        // Payroll & Benefits (which has its own row above).  Full-
+        // precision derivation (`opex − payroll`) with display
+        // formatting applied afterward.  Previously the card
+        // rendered the gross `opex` as "Operating Expenses" AND the
+        // payroll subset above, which looked like double-counting
+        // even though the Net Income math was correct.
+        //
+        // Depreciation + financing (IS_INTEREST_EXPENSE) are
+        // excluded from `opex` upstream in `dept-pl-from-snapshot.ts`
+        // (MBR-FIX-2F resolver change) so "Other Operating Expenses"
+        // never silently mixes above-the-line and below-the-line
+        // expenses.
+        {
+          key: "other-operating-expenses",
+          label: "Other Operating Expenses",
+          value: fmtMoney({
+            toString: () => (Number(r.opex.toString()) - Number(r.payroll.toString())).toString(),
+          }),
+        },
+        { key: "net-income",   label: "Net Operating Result", value: fmtMoney(r.netIncome), tone: netTone },
         {
           key: "budget-ytd",
           label: "Budget YTD",

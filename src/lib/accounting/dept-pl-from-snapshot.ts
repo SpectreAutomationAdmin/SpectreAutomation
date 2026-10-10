@@ -105,9 +105,22 @@ export async function incomeStatementByDepartmentFromSnapshot(
     // REPORT-WIRING-1B §20-23 (2026-10-04) — canonical NOI before
     // depreciation. The department-level netIncome returned here is
     // "NOI before depreciation" so the aggregate matches the IS
-    // projection's `noiBeforeDepreciation`. Depreciation accounts
-    // are excluded entirely from the per-dept rows.
+    // projection's `noiBeforeDepreciation`.
+    //
+    // MBR-FIX-2F (2026-10-10) — also carve out financing / interest
+    // expense (IS_INTEREST_EXPENSE).  Interest expense is below the
+    // operating-NOI line in Spectre's authoritative definition
+    // (MBR-FIX-2D § `resolveAuthoritativeOperatingIs`), so including
+    // it in a department's `opex` bucket mis-presents financing as
+    // "Other Operating Expenses" in Section X.  The LRP
+    // $14,320.84 case documented in the MBR-FIX-2F directive is the
+    // observable instance of this bug: LRP has no operating revenue
+    // or payroll, so the only line showing was its interest expense
+    // bucketed as opex.  Carving it out at the resolver level
+    // guarantees per-dept netIncome reconciles to the consolidated
+    // NOI Before Depreciation across every section.
     if (b.fsGroupKey === "IS_DEPRECIATION") continue;
+    if (b.fsGroupKey === "IS_INTEREST_EXPENSE") continue;
     const isCogs =
       b.fsGroupKey != null &&
       (b.fsGroupKey.startsWith("IS_COGS_") || b.fsGroupKey === "IS_COGS");
