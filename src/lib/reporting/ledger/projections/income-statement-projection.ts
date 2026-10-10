@@ -346,16 +346,41 @@ export class IncomeStatementProjection {
       // MBR-FIX-2C — resolve fundApplicability from Prisma if the
       // payload didn't carry it (Jonas path), falling back to the
       // payload value when enrichment is unavailable.
+      //
+      // Operating-first normalisation: when an account is tagged
+      // "OPERATING,CAPITAL" (dual-fund), the mapper's
+      // `isCapitalAccount` helper returns true (CAPITAL appears
+      // anywhere in the CSV) and would promote the entire line to
+      // capital-income / capital-expense.  Every OTHER resolver on
+      // the operating-fund path (ratio-registry, FsGroupProjection,
+      // computeOperationsPartialAvailability) treats dual-fund as
+      // operating via a `.includes("OPERATING")` check.  This
+      // resolver must agree, otherwise the Executive At-A-Glance
+      // double-counts a dual-fund account as capital-expense while
+      // the Statement of Activities + Operating Results chart count
+      // the same account as operating-expense.  Normalising to just
+      // "OPERATING" when OPERATING is present preserves the mapper's
+      // capital-promotion for genuinely CAPITAL-only accounts without
+      // changing the mapper's shared semantics.
       const payloadFundApplicability =
         (account as LedgerAccount & { fundApplicability?: string | null }).fundApplicability ?? null;
-      const enrichedFundApplicability =
+      const rawFundApplicability =
         fundApplicabilityByCode.get(account.accountCode) ?? payloadFundApplicability;
+      const normalisedFundApplicability = (() => {
+        if (!rawFundApplicability) return rawFundApplicability;
+        const parts = rawFundApplicability
+          .split(",")
+          .map((p) => p.trim().toUpperCase())
+          .filter((p) => p.length > 0);
+        if (parts.includes("OPERATING")) return "OPERATING";
+        return rawFundApplicability;
+      })();
       const mapped = mapIncomeStatementAccount(
         {
           accountNumber: account.accountCode,
           accountName: account.accountName,
           accountCategory: account.category,
-          accountFundApplicability: enrichedFundApplicability,
+          accountFundApplicability: normalisedFundApplicability,
         },
         this.mapping,
       );

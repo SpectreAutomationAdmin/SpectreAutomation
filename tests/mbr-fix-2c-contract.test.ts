@@ -61,9 +61,15 @@ describe("MBR-FIX-2C §A — Prisma lookup for fsGroupKey", () => {
     expect(src).toMatch(/fundApplicabilityByCode\.set\(r\.accountNumber, r\.fundApplicability \?\? null\);/);
   });
 
-  it("mapper call uses the enriched fundApplicability when available", () => {
-    expect(src).toMatch(/const enrichedFundApplicability =\s*fundApplicabilityByCode\.get\(account\.accountCode\) \?\? payloadFundApplicability;/);
-    expect(src).toMatch(/accountFundApplicability: enrichedFundApplicability,/);
+  it("mapper call uses the normalised fundApplicability when available", () => {
+    // Raw enrichment first (Prisma lookup OR fallback to payload),
+    // then operating-first normalisation collapses dual-fund to
+    // "OPERATING" so the mapper's capital promotion only fires on
+    // CAPITAL-only accounts (parity with the rest of the operating-
+    // fund resolvers).
+    expect(src).toMatch(/const rawFundApplicability =\s*fundApplicabilityByCode\.get\(account\.accountCode\) \?\? payloadFundApplicability;/);
+    expect(src).toMatch(/if \(parts\.includes\("OPERATING"\)\) return "OPERATING";/);
+    expect(src).toMatch(/accountFundApplicability: normalisedFundApplicability,/);
   });
 });
 
