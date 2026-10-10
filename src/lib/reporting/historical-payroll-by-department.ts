@@ -71,9 +71,21 @@ export async function resolveHistoricalPayrollByDepartment(
 ): Promise<HistoricalPayrollResult> {
   const throughMonth = periodEnd.getUTCMonth() + 1;
   const fiscalYear = periodEnd.getUTCFullYear();
+  // MBR-FIX-2G (2026-10-10) — the Jonas TB snapshot's YTD-slice
+  // `sameDay(snapshot.periodStart, filter.from)` gate requires
+  // `from = fiscal-year start` (Jan 1), not the current-month
+  // start the caller passes (`period.periodStart = Feb 1` for
+  // the Feb package).  Section XII inherits the Section X fix:
+  // compute fiscal-YTD start locally.  Same DEF-4 pattern
+  // MBR-FIX-1 / 2A / 2B / 2C / 2D / 2E / 2F corrected on their
+  // respective paths.  The `periodStart` parameter is kept on
+  // the signature for API stability — callers that happen to
+  // pass fiscal-year start already stay correct.
+  const fiscalYtdStart = new Date(Date.UTC(fiscalYear, 0, 1));
+  void periodStart;
 
   const [actualDept, budgetMap, rosterStatus] = await Promise.all([
-    incomeStatementByDepartmentFromSnapshot(clubId, periodStart, periodEnd),
+    incomeStatementByDepartmentFromSnapshot(clubId, fiscalYtdStart, periodEnd),
     resolveBudgetPayrollByDepartment({
       clubId,
       fiscalYear,

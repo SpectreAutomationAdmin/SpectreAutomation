@@ -592,11 +592,53 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
     period.periodStart,
     period.periodEnd,
   );
+  // MBR-FIX-2G (2026-10-10) — Current-month (MTD) payroll per dept
+  // = fiscal-YTD(current month) − fiscal-YTD(prior month).  For
+  // the first fiscal month (January) there is no prior month → MTD
+  // equals YTD.  Previously the builder treated MTD = YTD on every
+  // month, which is correct for January but wrong for Feb+ (would
+  // report YTD payroll as "February Payroll").
+  const monthIndex = period.periodEnd.getUTCMonth(); // 0..11
+  const isFirstFiscalMonth = monthIndex === 0;
+  let priorYtdByDept: Map<string | null, number> | null = null;
+  if (!isFirstFiscalMonth) {
+    const priorMonthEnd = new Date(Date.UTC(
+      period.periodEnd.getUTCFullYear(), monthIndex, 0, 23, 59, 59, 999,
+    ));
+    try {
+      const prior = await resolveHistoricalPayrollByDepartment(
+        clubId,
+        period.periodStart, // ignored by the resolver (post MBR-FIX-2G)
+        priorMonthEnd,
+      );
+      priorYtdByDept = new Map();
+      for (const r of prior.rows) {
+        if (r.departmentCode == null) continue;
+        priorYtdByDept.set(r.departmentCode, r.actual);
+      }
+    } catch {
+      /* Prior-month resolution unavailable — MTD stays YTD for safety. */
+    }
+  }
   const budgetByDeptMap = await resolveBudgetPayrollByDepartment({
     clubId,
     fiscalYear,
     throughMonth,
   });
+  // MBR-FIX-2G — monthly Budget per-dept = YTD(current) − YTD(prior).
+  // Reuses the same resolver with throughMonth = (current − 1); for
+  // January throughMonth=0 would be invalid, so fall back to current
+  // for the first fiscal month.
+  let priorMonthBudgetByDept: Map<string | null, number> | null = null;
+  if (!isFirstFiscalMonth) {
+    try {
+      priorMonthBudgetByDept = await resolveBudgetPayrollByDepartment({
+        clubId,
+        fiscalYear,
+        throughMonth: throughMonth - 1,
+      });
+    } catch { /* leave null */ }
+  }
   // Annual (12-month) Budget per dept — same resolver, through month 12.
   const annualBudgetByDeptMap = await resolveBudgetPayrollByDepartment({
     clubId,
@@ -633,17 +675,20 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
     const ytdActual = hist?.actual ?? 0;
     const ytdBudget = budgetByDeptMap.get(code) ?? 0;
     const annualBudget = annualBudgetByDeptMap.get(code) ?? 0;
+    // MBR-FIX-2G — monthly values = YTD(current) − YTD(prior).
+    // First fiscal month short-circuits to MTD == YTD.
+    const priorActual = priorYtdByDept?.get(code) ?? 0;
+    const priorBudget = priorMonthBudgetByDept?.get(code) ?? 0;
+    const mtdActual = isFirstFiscalMonth ? ytdActual : (ytdActual - priorActual);
+    const mtdBudget = isFirstFiscalMonth ? ytdBudget : (ytdBudget - priorBudget);
     // Skip depts with ZERO Actual AND ZERO Budget — nothing to show.
     if (ytdActual === 0 && ytdBudget === 0) continue;
     enriched.push({
       key: `dept-${code}`,
       label,
       shortLabel: makeShortLabel(label),
-      // January single-month report: MTD == YTD. When this builder is
-      // called with a mid-year periodEnd, MTD will later differ; the
-      // resolver's YTD-through-selected-month shape is correct.
-      mtdActual: ytdActual,
-      mtdBudget: ytdBudget,
+      mtdActual,
+      mtdBudget,
       ytdActual,
       ytdBudget,
       annualBudget,
