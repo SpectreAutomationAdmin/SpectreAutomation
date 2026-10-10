@@ -497,18 +497,58 @@ export class IncomeStatementProjection {
     buckets.totalOperatingRevenue = buckets.revenue + buckets.departmentalRevenue;
     buckets.totalOperatingExpense =
       buckets.payroll + buckets.operatingExpense + buckets.depreciation;
-    // MBR-FIX-2C — carve financing (IS_INTEREST_EXPENSE) out of
-    // NOI Before Depreciation.  The amount is still part of
-    // `operatingExpense` so the Section IV / Capital Fund / detail
-    // listings continue to show it, but NOI matches the
-    // authoritative Spectre definition (above-the-line NOI
-    // excludes both depreciation AND financing).
     buckets.noiBeforeDepreciation =
       buckets.totalOperatingRevenue
       - buckets.payroll
       - buckets.operatingExpense
       + buckets.financing;
     buckets.noi = buckets.noiBeforeDepreciation - buckets.depreciation;
+
+    // MBR-FIX-2D (2026-10-10) — AUTHORITATIVE OVERRIDE.
+    //
+    // The bucket-based roll-up above still differs from the ratio-
+    // registry / Operations briefing / Operating Results chart NOI
+    // by residual classification subtleties (the projection reads
+    // the TB payload directly; the authoritative path reads via
+    // `reportingAccountBalances` + `consolidateAccountBalances`
+    // which emits dimensional-aware AccountBalance rows that
+    // normalise naturalBalance through Spectre's Account.type
+    // and dimensional joins).  The founder requires one
+    // authoritative NOI across every section.
+    //
+    // We override `totalOperatingRevenue`, `noiBeforeDepreciation`,
+    // and `totalOperatingExpense` with values computed by the
+    // SAME path `computeOperationsPartialAvailability` uses, so
+    // every consumer of this snapshot (At-A-Glance, Stewardship,
+    // etc.) reads the identical figure the Operations briefing
+    // + Operating Results chart display.  The per-line `isLines`
+    // and sub-bucket counters remain for Section-IV detail
+    // rendering; only the top-level NOI/Revenue/Expense roll-ups
+    // are rewritten.
+    try {
+      const auth = await resolveAuthoritativeOperatingIs(
+        input.clubId,
+        input.periodStart,
+        input.periodEnd,
+      );
+      if (auth) {
+        buckets.totalOperatingRevenue = auth.revenue;
+        buckets.noiBeforeDepreciation = auth.noi;
+        // Reconstruct totalOperatingExpense so the identity
+        //   totalOpRev − noiBeforeDep = totalOpExp − dep − financing
+        // holds for consumers that compute NOI themselves.
+        buckets.totalOperatingExpense =
+          auth.cogs + auth.opex + auth.depreciation;
+        // Mirror the authoritative dep + financing on the bucket
+        // totals so downstream consumers that read these fields
+        // get consistent numbers.
+        buckets.depreciation = auth.depreciation;
+        buckets.financing = auth.financing;
+        buckets.noi = buckets.noiBeforeDepreciation - buckets.depreciation;
+      }
+    } catch {
+      /* Authoritative path unavailable — fall back to bucket roll-up. */
+    }
 
     const diagnostics: IncomeStatementProjectionDiagnostics = {
       trialBalanceRevenueExpenseLineCount: tbCurrent.lines.filter((l) => {
@@ -634,6 +674,79 @@ function indexLines(
     prev.endingBalance += l.endingBalance;
   }
   return m;
+}
+
+// ---------------------------------------------------------------------------
+// MBR-FIX-2D (2026-10-10) — authoritative Operating IS resolver.
+//
+// Single source of truth for the Operating NOI Before Depreciation
+// definition shared by every reporting section:
+//   NOI = Σ(REVENUE × operating-fund)
+//       − Σ(EXPENSE × operating-fund × fsGroup startsWith IS_COGS)
+//       − Σ(EXPENSE × operating-fund × NOT (IS_COGS* ∨ IS_DEPRECIATION ∨ IS_INTEREST_EXPENSE))
+//
+// Reads `reportingAccountBalances({ from: fiscalYearStart, to: periodEnd })`
+// which emits consolidated AccountBalance rows with
+// Spectre-authoritative fundApplicability, fsGroupKey, and accountType.
+// Called from the IncomeStatementProjection to override its bucket-
+// based NOI with the canonical value, so every consumer of
+// `IncomeStatementSnapshot.noiBeforeDepreciation` (At-A-Glance,
+// Stewardship Dashboard, Statement of Activities helpers) reads the
+// identical figure the Operations briefing + Operating Results chart
+// display.  Fiscal YTD query shape matches MBR-FIX-1 / 2B /
+// `computeOperationsPartialAvailability`.
+// ---------------------------------------------------------------------------
+export type AuthoritativeOperatingIs = {
+  revenue: number;      // operating-fund REVENUE Σ (positive naturalBalance)
+  cogs: number;         // operating-fund EXPENSE Σ where fsGroup startsWith IS_COGS
+  opex: number;         // operating-fund EXPENSE Σ ex-COGS, ex-dep, ex-fin
+  depreciation: number; // operating-fund EXPENSE Σ where fsGroup === IS_DEPRECIATION
+  financing: number;    // operating-fund EXPENSE Σ where fsGroup === IS_INTEREST_EXPENSE
+  noi: number;          // revenue − cogs − opex
+};
+export async function resolveAuthoritativeOperatingIs(
+  clubId: string,
+  periodStart: Date,
+  periodEnd: Date,
+): Promise<AuthoritativeOperatingIs | null> {
+  const { reportingAccountBalances } = await import("@/lib/accounting/reporting-balances");
+  const { consolidateAccountBalances } = await import("@/lib/accounting/balance");
+  // The projection's input periodStart may be a month-start; fall
+  // back to fiscal-year start when the YTD-slice gate requires it.
+  // All current callers already pass fiscal-year start (via
+  // `tb.periodStart`), but keep the normalisation defensive.
+  const fiscalYearStart = periodStart.getUTCMonth() === 0 && periodStart.getUTCDate() === 1
+    ? periodStart
+    : new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1));
+  const result = await reportingAccountBalances(
+    clubId,
+    { from: fiscalYearStart, to: periodEnd },
+  );
+  if (result.balances.length === 0) return null;
+  const balances = consolidateAccountBalances(result.balances);
+  const isOperating = (fund: string | null): boolean => {
+    if (!fund) return false;
+    return fund.split(",").map((s) => s.trim().toUpperCase()).includes("OPERATING");
+  };
+  let revenue = 0;
+  for (const b of balances) {
+    if (b.accountType !== "REVENUE") continue;
+    if (!isOperating(b.fundApplicability)) continue;
+    revenue += Number(b.naturalBalance.toString());
+  }
+  let cogs = 0, opex = 0, depreciation = 0, financing = 0;
+  for (const b of balances) {
+    if (b.accountType !== "EXPENSE") continue;
+    if (!isOperating(b.fundApplicability)) continue;
+    const key = b.fsGroupKey ?? "";
+    const v = Number(b.naturalBalance.toString());
+    if (key === "IS_DEPRECIATION") depreciation += v;
+    else if (key === "IS_INTEREST_EXPENSE") financing += v;
+    else if (key.startsWith("IS_COGS")) cogs += v;
+    else opex += v;
+  }
+  const noi = revenue - cogs - opex;
+  return { revenue, cogs, opex, depreciation, financing, noi };
 }
 
 export function computeAmount(args: {
