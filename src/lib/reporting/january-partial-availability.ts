@@ -45,11 +45,26 @@ export type DerivedKpi<T> = {
   provenance: KpiProvenance;
 };
 
-/** Operations-card inputs from the Jan TB. */
+/** Operations-card inputs sourced from the committed Jonas TB (actuals)
+ *  + committed Budget (plan).  Shape covers both actuals and
+ *  comparison values so `buildOperationsBriefing` can render a
+ *  reactive narrative without re-reading sources. */
 export type OperationsPartialAvailability = {
+  // ------- Actuals (operating-fund, fiscal YTD) -------
   revenue: DerivedKpi<Prisma.Decimal>;
   noi: DerivedKpi<Prisma.Decimal>;
   duesToRevenuePct: DerivedKpi<number>;
+  // ------- Budget (operating-fund, fiscal YTD) -------
+  // MBR-FIX-2B (2026-10-10) — budget actuals + variances now wired
+  // through `resolveBudgetIncomeStatement` so the Operations briefing
+  // can emit a factual actual-vs-plan narrative instead of the stale
+  // "Budget comparison unavailable" copy.
+  budgetRevenue: DerivedKpi<number>;
+  budgetNoi: DerivedKpi<number>;
+  revenueVariance: DerivedKpi<number>;
+  revenueVariancePct: DerivedKpi<number>;
+  noiVariance: DerivedKpi<number>;
+  noiVariancePct: DerivedKpi<number>;
   budgetComparison: KpiProvenance;
   statusVerdict: KpiProvenance;
 };
@@ -82,26 +97,44 @@ export async function computeOperationsPartialAvailability(opts: {
   periodStart: Date;
   periodEnd: Date;
 }): Promise<OperationsPartialAvailability> {
-  const { clubId, periodStart, periodEnd } = opts;
+  const { clubId, periodEnd } = opts;
 
-  // Pull the YTD slice from the reporting ledger. `allowCarryForward`
-  // is NOT set — the IS requires an exact match on the period window.
-  // When the exact-match path misses, every derived KPI falls through
-  // to UNAVAILABLE.
+  // MBR-FIX-2B (2026-10-10) — this resolver previously queried
+  // `reportingAccountBalances({ from: periodStart, to: periodEnd })`
+  // with `periodStart = current-month start` (e.g. Feb 1).  Jonas
+  // TB snapshots are imported with `snapshot.periodStart = fiscal-
+  // year start` (Jan 1), so the `sameDay(periodStart, filter.from)`
+  // gate in `reportingAccountBalances` silently returned no balances
+  // on every month after the first, which left the Operations
+  // briefing stuck at "Unavailable" even though the Section II /
+  // Operating Results chart / Statement of Activities all had real
+  // numbers.  See MBR-AUDIT-1 DEF-4 for the original trace;
+  // MBR-FIX-1 fixed the ratio-registry's version of this bug, and
+  // this slice fixes the parallel occurrence here.
+  const fiscalYearStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1));
   const result = await reportingAccountBalances(
     clubId,
-    { from: periodStart, to: periodEnd },
+    { from: fiscalYearStart, to: periodEnd },
   );
 
+  const periodLabel =
+    `${fiscalYearStart.toISOString().slice(0, 10)}–${periodEnd.toISOString().slice(0, 10)}`;
   if (result.balances.length === 0) {
     const periodMiss: KpiProvenance = {
       availability: "UNAVAILABLE",
-      source: `No committed TB snapshot covering ${periodStart.toISOString().slice(0, 10)}–${periodEnd.toISOString().slice(0, 10)}`,
+      source: `No committed TB snapshot covering ${periodLabel}`,
     };
+    const nullNum: DerivedKpi<number> = { value: null, provenance: periodMiss };
     return {
       revenue: { value: null, provenance: periodMiss },
       noi: { value: null, provenance: periodMiss },
       duesToRevenuePct: { value: null, provenance: periodMiss },
+      budgetRevenue: nullNum,
+      budgetNoi: nullNum,
+      revenueVariance: nullNum,
+      revenueVariancePct: nullNum,
+      noiVariance: nullNum,
+      noiVariancePct: nullNum,
       budgetComparison: {
         availability: "UNAVAILABLE",
         source: "No budget source wired for this tenant",
@@ -115,35 +148,55 @@ export async function computeOperationsPartialAvailability(opts: {
 
   const balances = consolidateAccountBalances(result.balances);
 
-  // Revenue — sum of every REVENUE account's natural balance over the
-  // period (natural balance for credit-normal accounts is positive).
+  // MBR-FIX-2B — operating-fund gate applied to every actual IS line
+  // so the Operations briefing's Revenue / NOI reconciles to the
+  // Section II Authoritative Source panel + the Operating Results
+  // chart (both of which operate only on OPERATING-tagged accounts).
+  // Capital-fund revenue (initiation fees, LRP dues, etc.) is
+  // reported separately under Capital Fund — never folded into the
+  // operating NOI line.
+  const isOperating = (fund: string | null): boolean => {
+    if (!fund) return false;
+    return fund.split(",").map((s) => s.trim().toUpperCase()).includes("OPERATING");
+  };
+
+  // Revenue — sum of every OPERATING-fund REVENUE account's natural
+  // balance over the fiscal YTD window.
   let revenue = ZERO;
   for (const b of balances) {
-    if (b.accountType === "REVENUE") revenue = revenue.plus(b.naturalBalance);
+    if (b.accountType !== "REVENUE") continue;
+    if (!isOperating(b.fundApplicability)) continue;
+    revenue = revenue.plus(b.naturalBalance);
   }
 
-  // COGS vs OpEx split via fsGroupKey — mirrors the TB-HIST-10
-  // Chapter X resolver (COGS = fsGroupKey starts with "IS_COGS_" or
-  // equals "IS_COGS").
+  // COGS vs OpEx split via fsGroupKey.  MBR-FIX-2B — authoritative
+  // NOI Before Depreciation definition (parity with ratio-registry
+  // + IS Projection + the Operating Results chart's resolver):
+  // operating fund only, IS_DEPRECIATION and IS_INTEREST_EXPENSE
+  // carved out so NOI reconciles across every surface.
   let cogs = ZERO;
   let opex = ZERO;
   for (const b of balances) {
     if (b.accountType !== "EXPENSE") continue;
-    const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+    if (!isOperating(b.fundApplicability)) continue;
+    const key = b.fsGroupKey ?? "";
+    if (key === "IS_DEPRECIATION" || key === "IS_INTEREST_EXPENSE") continue;
+    const isCogs = key.startsWith("IS_COGS");
     if (isCogs) cogs = cogs.plus(b.naturalBalance);
     else opex = opex.plus(b.naturalBalance);
   }
   const noi = revenue.minus(cogs).minus(opex);
 
-  // Dues-to-Revenue — the resolver reads the DUES_AND_CHARGES Spectre
-  // Department balance from AccountBalance.dimensional[] (TB-HIST-7
-  // seeded this per-(account, department, fund) tuple). When no
-  // dimensional entries carry a department, falls through to
-  // UNAVAILABLE — we never fabricate a dues number.
+  // Dues-to-Revenue — reads the DUES_AND_CHARGES Spectre Department
+  // balance from AccountBalance.dimensional[] (TB-HIST-7 seeded this
+  // per-(account, department, fund) tuple).  Operating-fund gate also
+  // applied here so dues ratio reconciles to the operating-revenue
+  // definition the rest of the briefing uses.
   let dues = ZERO;
   let dimensionalSeen = false;
   for (const b of balances) {
     if (b.accountType !== "REVENUE") continue;
+    if (!isOperating(b.fundApplicability)) continue;
     if (!b.dimensional || b.dimensional.length === 0) continue;
     for (const d of b.dimensional) {
       if (d.department != null) dimensionalSeen = true;
@@ -155,11 +208,11 @@ export async function computeOperationsPartialAvailability(opts: {
 
   const revenueProv: KpiProvenance = {
     availability: "DERIVED",
-    source: `Period ${periodStart.toISOString().slice(0, 10)}–${periodEnd.toISOString().slice(0, 10)} · sum(REVENUE natural balances)`,
+    source: `Fiscal YTD ${periodLabel} · sum(OPERATING REVENUE natural balances)`,
   };
   const noiProv: KpiProvenance = {
     availability: "DERIVED",
-    source: "Revenue − COGS − OpEx (fsGroupKey IS_COGS* classification)",
+    source: "Revenue − COGS − OpEx (ex-depreciation, ex-financing; operating-fund only)",
   };
   const duesProv: KpiProvenance = dimensionalSeen
     ? (dues.isZero()
@@ -180,6 +233,79 @@ export async function computeOperationsPartialAvailability(opts: {
     ? Number(dues.toString()) / Number(revenue.toString()) * 100
     : null;
 
+  // MBR-FIX-2B — budget comparison via the canonical resolver.
+  // `resolveBudgetIncomeStatement` already carves depreciation +
+  // financing out of OpEx, so its `noi` is the authoritative Budget
+  // NOI Before Depreciation (parity with the Operating Results
+  // chart's "Budget Goal" tile).  Lazy-loaded to avoid pulling the
+  // resolver on code paths that don't need it.
+  let budgetRevenueVal: number | null = null;
+  let budgetNoiVal: number | null = null;
+  let budgetProv: KpiProvenance;
+  try {
+    const { resolveBudgetIncomeStatement } = await import("@/lib/reporting/budget-resolver");
+    const throughMonth = periodEnd.getUTCMonth() + 1;
+    const b = await resolveBudgetIncomeStatement({
+      clubId,
+      fiscalYear: periodEnd.getUTCFullYear(),
+      throughMonth,
+    });
+    if (b.budget) {
+      budgetRevenueVal = b.revenue;
+      budgetNoiVal = b.noi;
+      budgetProv = {
+        availability: "DERIVED",
+        source: `Committed FY${periodEnd.getUTCFullYear()} Budget v${b.budget.version} · YTD through month ${throughMonth}`,
+      };
+    } else {
+      budgetProv = {
+        availability: "UNAVAILABLE",
+        source: `No committed Budget for FY${periodEnd.getUTCFullYear()} on this tenant`,
+      };
+    }
+  } catch (e) {
+    budgetProv = {
+      availability: "UNAVAILABLE",
+      source: `Budget resolver error: ${(e as Error).message}`,
+    };
+  }
+
+  const nullNumProv = (reason: string): KpiProvenance => ({
+    availability: "UNAVAILABLE",
+    source: reason,
+  });
+  const unavail = (reason: string): DerivedKpi<number> => ({
+    value: null,
+    provenance: nullNumProv(reason),
+  });
+
+  const revenueNum = revenue.isZero() ? null : Number(revenue.toString());
+  const noiNum = revenue.isZero() ? null : Number(noi.toString());
+  let revenueVariance: DerivedKpi<number> = unavail("Budget or actual revenue not available");
+  let revenueVariancePct: DerivedKpi<number> = unavail("Variance % requires budgeted revenue > 0");
+  let noiVariance: DerivedKpi<number> = unavail("Budget or actual NOI not available");
+  let noiVariancePct: DerivedKpi<number> = unavail("Variance % requires non-zero budgeted NOI");
+  if (budgetRevenueVal != null && revenueNum != null) {
+    const d = revenueNum - budgetRevenueVal;
+    revenueVariance = { value: d, provenance: { availability: "DERIVED", source: "Actual YTD Revenue − Budget YTD Revenue" } };
+    if (budgetRevenueVal !== 0) {
+      revenueVariancePct = {
+        value: (d / Math.abs(budgetRevenueVal)) * 100,
+        provenance: { availability: "DERIVED", source: "Revenue variance ÷ |Budget Revenue|" },
+      };
+    }
+  }
+  if (budgetNoiVal != null && noiNum != null) {
+    const d = noiNum - budgetNoiVal;
+    noiVariance = { value: d, provenance: { availability: "DERIVED", source: "Actual YTD NOI − Budget YTD NOI" } };
+    if (budgetNoiVal !== 0) {
+      noiVariancePct = {
+        value: (d / Math.abs(budgetNoiVal)) * 100,
+        provenance: { availability: "DERIVED", source: "NOI variance ÷ |Budget NOI|" },
+      };
+    }
+  }
+
   return {
     revenue: {
       value: revenue.isZero() ? null : revenue,
@@ -197,14 +323,31 @@ export async function computeOperationsPartialAvailability(opts: {
       value: duesToRevenuePct,
       provenance: duesProv,
     },
-    budgetComparison: {
-      availability: "UNAVAILABLE",
-      source: "No budget source wired for this tenant",
+    budgetRevenue: {
+      value: budgetRevenueVal,
+      provenance: budgetRevenueVal == null
+        ? nullNumProv(budgetProv.source)
+        : { availability: "DERIVED", source: budgetProv.source },
     },
-    statusVerdict: {
-      availability: "UNAVAILABLE",
-      source: "Status verdict (On Plan / Watch / Off Plan) requires a budget / policy source",
+    budgetNoi: {
+      value: budgetNoiVal,
+      provenance: budgetNoiVal == null
+        ? nullNumProv(budgetProv.source)
+        : { availability: "DERIVED", source: budgetProv.source },
     },
+    revenueVariance,
+    revenueVariancePct,
+    noiVariance,
+    noiVariancePct,
+    budgetComparison: budgetProv,
+    statusVerdict: budgetRevenueVal != null && budgetNoiVal != null && noiNum != null && revenueNum != null
+      ? { availability: "DERIVED", source: "Status derived from Actual vs Budget NOI + Revenue" }
+      : {
+          availability: "UNAVAILABLE",
+          source: budgetProv.availability === "DERIVED"
+            ? "Status verdict waits on actual IS values"
+            : "Status verdict requires a budget / policy source",
+        },
   };
 }
 

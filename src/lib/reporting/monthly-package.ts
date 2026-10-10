@@ -1667,11 +1667,22 @@ function buildOperationsBriefing(
       partial?.noi.provenance.availability === "DERIVED" ||
       partial?.duesToRevenuePct.provenance.availability === "DERIVED";
 
-    // Factual narrative — no evaluative verdict. States what the TB
-    // shows and names the comparison that remains unavailable.
+    // MBR-FIX-2B (2026-10-10) — reactive narrative generated from
+    // Actual + Budget inputs; replaces the hardcoded "Budget
+    // comparison unavailable" sentence that stuck even on tenants
+    // with a committed Budget.  Narrative tone stays
+    // Board-report-neutral: states facts, calls out favourable or
+    // unfavourable only when the data supports it (actual vs budget
+    // threshold of ±1% to avoid noise on rounding).
+    const fmtVariance = (v: number): string => {
+      const abs = Math.abs(v);
+      const sign = v >= 0 ? "+" : "−";
+      if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
+      return `${sign}$${Math.round(abs / 1_000)}K`;
+    };
     const narrativeParts: string[] = [];
     if (partial?.revenue.value) {
-      narrativeParts.push(`Revenue over the period totals ${revVal}.`);
+      narrativeParts.push(`Operating revenue (fiscal YTD) totals ${revVal}.`);
     }
     if (partial?.noi.value) {
       const n = Number(partial.noi.value.toString());
@@ -1681,7 +1692,34 @@ function buildOperationsBriefing(
     if (duesPct != null) {
       narrativeParts.push(`Dues account for ${duesPct.toFixed(1)}% of operating revenue.`);
     }
-    narrativeParts.push("Budget comparison is unavailable — no budget source has been loaded for this tenant.");
+    const budgetAvailable = partial?.budgetComparison.availability === "DERIVED";
+    if (budgetAvailable
+      && partial?.revenueVariance.value != null
+      && partial?.revenueVariancePct.value != null
+      && partial?.budgetRevenue.value != null) {
+      const d = partial.revenueVariance.value;
+      const pct = partial.revenueVariancePct.value;
+      const direction = d >= 0 ? "above" : "below";
+      narrativeParts.push(
+        `Revenue variance ${fmtVariance(d)} (${Math.abs(pct).toFixed(1)}% ${direction} Budget of $${(partial.budgetRevenue.value / 1_000_000).toFixed(2)}M).`,
+      );
+    }
+    if (budgetAvailable
+      && partial?.noiVariance.value != null
+      && partial?.noiVariancePct.value != null
+      && partial?.budgetNoi.value != null) {
+      const d = partial.noiVariance.value;
+      const pct = partial.noiVariancePct.value;
+      const direction = d >= 0 ? "above" : "below";
+      narrativeParts.push(
+        `NOI variance ${fmtVariance(d)} (${Math.abs(pct).toFixed(1)}% ${direction} Budget of $${(partial.budgetNoi.value / 1_000_000).toFixed(2)}M).`,
+      );
+    }
+    if (!budgetAvailable) {
+      narrativeParts.push(
+        "Budget comparison unavailable — no committed Budget for this fiscal year on this tenant.",
+      );
+    }
     const narrative = narrativeParts.join(" ");
 
     return {
@@ -1697,13 +1735,17 @@ function buildOperationsBriefing(
       ],
       question: "Are we operating successfully?",
       coverNarrative: narrative,
+      // MBR-FIX-2B (2026-10-10) — coverMetric sub-labels no longer
+      // hardcode "Jan 2026" / "Not available".  Period-neutral text
+      // appears when the KPI is DERIVED; "Not available" stays only
+      // for the UNAVAILABLE branch.
       coverMetrics: [
         {
           key: "revenue",
           label: "Revenue",
           value: revVal,
           sub: partial?.revenue.provenance.availability === "DERIVED"
-            ? "Jan 2026 Jonas TB"
+            ? "Fiscal YTD · committed TB"
             : "Not available",
         },
         {
@@ -1711,7 +1753,7 @@ function buildOperationsBriefing(
           label: "NOI before dep.",
           value: noiVal,
           sub: partial?.noi.provenance.availability === "DERIVED"
-            ? "Rev − COGS − OpEx"
+            ? "Rev − COGS − OpEx (ex-dep, ex-fin)"
             : "Not available",
         },
         {
