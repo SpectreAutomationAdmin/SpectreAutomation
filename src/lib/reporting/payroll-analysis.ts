@@ -399,6 +399,7 @@ export async function buildPayrollDepartmentLive(
 
 export function buildPayrollRatioTrendData(
   inputs: PayrollRatioTrendInputs,
+  opts: { dataSource?: ReportingDataSource } = {},
 ): PayrollRatioTrendData {
   // The chart's x-axis ALWAYS displays the full fiscal year (12
   // months). The ACTUAL series, however, only extends through the
@@ -485,7 +486,7 @@ export function buildPayrollRatioTrendData(
     benchmarkSeries: inputs.monthlyActual.map((m) => ({ label: m.label, value: inputs.benchmarkPct })),
     priorYearSeries: inputs.monthlyPriorYear.map((m) => ({ label: m.label, value: m.ratio })),
     commentary,
-    dataSource: "demo",
+    dataSource: opts.dataSource ?? "demo",
   };
 }
 

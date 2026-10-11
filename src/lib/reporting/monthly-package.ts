@@ -152,6 +152,8 @@ import {
   SILVER_SPRINGS_DUES_CATEGORIES,
   type DuesSubsidyData,
 } from "@/lib/reporting/dues-subsidy";
+import { buildOperatingCostCoverageLive } from "@/lib/reporting/operating-cost-coverage-live";
+import { buildPayrollRatioTrendLive } from "@/lib/reporting/payroll-ratio-trend-live";
 import {
   buildPayrollDepartmentData,
   buildPayrollDepartmentLive,
@@ -3203,8 +3205,16 @@ export async function getMonthlyReportingPackage(
             SILVER_SPRINGS_DEPARTMENT_INPUTS,
             SILVER_SPRINGS_DEPARTMENT_COMMENTARY,
           ),
+      // MBR-FIX-2H (2026-10-10) — live-tenant Dues Subsidy donut is
+      // rebuilt as an Operating Cost Coverage analysis.  Slices =
+      // per-fsGroupKey OpEx as a share of Operating Dues YTD + an
+      // explicit Dues Coverage Surplus (or Operating Shortfall) slice.
+      // Reconciles cent-for-cent to Statement of Activities via
+      // `resolveFsGroupProjection`.  See
+      // `src/lib/reporting/operating-cost-coverage-live.ts` for the
+      // reconciliation chain + founder authorization note.
       duesSubsidy: hasRealData
-        ? buildDuesSubsidyData(0, 0, [])
+        ? await buildOperatingCostCoverageLive(clubId, periodEnd)
         : buildDuesSubsidyData(
             SILVER_SPRINGS_DUES_TOTAL,
             SILVER_SPRINGS_MEMBER_COUNT,
@@ -3222,18 +3232,16 @@ export async function getMonthlyReportingPackage(
             duesDollars: SILVER_SPRINGS_OPERATING_DUES,
             reportingYear: periodEnd.getUTCFullYear(),
           }),
+      // MBR-FIX-2H (2026-10-10) — live-tenant Payroll Ratio Monthly
+      // Trend now resolves per-month MTD payroll + MTD operating
+      // revenue via `resolveFsGroupProjection` (one call per
+      // committed month).  Every monthly point reconciles to Section
+      // IV Statement of Activities and Section III Payroll Ratio
+      // KPI.  See
+      // `src/lib/reporting/payroll-ratio-trend-live.ts` for the
+      // reconciliation chain + prior-year handling note.
       payrollRatioTrend: hasRealData
-        ? buildPayrollRatioTrendData({
-            monthlyActual: [],
-            monthlyBudget: [],
-            monthlyPriorYear: [],
-            benchmarkPct: 0,
-            duesRatioPct: 0,
-            golfRoundsActual: 0,
-            golfRoundsPriorYear: 0,
-            reportingYear: periodEnd.getUTCFullYear(),
-            reportingMonth: periodEnd.getUTCMonth() + 1,
-          })
+        ? await buildPayrollRatioTrendLive(clubId, periodEnd)
         : buildPayrollRatioTrendData({
             monthlyActual:    SILVER_SPRINGS_PAYROLL_ACTUAL_MONTHLY,
             monthlyBudget:    SILVER_SPRINGS_PAYROLL_BUDGET_MONTHLY,
