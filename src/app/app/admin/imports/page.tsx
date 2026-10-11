@@ -68,6 +68,63 @@ export default async function ImportsPage({
         </div>
       )}
 
+      {/* MBR-FIX-2L (2026-10-11) — Historical imports discoverability.
+          Jonas GL, Golf Activity, and AR Aging previously had no entry
+          point from the hub; they were URL-only.  Each is now
+          reachable with a one-line description so a non-technical user
+          can find them without knowing the route path. */}
+      <div className="mt-6 card card-body">
+        <h2 className="section-title text-lg">Historical imports</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          Period-specific month-end imports that drive reporting
+          surfaces (Statement of Activities, Section VIII AR Aging,
+          Section XI Weather &amp; Utilization). Each importer
+          previews non-destructively; the founder commits only after
+          reviewing the reconciliation.
+        </p>
+        <ul className="mt-3 grid gap-3 sm:grid-cols-3" data-testid="imports-hub-historical">
+          <li>
+            <Link
+              href="/app/admin/imports/jonas"
+              className="block rounded border border-stone-200 bg-white p-3 hover:border-club-ink"
+              data-testid="imports-hub-jonas-link"
+            >
+              <div className="text-sm font-medium">Jonas GL (Trial Balance)</div>
+              <div className="mt-0.5 text-xs text-stone-500">
+                Month-end Trial Balance XLSX. Feeds every financial
+                statement + stewardship KPI.
+              </div>
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/app/admin/imports/ar-aging"
+              className="block rounded border border-stone-200 bg-white p-3 hover:border-club-ink"
+              data-testid="imports-hub-ar-aging-link"
+            >
+              <div className="text-sm font-medium">AR Aging</div>
+              <div className="mt-0.5 text-xs text-stone-500">
+                Month-end Jonas AR workbook. Feeds Section VIII AR
+                Aging + the Stewardship Dashboard AR Current %.
+              </div>
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/app/admin/imports/golf-activity"
+              className="block rounded border border-stone-200 bg-white p-3 hover:border-club-ink"
+              data-testid="imports-hub-golf-activity-link"
+            >
+              <div className="text-sm font-medium">Golf Activity</div>
+              <div className="mt-0.5 text-xs text-stone-500">
+                Monthly GGGolf Daily Report PDF. Feeds Section XI
+                Weather &amp; Utilization.
+              </div>
+            </Link>
+          </li>
+        </ul>
+      </div>
+
       <div className="mt-6 card card-body">
         <h2 className="section-title text-lg">New batch</h2>
         <NewBatchForm />
