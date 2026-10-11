@@ -4230,9 +4230,21 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       // demo values can reach here, and the redactor's blanket
       // `makeUnavailable` would wipe the live Actual + Budget rows.
       scorecards: pkg.stewardshipDashboard.scorecards,
-      // Dues Subsidy + Payroll Ratio Trend remain unchanged.
-      duesSubsidy:       makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
-      payrollRatioTrend: makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
+      // MBR-FIX-2H (2026-10-10) — Dues Subsidy + Payroll Ratio Trend
+      // now carry live-tenant builders (Operating Cost Coverage +
+      // multi-committed-month Trend respectively).  Mirror the AR
+      // Aging / Chapter X contract: leave live chapters alone; only
+      // apply the sentinel when the builder still returned demo
+      // data.  Pre-fix this was an unconditional wipe which hid the
+      // live output of both builders.
+      duesSubsidy:
+        pkg.stewardshipDashboard.duesSubsidy.dataSource === "live"
+          ? pkg.stewardshipDashboard.duesSubsidy
+          : makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
+      payrollRatioTrend:
+        pkg.stewardshipDashboard.payrollRatioTrend.dataSource === "live"
+          ? pkg.stewardshipDashboard.payrollRatioTrend
+          : makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
     },
     // STEWARDSHIP-LIVE-1 §7-18 (2026-10-04) — Section III
     // "Operating vs. Capital Stewardship". Previously this redactor
