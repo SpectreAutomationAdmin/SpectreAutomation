@@ -34,6 +34,7 @@ import {
 import { getBoardPackageView } from "@/lib/reporting/monthly-package-lifecycle";
 import { getActiveClubId } from "@/lib/active-club";
 import { getCurrentPrincipal } from "@/lib/services/principal";
+import { prisma as prismaImport } from "@/lib/prisma";
 import { MonthlyReportingPackageBody } from "@/app/app/admin/reporting/monthly/MonthlyReportingPackageBody";
 import { MONTHLY_REPORTING_CHAPTERS } from "@/lib/reporting/monthly-package-chapters";
 import { chapterIdFor } from "@/lib/reporting/chapter-id";
@@ -99,6 +100,47 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
       ? await getMonthlyReportingPackage(clubId, { period: periodOpt, viewerCanDrillDown: false })
       : await getMonthlyReportingPackage(clubId, { viewerCanDrillDown: false });
     clubName = pkg.club?.name ?? "";
+
+    // MBR-VIS-3 §3 (2026-10-11) — the admin PDF path previously
+    // rendered the LIVE pkg with no `visibility` attached, which
+    // meant every component rendered as visible regardless of
+    // the Controller's draft toggles.  The directive is explicit:
+    // "Downloaded PDF: Hidden KPI rows are omitted according to
+    // the frozen published visibility snapshot."  Look up the
+    // MonthlyPackage row for the period and, when a published
+    // payload exists, lift its `visibility` into the live pkg so
+    // the body component applies the frozen visibility snapshot.
+    // Draft edits never flow into the PDF — only publish.
+    if (periodOpt) {
+      const periodEnd = periodOpt.end;
+      const row = await prismaImport.monthlyPackage.findUnique({
+        where: {
+          clubId_reportingYear_reportingMonth: {
+            clubId,
+            reportingYear: periodEnd.getUTCFullYear(),
+            reportingMonth: periodEnd.getUTCMonth() + 1,
+          },
+        },
+        select: { packagePayloadJson: true },
+      });
+      if (row?.packagePayloadJson) {
+        try {
+          const frozen = JSON.parse(row.packagePayloadJson) as {
+            visibility?: { entries?: Record<string, boolean> };
+          };
+          if (frozen?.visibility?.entries) {
+            (pkg as unknown as {
+              visibility: { source: "published"; entries: Record<string, boolean> };
+            }).visibility = {
+              source: "published",
+              entries: frozen.visibility.entries,
+            };
+          }
+        } catch {
+          /* corrupted snapshot — fall through to default-visible */
+        }
+      }
+    }
   }
 
   if (!pkg) notFound();

@@ -339,6 +339,44 @@ export default async function MonthlyReportingPage({
           oppositeHref={draftPreviewHref}
         />
       )}
+      {/* MBR-VIS-3 §4 (2026-10-11) — editing-mode pending-publish
+          notice.  When the draft visibility differs from the frozen
+          published snapshot, the exported PDF renders the LAST
+          PUBLISHED version — not the draft.  Make that explicit
+          so the Controller knows a Publish/Overwrite is required
+          before the PDF reflects their pending edits. */}
+      {editing && pendingCount > 0 && (
+        <div
+          data-testid="pending-visibility-notice"
+          role="status"
+          className="border-b border-amber-700/40 bg-amber-50 text-amber-900"
+          style={{ padding: "8px 18px" }}
+        >
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <div>
+              <strong className="font-semibold uppercase tracking-wider">
+                Unpublished visibility changes
+              </strong>
+              <span className="mx-2 opacity-70">·</span>
+              <span>
+                {pendingCount} pending edit{pendingCount === 1 ? "" : "s"} —
+                the Download PDF currently reflects the last published
+                version.  Review Draft Preview and publish to update the
+                PDF.
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a
+                href={draftPreviewHref}
+                className="underline hover:no-underline"
+                data-testid="pending-visibility-review-link"
+              >
+                Review Draft Preview
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
       <MonthlyReportingPackageBody
         pkg={pkg}
         visibility={renderConfig ? {
