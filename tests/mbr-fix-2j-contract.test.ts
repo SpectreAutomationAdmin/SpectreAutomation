@@ -102,11 +102,15 @@ describe("MBR-FIX-2J §C — F&B Subsidy computes from Section X inputs", () => 
     expect(src).toMatch(/operatingDuesYtd:\s*number\s*\|\s*null/);
   });
 
-  it("buildFbSubsidyCard formula = loss / dues × 100", () => {
+  it("buildFbSubsidyCard formula = max(0, loss) / dues × 100", () => {
+    // MBR-FIX-2N (2026-10-11) — renamed variable from
+    // `subsidyPct` to `lossPct` + wrapped the numerator in
+    // Math.max(0, loss) so a positive F&B net result renders
+    // 0.0% rather than a negative "subsidy".
     const idx = src.indexOf("function buildFbSubsidyCard");
     expect(idx).toBeGreaterThan(0);
     const body = src.slice(idx, idx + 2500);
-    expect(body).toMatch(/const\s+subsidyPct\s*=\s*\(loss\s*\/\s*dues\)\s*\*\s*100/);
+    expect(body).toMatch(/const\s+lossPct\s*=\s*\(Math\.max\(0,\s*loss\)\s*\/\s*dues\)\s*\*\s*100/);
   });
 
   it("buildFbSubsidyCard falls back to sentinel when inputs missing", () => {

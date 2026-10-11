@@ -747,10 +747,12 @@ export const SILVER_SPRINGS_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
   auxiliaryKpiCards: {
     operating: {
       fbSubsidy: {
-        key: "fb-subsidy",
-        name: "F&B Subsidy",
-        whatIsIt: "Share of dues revenue absorbed by F&B operating losses.",
-        whyItMatters: "F&B almost always runs at a loss at a private club; the subsidy size signals whether it is contained or growing.",
+        // MBR-FIX-2N §4 (2026-10-11) — label aligned with the live
+        // tenant across the Monthly Reporting Package.
+        key: "fb-operating-loss-pct-dues",
+        name: "F&B Operating Loss as % of Dues",
+        whatIsIt: "F&B department net operating loss expressed as a percentage of Operating Membership Dues YTD.",
+        whyItMatters: "Mathematical signal of departmental P&L drag on operating dues revenue. It is not a formal allocation of membership dues to F&B operations.",
         assessment: "Contained, below ceiling",
         actual: "5.1%",
         budget: "Target ≤ 8%",
@@ -877,11 +879,14 @@ export const UNAVAILABLE_AUXILIARY_KPI_CARDS: {
 } = {
   operating: {
     fbSubsidy: {
-      key: "fb-subsidy",
-      name: "F&B Subsidy",
-      whatIsIt: "Share of dues revenue absorbed by F&B operating losses.",
-      whyItMatters: "F&B almost always runs at a loss at a private club; the subsidy size signals whether it is contained or growing.",
-      assessment: "Source not connected — F&B subledger not yet integrated.",
+      // MBR-FIX-2N §4 (2026-10-11) — "subsidy" renamed to
+      // "operating loss as % of dues" so the Board reads a
+      // mathematically accurate label (not a formal dues allocation).
+      key: "fb-operating-loss-pct-dues",
+      name: "F&B Operating Loss as % of Dues",
+      whatIsIt: "F&B department net operating loss expressed as a percentage of Operating Membership Dues YTD.",
+      whyItMatters: "Mathematical signal of departmental P&L drag on operating dues revenue. It is not a formal allocation of membership dues to F&B operations.",
+      assessment: "Source not connected — F&B departmental P&L not available for this period.",
       actual: "—",
       tone: "neutral",
     },
@@ -1253,28 +1258,30 @@ function buildFbSubsidyCard(
   const dues = availability?.operatingDuesYtd ?? null;
 
   if (loss == null || dues == null || dues <= 0) {
-    // Fall back to the auxiliary SOURCE_NOT_CONNECTED sentinel.
+    // Fall back to the auxiliary unavailable sentinel.
     return aux.auxiliaryKpiCards.operating.fbSubsidy;
   }
 
-  // Subsidy = |loss| / dues × 100. The `loss` input is already the
-  // ABSOLUTE value of the dept's negative net operating result (sign
-  // handling lives at the resolver boundary so this stays clean).
-  const subsidyPct = (loss / dues) * 100;
-
-  // No founder-configured policy ceiling for Coulee today. Emit
-  // neutral tone + a precise fact-only assessment per directive §13
-  // (no favourable status without an approved target).
-  const assessment = loss > 0
-    ? `${formatMoneyShort(loss)} absorbed by Operating Dues YTD`
-    : "No F&B operating loss this period";
+  // MBR-FIX-2N §4 (2026-10-11) — the metric is NOT a formally
+  // approved allocation of membership dues. Renamed from "F&B
+  // Subsidy" to "F&B Operating Loss as % of Dues" so the Board
+  // reads a mathematically accurate label.
+  //
+  // Numerator = max(0, F&B Net Operating Loss). A positive F&B net
+  // operating result (surplus) renders 0.0% with a surplus-stating
+  // description — never a negative "subsidy" value.
+  const lossPct = (Math.max(0, loss) / dues) * 100;
+  const isSurplus = loss <= 0;
+  const assessment = isSurplus
+    ? "F&B operating at net surplus — no operating loss absorbed by dues this period"
+    : `${formatMoneyShort(loss)} F&B operating loss ÷ Operating Dues YTD (Section X). Not a formal allocation of dues.`;
   return {
-    key: "fb-subsidy",
-    name: "F&B Subsidy",
-    whatIsIt: "Share of operating dues absorbed by F&B net operating losses.",
-    whyItMatters: "F&B almost always runs at a loss at a private club; the subsidy size signals whether it is contained or growing.",
+    key: "fb-operating-loss-pct-dues",
+    name: "F&B Operating Loss as % of Dues",
+    whatIsIt: "F&B department net operating loss expressed as a percentage of Operating Membership Dues YTD.",
+    whyItMatters: "Mathematical signal of departmental P&L drag on operating dues revenue. It is not a formal allocation of membership dues to F&B operations.",
     assessment,
-    actual: `${subsidyPct.toFixed(1)}%`,
+    actual: `${lossPct.toFixed(1)}%`,
     budget: "No policy target configured",
     benchmark: aux.auxiliaryKpiCards.operating.fbSubsidy.benchmark,
     tone: "neutral",

@@ -310,9 +310,21 @@ export async function buildOperatingScorecardLive(
   };
 }
 
-/** MBR-FIX-2M §3F — F&B Subsidy row builder.  Encapsulates the
- *  three-input gate so a null in any input renders the row as
- *  unavailable rather than fabricating zero. */
+/** MBR-FIX-2N §4 (2026-10-11) — F&B Operating Loss as % of Dues row.
+ *
+ *  Renamed from the pre-fix "F&B Subsidy as % of Dues" per founder
+ *  authorization: the word "subsidy" implies a formally approved
+ *  allocation of membership dues to departmental operations, which
+ *  does NOT exist on Coulee's accounting records.  The calculation
+ *  is unchanged — only the label + explanation are corrected to be
+ *  financially accurate.
+ *
+ *  Numerator semantics (directive §4.3): a POSITIVE F&B Net
+ *  Operating Result (a surplus) is NOT an operating loss and is not
+ *  described as one.  When the department is not in loss, the row
+ *  renders "0.0%" (a genuine calculated zero — distinct from an
+ *  unavailable state) with a description that names the signed
+ *  result accurately. */
 function buildFbSubsidyRow(
   fbNetOperatingLoss: number | null | undefined,
   operatingDuesYtd: number | null | undefined,
@@ -322,9 +334,9 @@ function buildFbSubsidyRow(
   const dues = operatingDuesYtd ?? null;
   if (loss == null || dues == null || dues <= 0) {
     return {
-      key: "fb-subsidy-pct-dues",
-      metric: "F&B Subsidy as % of Dues",
-      description: "F&B operating loss YTD ÷ dues YTD",
+      key: "fb-operating-loss-pct-dues",
+      metric: "F&B Operating Loss as % of Dues",
+      description: "F&B department net operating loss ÷ Operating Membership Dues YTD",
       actual: null,
       budget: null,
       benchmark: null,
@@ -332,14 +344,15 @@ function buildFbSubsidyRow(
       dataSource: "demo",
     };
   }
-  // Positive F&B net result (surplus) renders 0.0 % — correct board
-  // signal that dues are NOT absorbing any F&B operating cost.
-  const subsidyPct = (Math.max(0, loss) / dues) * 100;
+  const lossPct = (Math.max(0, loss) / dues) * 100;
+  const isSurplus = loss <= 0;
   return {
-    key: "fb-subsidy-pct-dues",
-    metric: "F&B Subsidy as % of Dues",
-    description: "F&B operating loss YTD ÷ dues YTD (Section X)",
-    actual: `${subsidyPct.toFixed(1)}%`,
+    key: "fb-operating-loss-pct-dues",
+    metric: "F&B Operating Loss as % of Dues",
+    description: isSurplus
+      ? "F&B department operating at net surplus (no operating loss absorbed by dues)"
+      : "F&B department operating loss ÷ Operating Membership Dues YTD (Section X) — not a formal allocation of dues",
+    actual: `${lossPct.toFixed(1)}%`,
     budget: null,
     benchmark: null,
     status: null,
@@ -449,20 +462,61 @@ export async function buildCapitalScorecardLive(
       status: null,
       dataSource: dsLive,
     },
+    // MBR-FIX-2N §2 (2026-10-11) — Capital Funding Coverage Ratio.
+    //
+    // Formula (approved by founder 2026-10-11):
+    //   Available Capital Funding ÷ Approved Capital Requirements × 100
+    //
+    // Required inputs for a defensible calculation:
+    //   • Approved capital expenditure plan over a documented
+    //     planning horizon (not loaded on Coulee today — no capital-
+    //     planning module).
+    //   • Approved available capital funding over the SAME horizon,
+    //     net of restrictions, double-counts, and undrawn financing
+    //     commitments (requires an approved funding source table —
+    //     also not loaded today).
+    //
+    // Per directive §2.4: if the required information is incomplete,
+    // do NOT calculate or display a ratio. The KPI stays unavailable
+    // with a precise reason and will automatically populate once the
+    // approved capital plan + funding sources land. No invented
+    // policy threshold.
     {
-      key: "net-available-capital",
-      metric: "Net Available Capital Ratio",
-      description: "Net available capital ÷ operating revenue",
+      key: "capital-funding-coverage",
+      metric: "Capital Funding Coverage Ratio",
+      description:
+        "Available Capital Funding ÷ Approved Capital Requirements. " +
+        "Unavailable — Approved capital funding and expenditure plan not fully configured.",
       actual: null,
       budget: null,
       benchmark: null,
       status: null,
       dataSource: "demo",
     },
+    // MBR-FIX-2N §3 (2026-10-11) — Capital Reinvestment Ratio.
+    //
+    // Formula (approved by founder 2026-10-11):
+    //   Capital Asset Additions ÷ Depreciation Expense
+    //   (trailing 12 months, same window for both)
+    //
+    // Required inputs:
+    //   • Reliable monthly capital asset additions source (actual
+    //     recognized additions, not budget, not inferred from net
+    //     PP&E balance movement). Not loaded on Coulee today —
+    //     no capital-additions ledger / fixed-asset subsidiary.
+    //   • 12 consecutive months of depreciation history. Coulee has
+    //     3 committed months (Jan + Feb + Mar 2026); 9 months short
+    //     of the required window.
+    //
+    // Per directive §3.4: do NOT manufacture missing months or
+    // annualize incomplete data; do NOT infer additions from net
+    // PP&E movement. Stay unavailable with the precise reason.
     {
-      key: "net-capital-vs-depreciation",
-      metric: "Net Capital > Depreciation?",
-      description: "Reserve + assessments ≥ annual depreciation",
+      key: "capital-reinvestment-ratio",
+      metric: "Capital Reinvestment Ratio",
+      description:
+        "Capital Asset Additions ÷ Depreciation Expense (trailing 12 months). " +
+        "Unavailable — 12 months of capital additions and depreciation history required.",
       actual: null,
       budget: null,
       benchmark: null,
