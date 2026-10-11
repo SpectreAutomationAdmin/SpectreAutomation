@@ -42,8 +42,14 @@ import {
 import { AtAGlanceBlock } from "@/components/reporting/AtAGlanceBlock";
 import { prisma as prismaImport } from "@/lib/prisma";
 import { computePublishedPayloadHash } from "@/lib/reporting/monthly-package-lifecycle";
+import {
+  resolveDraftVisibility,
+  resolvePublishedVisibility,
+  countPendingVisibilityEdits,
+} from "@/lib/reporting/monthly-package-visibility";
 import { PublishHeaderButton } from "./PublishHeaderButton";
 import { MonthlyReportingPackageBody } from "./MonthlyReportingPackageBody";
+import { PublicationStateBanner } from "@/components/reporting/PublicationStateBanner";
 
 // Step / board-package shell — the page no longer owns its own
 // sidebar / chapter rail. The dedicated reporting layout
@@ -52,7 +58,7 @@ import { MonthlyReportingPackageBody } from "./MonthlyReportingPackageBody";
 // Card-level redesign comes in a later step.
 
 type MonthlyReportingPageProps = {
-  searchParams?: { period?: string };
+  searchParams?: { period?: string; preview?: string };
 };
 
 /**
@@ -243,22 +249,122 @@ export default async function MonthlyReportingPage({
     ? `${monthNames[headerRow.reportingMonth - 1]} ${headerRow.reportingYear}`
     : "";
 
+  // MBR-VIS-1 Part B — resolve visibility + handle ?preview= modes.
+  //
+  //   • default (no ?preview)       → editing mode: toggles active,
+  //                                   hidden components muted in place.
+  //   • ?preview=draft              → DRAFT PREVIEW: toggles hidden;
+  //                                   renders what WOULD publish now.
+  //   • ?preview=published          → CURRENTLY PUBLISHED: toggles
+  //                                   hidden; renders what the Board
+  //                                   sees right now (frozen snapshot).
+  const previewMode = searchParams?.preview ?? null;
+  const isDraftPreview = previewMode === "draft";
+  const isPublishedPreview = previewMode === "published";
+  const editing = !isDraftPreview && !isPublishedPreview;
+  // Resolve both configs so the editing view can render the "pending
+  // publish" dot and the Published State banner can show publish
+  // metadata.
+  let draftConfig: Awaited<ReturnType<typeof resolveDraftVisibility>> | null = null;
+  let publishedConfig: Awaited<ReturnType<typeof resolvePublishedVisibility>> | null = null;
+  let pendingCount = 0;
+  if (
+    Number.isFinite(reportingYear) &&
+    Number.isFinite(reportingMonth) &&
+    reportingYear > 0 &&
+    reportingMonth > 0
+  ) {
+    draftConfig = await resolveDraftVisibility(
+      clubId,
+      reportingYear,
+      reportingMonth,
+    ).catch(() => null);
+    publishedConfig = await resolvePublishedVisibility(
+      clubId,
+      reportingYear,
+      reportingMonth,
+    ).catch(() => null);
+    pendingCount = await countPendingVisibilityEdits(
+      clubId,
+      reportingYear,
+      reportingMonth,
+    ).catch(() => 0);
+  }
+  // Select which config the body renders through:
+  //   editing          → draft (toggles active).
+  //   draft preview    → draft (toggles off; show pending edits).
+  //   published        → frozen snapshot visibility.
+  const renderConfig = isPublishedPreview ? publishedConfig : draftConfig;
+  const periodArg =
+    Number.isFinite(reportingYear) &&
+    Number.isFinite(reportingMonth) &&
+    reportingYear > 0 &&
+    reportingMonth > 0
+      ? { reportingYear, reportingMonth }
+      : undefined;
+
+  // Resolve publisher display name for the PUBLISHED STATE banner.
+  let publishedByName: string | null = null;
+  if (isPublishedPreview && publishedConfig?.publishedByUserId) {
+    const user = await prismaImport.user
+      .findUnique({
+        where: { id: publishedConfig.publishedByUserId },
+        select: { name: true, email: true },
+      })
+      .catch(() => null);
+    publishedByName = user?.name ?? user?.email ?? null;
+  }
+
+  const periodQueryStr = searchParams?.period ? `?period=${searchParams.period}` : "";
+  const editingHref = `/app/admin/reporting/monthly${periodQueryStr}`;
+  const draftPreviewHref = `/app/admin/reporting/monthly${periodQueryStr}${periodQueryStr ? "&" : "?"}preview=draft`;
+  const publishedPreviewHref = `/app/admin/reporting/monthly${periodQueryStr}${periodQueryStr ? "&" : "?"}preview=published`;
+
   return (
-    <MonthlyReportingPackageBody
-      pkg={pkg}
-      adminHeader={
-        headerRow ? (
-          <PublishHeaderButton
-            packageId={headerRow.id}
-            period={periodKeyForBar}
-            status={headerRow.status}
-            title={headerRow.title}
-            periodLabel={periodLabel}
-            hasUnpublishedEdits={hasUnpublishedEdits}
-            isCurrentLive={isCurrentLive}
-          />
-        ) : null
-      }
-    />
+    <>
+      {isDraftPreview && (
+        <PublicationStateBanner
+          mode="draft"
+          pendingCount={pendingCount}
+          editingHref={editingHref}
+          oppositeHref={publishedPreviewHref}
+        />
+      )}
+      {isPublishedPreview && (
+        <PublicationStateBanner
+          mode="published"
+          publishedAt={publishedConfig?.publishedAt ?? null}
+          publishedByName={publishedByName}
+          editingHref={editingHref}
+          oppositeHref={draftPreviewHref}
+        />
+      )}
+      <MonthlyReportingPackageBody
+        pkg={pkg}
+        visibility={renderConfig ? {
+          source: renderConfig.source,
+          entries: renderConfig.entries,
+        } : undefined}
+        publishedVisibility={publishedConfig ? {
+          source: publishedConfig.source,
+          entries: publishedConfig.entries,
+        } : undefined}
+        editing={editing}
+        period={periodArg}
+        adminHeader={
+          headerRow ? (
+            <PublishHeaderButton
+              packageId={headerRow.id}
+              period={periodKeyForBar}
+              status={headerRow.status}
+              title={headerRow.title}
+              periodLabel={periodLabel}
+              hasUnpublishedEdits={hasUnpublishedEdits}
+              isCurrentLive={isCurrentLive}
+            />
+          ) : null
+        }
+      />
+    </>
   );
 }

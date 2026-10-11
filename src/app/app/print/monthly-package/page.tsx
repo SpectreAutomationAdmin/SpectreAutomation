@@ -555,7 +555,27 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
         data-club-name={clubName}
         className="bg-white text-club-ink"
       >
-        <MonthlyReportingPackageBody pkg={pkg} />
+        <MonthlyReportingPackageBody
+          pkg={pkg}
+          /* MBR-VIS-1 Part B — PDF reads the frozen visibility
+             snapshot from the published payload if present. Draft
+             edits in `MonthlyPackageVisibility` never alter the
+             PDF until an explicit republish lands a new snapshot. */
+          visibility={
+            (pkg as unknown as {
+              visibility?: { entries?: Record<string, boolean> };
+            }).visibility?.entries
+              ? {
+                  source: "published",
+                  entries:
+                    (pkg as unknown as {
+                      visibility: { entries: Record<string, boolean> };
+                    }).visibility.entries,
+                }
+              : undefined
+          }
+          editing={false}
+        />
       </main>
     </>
   );

@@ -145,6 +145,38 @@ export function ReportingShell({
   );
   const navUntilRef = useRef<{ id: string; until: number } | null>(null);
 
+  // MBR-VIS-1 Part B — client-side rail filter.  The body renders
+  // `<section id="...">` or `<ChapterSection>` for every chapter.
+  // In non-editing modes, a hidden chapter is collapsed entirely
+  // (no DOM element).  Observe which chapter anchors are present
+  // in the DOM and filter the rail accordingly so a reader can
+  // never click a rail entry that leads to nothing.  In editing
+  // mode every chapter stays rendered (muted) so the rail shows
+  // the full list.
+  const [renderedAnchorIds, setRenderedAnchorIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    function readPresentAnchors(): Set<string> {
+      const anchors = new Set<string>();
+      for (const c of chapters) {
+        const id = chapterIdFor(c.label);
+        if (document.getElementById(id)) anchors.add(id);
+      }
+      return anchors;
+    }
+    setRenderedAnchorIds(readPresentAnchors());
+    const observer = new MutationObserver(() => {
+      setRenderedAnchorIds(readPresentAnchors());
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [chapters]);
+
+  const visibleChapters =
+    renderedAnchorIds == null
+      ? chapters
+      : chapters.filter((c) => renderedAnchorIds.has(chapterIdFor(c.label)));
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     // Deterministic majority-visible scrollspy (replaces the prior
@@ -528,7 +560,7 @@ export function ReportingShell({
               In this package
             </div>
             <ol className="mt-4 space-y-2">
-              {chapters.map((c, i) => {
+              {visibleChapters.map((c, i) => {
                 // Derive the chapter's section id from its visible
                 // label (single source of truth — 2026-06-19 naming
                 // convention). The id flows into the anchor `href`,
@@ -539,7 +571,7 @@ export function ReportingShell({
                 // Group heading appears only at the start of a new
                 // group run — chapters with the same group as the
                 // previous chapter inherit the heading silently.
-                const isFirstOfGroup = i === 0 || chapters[i - 1].group !== c.group;
+                const isFirstOfGroup = i === 0 || visibleChapters[i - 1].group !== c.group;
                 return (
                   <li key={id}>
                     {isFirstOfGroup ? (
