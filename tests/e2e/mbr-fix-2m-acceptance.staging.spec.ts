@@ -26,15 +26,19 @@ async function bodyText(page: Page): Promise<string> {
   return page.evaluate(() => (document.body.textContent ?? "").replace(/\s+/g, " "));
 }
 
+// Scorecard rows render as: <row-label> <description> <actual-value>.
+// textContent concatenates without separators, so the matcher has to
+// lazily skip up to 200 chars of description between the label and
+// the value.  The ".*?" captures that skip conservatively.
 function matchKpiPctAfterLabel(txt: string, label: string): string | null {
   const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = txt.match(new RegExp(esc + "\\s*([\\d.]+)%"));
+  const m = txt.match(new RegExp(esc + "[\\s\\S]{0,200}?([\\d.]+)%"));
   return m ? m[1] : null;
 }
 
 function matchKpiMoneyAfterLabel(txt: string, label: string): string | null {
   const esc = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = txt.match(new RegExp(esc + "\\s*(\\$?[\\d,.]+[MK]?)"));
+  const m = txt.match(new RegExp(esc + "[\\s\\S]{0,200}?(\\$[\\d,.]+[MK]?)"));
   return m ? m[1] : null;
 }
 
