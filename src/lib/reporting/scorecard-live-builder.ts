@@ -32,6 +32,33 @@ import {
 
 type Period = { periodStart: Date; periodEnd: Date; label: string };
 
+/** MBR-FIX-2M (2026-10-11) — ancillary inputs the scorecard builders
+ *  need beyond `resolveJanuaryMetricSet` + the Budget resolver.  These
+ *  live outside the ratio registry's shape so the caller
+ *  (monthly-package.ts) can share the same resolver output already
+ *  used by Section III (Stewardship Dashboard) + Section X
+ *  (Departmental P&L) without a second DB round-trip per scorecard.
+ *
+ *  Every field is optional + null-safe: when a field is null, the
+ *  scorecard row stays unavailable (never fabricated). */
+export type ScorecardLiveAncillary = {
+  /** F&B department Net Operating Loss YTD, positive scalar (dollars
+   *  absorbed by Operating Dues). Null when the F&B dept has no
+   *  committed activity.  Same source Section III Stewardship
+   *  Dashboard F&B Subsidy card consumes (MBR-FIX-2J). */
+  fbNetOperatingLoss?: number | null;
+  /** Operating Membership Dues YTD, positive scalar.  Same source
+   *  Section III + the Operating Cost Coverage donut consume. */
+  operatingDuesYtd?: number | null;
+  /** Total Capital Fund Income YTD, positive scalar.  Sourced from
+   *  `FsGroupProjection.totals.capitalRevenue.ytdActual` (sign-flipped
+   *  to positive display). Same number Section V renders. */
+  capitalIncomeActual?: number | null;
+  /** Total Capital Fund Income YTD Budget, positive scalar.  From
+   *  `FsGroupProjection.totals.capitalRevenue.ytdBudget`. */
+  capitalIncomeBudget?: number | null;
+};
+
 /** Formatter helpers — kept local so changes to the demo-tenant
  *  formatters in scorecard-metrics.ts never silently affect live
  *  tenants (demo and live render differently; this preserves parity
@@ -115,6 +142,7 @@ function provenanceToSource(availability: string): ReportingDataSource {
 export async function buildOperatingScorecardLive(
   clubId: string,
   period: Period,
+  ancillary: ScorecardLiveAncillary = {},
 ): Promise<StewardshipScorecard> {
   const fiscalYear = period.periodEnd.getUTCFullYear();
   const throughMonth = period.periodEnd.getUTCMonth() + 1;
@@ -203,40 +231,53 @@ export async function buildOperatingScorecardLive(
       status: null,
       dataSource: dsLive,
     },
+    // MBR-FIX-2M (2026-10-11) — "NOI vs Budget" row. Three
+    // distinguishable values per the directive §3D:
+    //   Actual = NOI YTD (dollars)
+    //   Budget = Budget NOI YTD (dollars)
+    //   Variance = $ delta (actual − budget), rendered in the
+    //              right-most "Variance / Target" column
+    // The pre-fix row label "NOI Variance to Budget" conflated the
+    // row's purpose with the right-most column's content; renamed
+    // to "NOI vs Budget" so Actual / Budget / Variance remain
+    // unambiguous when read column-by-column.
     {
-      key: "noi-variance-to-budget",
-      metric: "NOI Variance to Budget",
-      description: "Actual NOI − Budget NOI (mathematical only)",
+      key: "noi-vs-budget",
+      metric: "NOI vs Budget",
+      description: "NOI YTD (actual) · Budget NOI YTD · Variance",
       actual: fmtMillions(actualNoi),
       budget: fmtMillions(budgetNoi),
-      benchmark: fmtDollarVariance(actualNoi, budgetNoi), // variance in the right-most column
+      benchmark: fmtDollarVariance(actualNoi, budgetNoi),
       status: null,
       dataSource: dsLive,
     },
+    // MBR-FIX-2M §3E (2026-10-11) — Entrance / Initiation Fees are
+    // classified entirely within the Capital Fund on Coulee's COA
+    // (fsGroupKey=IS_ENTRANCE_FEES → fundApplicability=CAPITAL).
+    // Preserve N/A — do NOT reclassify capital income as operating
+    // merely to populate the KPI (directive §3E + §5).
     {
       key: "initiation-fee-subsidy",
       metric: "Initiation-Fee Operating Subsidy",
-      description: "Initiation-fee dollars left in operating (best: $0)",
-      actual: null,
+      description: "N/A — entrance fees classified to Capital Fund",
+      actual: "N/A",
       budget: null,
       benchmark: null,
       status: null,
-      dataSource: "demo",
+      dataSource: dsLive,
     },
-    {
-      key: "fb-subsidy-pct-dues",
-      metric: "F&B Subsidy as % of Dues",
-      description: "Annual F&B operating subsidy ÷ dues",
-      actual: null,
-      budget: null,
-      benchmark: null,
-      status: null,
-      dataSource: "demo",
-    },
+    // MBR-FIX-2M §3F (2026-10-11) — F&B Subsidy as % of Dues.
+    //   subsidy% = max(0, −F&B Net Operating Result) ÷ Operating
+    //              Membership Dues YTD × 100
+    // Numerator reconciles to Section X Departmental P&L
+    // (committed TB departmental aggregation).  Denominator
+    // reconciles to Section IV Statement of Activities + Section III
+    // Operating Cost Coverage donut (fsGroupKey=IS_MEMBERSHIP_DUES).
+    buildFbSubsidyRow(ancillary.fbNetOperatingLoss, ancillary.operatingDuesYtd, dsLive),
     {
       key: "golf-rounds-vs-budget",
       metric: "Golf Rounds vs Budget",
-      description: "Annual rounds count (POS source not connected)",
+      description: "Rounds YTD · tee-sheet / POS source not connected",
       actual: null,
       budget: null,
       benchmark: null,
@@ -246,7 +287,7 @@ export async function buildOperatingScorecardLive(
     {
       key: "fb-covers-vs-budget",
       metric: "F&B Covers vs Budget",
-      description: "Annual covers count (POS source not connected)",
+      description: "Covers YTD · POS source not connected",
       actual: null,
       budget: null,
       benchmark: null,
@@ -258,10 +299,51 @@ export async function buildOperatingScorecardLive(
   return {
     title: "Operating Stewardship — KPI Scorecard",
     subtitle: "IS THE CLUB LIVING WITHIN THE OPERATING PLAN?",
-    sectionBand: "LIVE JANUARY FINANCIAL ROWS · OPERATIONAL + POLICY ROWS AWAIT SOURCE",
+    // MBR-FIX-2M §2 (2026-10-11) — pre-fix band hardcoded
+    // "LIVE JANUARY FINANCIAL ROWS · OPERATIONAL + POLICY ROWS
+    // AWAIT SOURCE" even for Feb / Mar / later periods. Now
+    // period-aware (uses the resolved period label).
+    sectionBand: `LIVE ${period.label.toUpperCase()} FINANCIAL ROWS · OPERATIONAL + POLICY ROWS AWAIT SOURCE`,
     columnHeaders: { actual: "Actual", budget: "Budget", benchmark: "Variance / Target" },
     rows,
     dataSource: rows.some((r) => r.dataSource === "live") ? "live" : "demo",
+  };
+}
+
+/** MBR-FIX-2M §3F — F&B Subsidy row builder.  Encapsulates the
+ *  three-input gate so a null in any input renders the row as
+ *  unavailable rather than fabricating zero. */
+function buildFbSubsidyRow(
+  fbNetOperatingLoss: number | null | undefined,
+  operatingDuesYtd: number | null | undefined,
+  dsLive: ReportingDataSource,
+): StewardshipScorecardRow {
+  const loss = fbNetOperatingLoss ?? null;
+  const dues = operatingDuesYtd ?? null;
+  if (loss == null || dues == null || dues <= 0) {
+    return {
+      key: "fb-subsidy-pct-dues",
+      metric: "F&B Subsidy as % of Dues",
+      description: "F&B operating loss YTD ÷ dues YTD",
+      actual: null,
+      budget: null,
+      benchmark: null,
+      status: null,
+      dataSource: "demo",
+    };
+  }
+  // Positive F&B net result (surplus) renders 0.0 % — correct board
+  // signal that dues are NOT absorbing any F&B operating cost.
+  const subsidyPct = (Math.max(0, loss) / dues) * 100;
+  return {
+    key: "fb-subsidy-pct-dues",
+    metric: "F&B Subsidy as % of Dues",
+    description: "F&B operating loss YTD ÷ dues YTD (Section X)",
+    actual: `${subsidyPct.toFixed(1)}%`,
+    budget: null,
+    benchmark: null,
+    status: null,
+    dataSource: dsLive,
   };
 }
 
@@ -289,6 +371,7 @@ export async function buildOperatingScorecardLive(
 export async function buildCapitalScorecardLive(
   clubId: string,
   period: Period,
+  ancillary: ScorecardLiveAncillary = {},
 ): Promise<StewardshipScorecard> {
   const metrics = await resolveJanuaryMetricSet({
     clubId,
@@ -386,24 +469,64 @@ export async function buildCapitalScorecardLive(
       status: null,
       dataSource: "demo",
     },
-    {
-      key: "total-capital-income-vs-budget",
-      metric: "Total Capital Income vs Budget",
-      description: "Capital-income Actual vs Budget",
-      actual: null,
-      budget: null,
-      benchmark: null,
-      status: null,
-      dataSource: "demo",
-    },
+    // MBR-FIX-2M §4H (2026-10-11) — Total Capital Income vs Budget
+    // now sources Actual + Budget from the canonical FS-Group
+    // projection (same source Section V Capital Fund consumes).  The
+    // caller pre-computes both values from `fsGroupProjection.
+    // totals.capitalRevenue.ytdActual` + `.ytdBudget` so Section V
+    // and this scorecard reconcile byte-for-byte.
+    buildCapitalIncomeVsBudgetRow(
+      ancillary.capitalIncomeActual,
+      ancillary.capitalIncomeBudget,
+      dsLive,
+    ),
   ];
 
   return {
     title: "Capital Stewardship — KPI Scorecard",
     subtitle: "IS THE CLUB PROTECTING ITS FUTURE?",
-    sectionBand: "LIVE BALANCE-SHEET ROWS · CAPITAL BUDGET + POLICY NOT CONNECTED",
+    // MBR-FIX-2M §2 (2026-10-11) — period-aware section band so
+    // Feb / Mar / later packages don't display Jan-specific copy.
+    sectionBand: `LIVE ${period.label.toUpperCase()} BALANCE-SHEET ROWS · CAPITAL BUDGET + POLICY NOT CONNECTED`,
     columnHeaders: { actual: "Actual", budget: "Budget", benchmark: "Target" },
     rows,
     dataSource: rows.some((r) => r.dataSource === "live") ? "live" : "demo",
+  };
+}
+
+/** MBR-FIX-2M §4H — Total Capital Income vs Budget row builder.
+ *  Three-value shape: Actual YTD (dollars), Budget YTD (dollars),
+ *  Variance (dollars) in the right-most column. Keeps nullable
+ *  semantics: a null Actual or null Budget renders the row's
+ *  unavailable half(s) as "—" rather than $0. */
+function buildCapitalIncomeVsBudgetRow(
+  actual: number | null | undefined,
+  budget: number | null | undefined,
+  dsLive: ReportingDataSource,
+): StewardshipScorecardRow {
+  const a = actual ?? null;
+  const b = budget ?? null;
+  if (a == null && b == null) {
+    return {
+      key: "total-capital-income-vs-budget",
+      metric: "Total Capital Income vs Budget",
+      description: "Capital-income Actual vs Budget YTD",
+      actual: null,
+      budget: null,
+      benchmark: null,
+      status: null,
+      dataSource: "demo",
+    };
+  }
+  const variance = a != null && b != null ? a - b : null;
+  return {
+    key: "total-capital-income-vs-budget",
+    metric: "Total Capital Income vs Budget",
+    description: "Capital-income Actual vs Budget YTD (Section V)",
+    actual: fmtMillions(a),
+    budget: fmtMillions(b),
+    benchmark: variance != null ? fmtDollarVariance(a, b) : null,
+    status: null,
+    dataSource: dsLive,
   };
 }

@@ -3218,18 +3218,80 @@ export async function getMonthlyReportingPackage(
       // consume the Silver Springs scorecards built by
       // `buildOperatingScorecardData` / `buildCapitalScorecardData`.
       scorecards: hasRealData
-        ? {
-            operating: await buildOperatingScorecardLive(clubId, {
-              periodStart,
-              periodEnd,
-              label: periodLabelForNarrative,
-            }),
-            capital: await buildCapitalScorecardLive(clubId, {
-              periodStart,
-              periodEnd,
-              label: periodLabelForNarrative,
-            }),
-          }
+        ? await (async () => {
+            // MBR-FIX-2M (2026-10-11) — thread the F&B + dues +
+            // capital-income values into both scorecard builders so
+            // Section II Operating / Capital scorecards reconcile to
+            // Section X (F&B dept P&L), Section IV (Statement of
+            // Activities), and Section V (Capital Fund) byte-for-
+            // byte.  The F&B loss + Operating Dues values are
+            // already pre-resolved in the stewardship availability
+            // block; recompute capital income here from the
+            // canonical fsGroupProjection (same source Section V
+            // uses).
+            const scorecardFyStart = new Date(Date.UTC(
+              reportingPeriod.periodEnd.getUTCFullYear(), 0, 1,
+            ));
+            let fbNetOperatingLoss: number | null = null;
+            let operatingDuesYtd: number | null = null;
+            try {
+              const deptPL = await incomeStatementByDepartmentFromSnapshot(
+                club.id,
+                scorecardFyStart,
+                reportingPeriod.periodEnd,
+              );
+              const fbRow = deptPL.rows.find(
+                (r) => r.departmentCode === "FOOD_AND_BEVERAGE" ||
+                       r.departmentName === "Food & Beverage",
+              );
+              if (fbRow) {
+                const revenue = -Number(fbRow.revenue.toString());
+                const cogs = Number(fbRow.cogs.toString());
+                const payroll = Number(fbRow.payroll.toString());
+                const opex = Number(fbRow.opex.toString());
+                const netResult = revenue - cogs - payroll - opex;
+                fbNetOperatingLoss = netResult < 0 ? Math.abs(netResult) : 0;
+              }
+            } catch {
+              fbNetOperatingLoss = null;
+            }
+            if (fsGroupProjection) {
+              const duesRow = fsGroupProjection.operatingRevenue.find(
+                (r) => r.fsGroupKey === "IS_MEMBERSHIP_DUES",
+              );
+              if (duesRow) operatingDuesYtd = Math.abs(duesRow.ytdActual);
+            }
+            // Capital income — from the FS-Group projection's
+            // capitalRevenue total (credit-normal sign; abs for
+            // positive display).  Null-safe for tenants where the
+            // projection didn't surface capital rows.
+            const capitalIncomeActual =
+              fsGroupProjection
+                ? Math.abs(fsGroupProjection.totals.capitalRevenue.ytdActual)
+                : null;
+            const capitalIncomeBudget =
+              fsGroupProjection
+                ? Math.abs(fsGroupProjection.totals.capitalRevenue.ytdBudget)
+                : null;
+            const scorecardAncillary = {
+              fbNetOperatingLoss,
+              operatingDuesYtd,
+              capitalIncomeActual,
+              capitalIncomeBudget,
+            };
+            return {
+              operating: await buildOperatingScorecardLive(
+                clubId,
+                { periodStart, periodEnd, label: periodLabelForNarrative },
+                scorecardAncillary,
+              ),
+              capital: await buildCapitalScorecardLive(
+                clubId,
+                { periodStart, periodEnd, label: periodLabelForNarrative },
+                scorecardAncillary,
+              ),
+            };
+          })()
         : {
             operating: buildOperatingScorecardData(stewardshipBundle.operatingScorecard, {
               ytdNoiLabel:        operatingDashboard.ytdNoiLabel,
