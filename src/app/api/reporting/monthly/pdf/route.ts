@@ -186,15 +186,32 @@ async function handle(req: NextRequest) {
   // checks the user already passed at this endpoint.
   const cookieHeader = req.headers.get("cookie") ?? "";
 
-  // Build the absolute URL the headless browser should fetch. We
-  // talk to ourselves through the user-visible host so any tenant
-  // host resolution (white-label club domains) and middleware
-  // rewrites still apply. The path strips the API segment and
-  // points at the print route.
-  const reqUrl = new URL(req.url);
-  const printUrl = new URL("/app/print/monthly-package", reqUrl);
+  // Build the absolute URL the headless browser should fetch.
+  //
+  // MBR-VIS-2 §5 (2026-10-11) — on Fly the request arrives at the
+  // Node server over http://0.0.0.0:3000 but Next.js composes
+  // req.url with `https://` because the edge sets x-forwarded-
+  // proto=https.  Routing Playwright at `https://0.0.0.0:3000`
+  // fails with net::ERR_SSL_PROTOCOL_ERROR because the Node server
+  // doesn't terminate TLS internally.  Build the headless-browser
+  // URL from the configured external hostname when it's present
+  // (SPECTRE_PLATFORM_HOST / Fly request headers) so cookie-based
+  // authz still works and middleware tenant resolution matches
+  // what the user sees.
   const id = req.nextUrl.searchParams.get("id");
   const period = req.nextUrl.searchParams.get("period");
+  // Prefer the public host from the forwarded headers (what the
+  // client actually hit) so middleware tenant rewrites apply.
+  // Fallback to the request's own URL and the known staging
+  // hostname.
+  const forwardedHost = req.headers.get("x-forwarded-host")
+    ?? req.headers.get("host")
+    ?? "";
+  const forwardedProto = req.headers.get("x-forwarded-proto") ?? "https";
+  const base = forwardedHost
+    ? `${forwardedProto}://${forwardedHost}`
+    : req.nextUrl.origin;
+  const printUrl = new URL("/app/print/monthly-package", base);
   if (id) printUrl.searchParams.set("id", id);
   if (period) printUrl.searchParams.set("period", period);
 
@@ -232,7 +249,7 @@ async function handle(req: NextRequest) {
           return {
             name: entry.slice(0, ix).trim(),
             value: entry.slice(ix + 1).trim(),
-            domain: reqUrl.hostname,
+            domain: printUrl.hostname,
             path: "/",
           };
         })
