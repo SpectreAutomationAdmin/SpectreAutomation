@@ -30,7 +30,16 @@ export type DuesCategoryInput = {
 export type FormattedDuesCategory = {
   key: string;
   label: string;
+  /** Unrounded percentage share (0..100).  Preserved for layout math
+   *  (arc angles below) + reconciliation tests.  Never rendered
+   *  directly to the UI — React consumes `pctLabel` so no additional
+   *  formatting logic lives on the display side. */
   pct: number;
+  /** Pre-formatted percentage label the React layer renders verbatim.
+   *  Format: `${pct.toFixed(2)}%` → e.g. "11.39%", "77.43%". MBR-FIX-2I
+   *  (2026-10-11) — presentation-layer formatting of raw decimals
+   *  previously rendered "11.386988286508837%" in the legend/tooltip. */
+  pctLabel: string;
   /** SVG hex colour for the donut slice + legend swatch. */
   color: string;
   /** Cumulative arc start angle in DEGREES (0 = 12 o'clock). */
@@ -108,6 +117,11 @@ export function buildDuesSubsidyData(
       key: c.key,
       label: c.label,
       pct: c.pct,
+      // MBR-FIX-2I (2026-10-11) — pre-formatted percentage label with
+      // exactly two decimal places + the % symbol.  Round only once,
+      // at the display boundary; `pct` keeps full precision for arc
+      // math + reconciliation.
+      pctLabel: `${c.pct.toFixed(2)}%`,
       color: CATEGORY_PALETTE[i % CATEGORY_PALETTE.length],
       arcStartAngle: start,
       arcEndAngle: cursor,

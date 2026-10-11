@@ -28,6 +28,10 @@ export type DuesArc = {
   key: string;
   label: string;
   pct: number;
+  /** Pre-formatted percentage label — MBR-FIX-2I (2026-10-11).  React
+   *  renders this verbatim in the tooltip so raw unrounded decimals
+   *  (e.g. 11.386988286508837) never reach the DOM. */
+  pctLabel: string;
   color: string;
   arcStartAngle: number;
   arcEndAngle: number;
@@ -196,7 +200,7 @@ export function DuesSubsidyDonut({ categories }: { categories: DuesArc[] }): Rea
         >
           <div style={{ fontWeight: 600 }}>{hovered.label}</div>
           <div style={{ opacity: 0.85 }}>
-            {hovered.label}: {hovered.pct}%
+            {hovered.label}: {hovered.pctLabel}
           </div>
         </div>
       ) : null}

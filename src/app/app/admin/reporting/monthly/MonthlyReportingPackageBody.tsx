@@ -2830,7 +2830,7 @@ function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
                 className="text-right font-serif tabular-nums text-club-green-900"
                 style={{ fontSize: "14px", fontWeight: 600 }}
               >
-                {c.pct}%
+                {c.pctLabel}
               </span>
             </div>
           ))}
