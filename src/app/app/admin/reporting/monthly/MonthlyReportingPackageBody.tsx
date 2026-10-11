@@ -34,6 +34,10 @@ import {
 } from "@/lib/reporting/attention";
 import { AtAGlanceBlock } from "@/components/reporting/AtAGlanceBlock";
 import { VisibilityToggle } from "@/components/reporting/VisibilityToggle";
+import {
+  VisibilityStateProvider,
+  useVisibilityState,
+} from "@/components/reporting/VisibilityState";
 
 // ============================================================================
 // MonthlyReportingPackageBody — the shared report body component
@@ -168,11 +172,62 @@ function ChapterSection({
   period?: { reportingYear: number; reportingMonth: number };
   children: React.ReactNode;
 }) {
+  return (
+    <ChapterSectionInner
+      anchorId={anchorId}
+      chapterNumber={chapterNumber}
+      chapterLabel={chapterLabel}
+      className={className}
+      ornament={ornament}
+      editing={editing}
+      visibility={visibility}
+      publishedVisibility={publishedVisibility}
+      period={period}
+    >
+      {children}
+    </ChapterSectionInner>
+  );
+}
+
+function ChapterSectionInner({
+  anchorId,
+  chapterNumber,
+  chapterLabel,
+  className,
+  ornament,
+  editing,
+  visibility,
+  publishedVisibility,
+  period,
+  children,
+}: {
+  anchorId: string;
+  chapterNumber: string;
+  chapterLabel: string;
+  className?: string;
+  ornament: boolean;
+  editing: boolean;
+  visibility?: MonthlyBodyVisibilityConfig;
+  publishedVisibility?: MonthlyBodyVisibilityConfig;
+  period?: { reportingYear: number; reportingMonth: number };
+  children: React.ReactNode;
+}) {
   const componentKey = `chapter:${anchorId}`;
-  const visible = isComponentVisible(componentKey, visibility);
-  // Non-editing + hidden → collapse the entire chapter (ornament too).
-  if (!editing && !visible) return null;
-  const hidden = !visible;
+  const ctx = useVisibilityState();
+  // Explicit vs effective (directive §3): toggle icon reflects
+  // EXPLICIT (direct user setting); section render decision reflects
+  // EFFECTIVE (parent-cascade honored).  Chapters have no parent so
+  // the two coincide for chapter tiers, but keeping the split makes
+  // the convention uniform across tiers.
+  const explicitHidden = ctx
+    ? ctx.explicitHidden(componentKey)
+    : visibility?.entries[componentKey] === true;
+  const effectiveHidden = ctx
+    ? ctx.effectiveHidden(componentKey)
+    : !isComponentVisible(componentKey, visibility);
+  // Non-editing + effectively hidden → collapse the entire chapter.
+  if (!editing && effectiveHidden) return null;
+  const hidden = effectiveHidden;
   const published = pendingPublishState(componentKey, visibility, publishedVisibility);
   return (
     <>
@@ -210,15 +265,15 @@ function ChapterSection({
             }}
           >
             <span>
-              Chapter {chapterNumber} · {hidden ? "Hidden" : "Visible"}
+              Chapter {chapterNumber} · {explicitHidden ? "Hidden" : "Visible"}
             </span>
             <VisibilityToggle
               reportingYear={period.reportingYear}
               reportingMonth={period.reportingMonth}
               componentKey={componentKey}
-              hidden={hidden}
+              hidden={explicitHidden}
               publishedHidden={published}
-              label={`${hidden ? "Show" : "Hide"} chapter ${chapterLabel} in published report`}
+              label={`${explicitHidden ? "Show" : "Hide"} chapter ${chapterLabel} in published report`}
             />
           </div>
         )}
@@ -241,7 +296,14 @@ export function MonthlyReportingPackageBody({
   // wrap below can read the same thing without re-threading.
   const vis = visibility;
   const pub = publishedVisibility;
-  return (
+  // MBR-VIS-2 — wrap editing in the client-side VisibilityState
+  // Provider so toggles update the whole visible report
+  // IMMEDIATELY on click (optimistic write + API fetch inside the
+  // Provider).  Non-editing surfaces (Draft Preview / Published
+  // State / Board / PDF) render without the Provider and consume
+  // the server-passed `visibility` prop directly — the Published
+  // snapshot must never be mutated client-side.
+  const bodyInner = (
     <div data-testid="monthly-reporting-body" className="min-w-0">
       {/* Publish button — portals into the dark green ReportingShell
           header. Modes (controller-facing only; Board users never
@@ -498,6 +560,22 @@ export function MonthlyReportingPackageBody({
 
     </div>
   );
+  // MBR-VIS-2 — in editing mode, wrap with the client-side state
+  // Provider so toggle clicks render immediately without a server
+  // round-trip.  In every other mode (Draft Preview / Published
+  // State / Board / PDF), skip the Provider so hidden components
+  // read the frozen server-passed config directly.
+  if (editing) {
+    return (
+      <VisibilityStateProvider
+        initialDraft={vis?.entries}
+        initialPublished={pub?.entries}
+      >
+        {bodyInner}
+      </VisibilityStateProvider>
+    );
+  }
+  return bodyInner;
 }
 
 // ============================================================================
@@ -2550,34 +2628,50 @@ function StewardshipScorecardCard({
   publishedVisibility?: MonthlyBodyVisibilityConfig;
   period?: { reportingYear: number; reportingMonth: number };
 }) {
-  // Precompute per-row visibility. In non-editing mode, hidden rows
-  // are filtered out of the render; in editing mode, they stay in
-  // the list but render muted + with the toggle set to EyeOff.
+  // MBR-VIS-2 — client context takes precedence over server prop
+  // so toggle clicks render immediately.  In the fallback (no
+  // Provider) path the server-passed `visibility` prop drives the
+  // same decisions.
+  const ctx = useVisibilityState();
   const chapterAnchor = "financial-performance";
   const resolvedCardKey = cardKey ?? testid;
-  const rowsEffective = data.rows.map((row) => {
+  // Row-level: explicit (toggle icon) + effective (render decision).
+  const rowsAnnotated = data.rows.map((row) => {
     const compKey = `row:${chapterAnchor}:${resolvedCardKey}:${row.key}`;
-    const hidden = !isComponentVisible(compKey, visibility);
-    return { row, compKey, hidden };
+    const explicit = ctx
+      ? ctx.explicitHidden(compKey)
+      : visibility?.entries[compKey] === true;
+    const effective = ctx
+      ? ctx.effectiveHidden(compKey)
+      : !isComponentVisible(compKey, visibility);
+    return { row, compKey, explicit, effective };
   });
+  // In editing mode, keep every row rendered (muted when effectively
+  // hidden) so the Controller can restore it inline.  In non-
+  // editing modes, filter EFFECTIVE-hidden rows out entirely.
   const rowsToRender = editing
-    ? rowsEffective
-    : rowsEffective.filter((r) => !r.hidden);
+    ? rowsAnnotated
+    : rowsAnnotated.filter((r) => !r.effective);
   const cardComponentKey = `card:${chapterAnchor}:${resolvedCardKey}`;
-  const cardHidden = !isComponentVisible(cardComponentKey, visibility);
+  const cardExplicitHidden = ctx
+    ? ctx.explicitHidden(cardComponentKey)
+    : visibility?.entries[cardComponentKey] === true;
+  const cardEffectiveHidden = ctx
+    ? ctx.effectiveHidden(cardComponentKey)
+    : !isComponentVisible(cardComponentKey, visibility);
   const cardPublishedHidden = pendingPublishState(
     cardComponentKey,
     visibility,
     publishedVisibility,
   );
-  if (!editing && cardHidden) return null;
+  if (!editing && cardEffectiveHidden) return null;
   return (
     <article
       data-testid={testid}
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
-      data-card-hidden={cardHidden ? "true" : "false"}
+      data-card-hidden={cardEffectiveHidden ? "true" : "false"}
       style={{
-        opacity: editing && cardHidden ? 0.55 : 1,
+        opacity: editing && cardEffectiveHidden ? 0.55 : 1,
         transition: "opacity 150ms linear",
       }}
     >
@@ -2607,15 +2701,15 @@ function StewardshipScorecardCard({
               zIndex: 5,
             }}
           >
-            <span>Card · {cardHidden ? "Hidden" : "Visible"}</span>
+            <span>Card · {cardExplicitHidden ? "Hidden" : "Visible"}</span>
             <VisibilityToggle
               reportingYear={period.reportingYear}
               reportingMonth={period.reportingMonth}
               componentKey={cardComponentKey}
-              hidden={cardHidden}
+              hidden={cardExplicitHidden}
               publishedHidden={cardPublishedHidden}
               size="sm"
-              label={`${cardHidden ? "Show" : "Hide"} ${data.title} card in published report`}
+              label={`${cardExplicitHidden ? "Show" : "Hide"} ${data.title} card in published report`}
             />
           </div>
         )}
@@ -2696,7 +2790,7 @@ function StewardshipScorecardCard({
           This lets a row surface its live Actual + Budget while the
           Target column stays "Not configured" — directive §11 + §17. */}
       <div data-testid={`${testid}-rows`}>
-        {rowsToRender.map(({ row, compKey, hidden: rowHidden }, i) => {
+        {rowsToRender.map(({ row, compKey, explicit: rowExplicitHidden, effective: rowEffectiveHidden }, i) => {
           const glyph = scorecardStatusGlyph(row);
           const glyphColor =
             row.status === "action" ? "#8b3520" :
@@ -2708,25 +2802,32 @@ function StewardshipScorecardCard({
             visibility,
             publishedVisibility,
           );
-          // Editing-mode toggle column widens the row by ~1.6 rem.
-          const gridColumns = editing && period
-            ? "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem 1.6rem"
-            : "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem";
+          // MBR-VIS-2 §4 — the four numeric columns (Metric / Actual
+          // / Budget / Variance / Trend) KEEP their pre-fix widths in
+          // every mode.  The eye toggle lives in a 24-px absolute-
+          // positioned slot on the far-right EDGE of the row,
+          // outside the grid flow, so the metric column never
+          // shrinks when editing is enabled.  Hidden entirely in
+          // non-editing modes (board / PDF / preview) so the toggle
+          // area doesn't bleed into the published layout.
+          const gridColumns = "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem";
           return (
             <div
               key={row.key}
               data-testid={`${testid}-row-${row.key}`}
               data-status={row.status ?? "unavailable"}
-              data-row-hidden={rowHidden ? "true" : "false"}
+              data-row-hidden={rowEffectiveHidden ? "true" : "false"}
               className={`grid items-center px-4 py-3 ${
                 i % 2 === 1 ? "bg-club-sand/30" : "bg-club-cream"
               } ${i < rowsToRender.length - 1 ? "border-b border-club-sand/40" : ""}`}
               style={{
                 gridTemplateColumns: gridColumns,
                 columnGap: "0.75rem",
-                opacity: editing && rowHidden ? 0.5 : 1,
-                textDecoration: editing && rowHidden ? "line-through" : "none",
+                opacity: editing && rowEffectiveHidden ? 0.5 : 1,
+                textDecoration: editing && rowEffectiveHidden ? "line-through" : "none",
                 transition: "opacity 150ms linear",
+                position: "relative",
+                paddingRight: editing && period ? "2rem" : undefined,
               }}
             >
               <div className="min-w-0 flex items-start gap-2.5">
@@ -2789,17 +2890,29 @@ function StewardshipScorecardCard({
               </div>
               {editing && period && (
                 <div
-                  className="flex justify-center"
+                  className="flex justify-center items-center"
                   data-testid={`${testid}-row-toggle-${row.key}`}
+                  style={{
+                    position: "absolute",
+                    right: 6,
+                    top: 0,
+                    bottom: 0,
+                    width: 24,
+                    // Opacity + strikethrough on the row shouldn't
+                    // propagate to the toggle itself — the Controller
+                    // still needs the eye crisp.  Reset locally.
+                    opacity: 1,
+                    textDecoration: "none",
+                  }}
                 >
                   <VisibilityToggle
                     reportingYear={period.reportingYear}
                     reportingMonth={period.reportingMonth}
                     componentKey={compKey}
-                    hidden={rowHidden}
+                    hidden={rowExplicitHidden}
                     publishedHidden={rowPublishedHidden}
                     size="sm"
-                    label={`${rowHidden ? "Show" : "Hide"} ${row.metric} in published report`}
+                    label={`${rowExplicitHidden ? "Show" : "Hide"} ${row.metric} in published report`}
                   />
                 </div>
               )}

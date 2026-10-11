@@ -203,9 +203,17 @@ async function handle(req: NextRequest) {
   // failures for engineers without Chromium installed).
   const { chromium } = await import("playwright");
 
+  // MBR-VIS-2 §5 (2026-10-11) — on alpine Linux the Playwright
+  // bundled chrome-headless-shell binary is incompatible with musl
+  // and the Docker runtime therefore installs the system chromium
+  // via apk and points us at it via
+  // PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH. In dev / tests where the
+  // env var is unset, Playwright's own browser management applies.
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   const browser = await chromium.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    ...(executablePath ? { executablePath } : {}),
   });
   try {
     const context = await browser.newContext();

@@ -1,19 +1,24 @@
 "use client";
 
-// MBR-VIS-1 (2026-10-11) — Visibility toggle button.
+// MBR-VIS-2 (2026-10-11) — Visibility toggle button.
 //
-// Renders a small Eye / EyeOff icon that posts to
-// `/api/admin/reporting/monthly/visibility` on click. Only mounted
-// when `editing: true`.  Shows a muted "pending" dot when the
-// current draft state differs from the previously published state
-// so the Controller sees at a glance which rows carry unsaved
-// changes.
+// Reads from the client-side VisibilityStateContext so clicks render
+// INSTANTLY (every consumer re-renders on the same optimistic write,
+// not after a server round-trip).  The Provider owns the API fetch,
+// rollback, and audit — this component is a pure UI leaf.
+//
+// Explicit vs effective (directive §3) — the toggle's `hidden` prop
+// MUST be the explicit saved value, never the effective (parent-
+// cascaded) value.  A child row's toggle must not collapse to EyeOff
+// just because its parent chapter is hidden.
+//
+// Falls back to local state when rendered OUTSIDE a Provider so the
+// MBR-VIS-1 contract tests + any non-editing surface that imports
+// this component still compiles.
 
-// Inline eye icons so we don't introduce a new icon-library dep.
-// Matches lucide-react's visual design (same stroke width + path
-// shape) so the Spectre design language is preserved.
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { useVisibilityState } from "./VisibilityState";
 
 function EyeIcon({ size }: { size: number }) {
   return (
@@ -61,15 +66,13 @@ export type VisibilityToggleProps = {
   reportingYear: number;
   reportingMonth: number;
   componentKey: string;
-  /** Current DRAFT state. */
+  /** Server-passed explicit hidden state — used ONLY to seed the
+   *  local fallback when rendered outside a VisibilityStateProvider.
+   *  When inside a Provider, the context's `explicitHidden` wins. */
   hidden: boolean;
-  /** Previously PUBLISHED state. When different from `hidden`, the
-   *  toggle renders a small amber dot in the corner to signal
-   *  pending edits. Omit to disable the diff indicator. */
+  /** Server-passed published hidden — same fallback behaviour. */
   publishedHidden?: boolean;
-  /** Compact size for row-level toggles; default size for cards. */
   size?: "sm" | "md";
-  /** Accessible label — defaults to a reasonable component-key copy. */
   label?: string;
 };
 
@@ -77,25 +80,37 @@ export function VisibilityToggle({
   reportingYear,
   reportingMonth,
   componentKey,
-  hidden,
-  publishedHidden,
+  hidden: fallbackHidden,
+  publishedHidden: fallbackPublishedHidden,
   size = "md",
   label,
 }: VisibilityToggleProps) {
+  const ctx = useVisibilityState();
   const router = useRouter();
-  const [optimisticHidden, setOptimisticHidden] = useState(hidden);
+
+  // Fallback: local state when outside a Provider.
+  const [localHidden, setLocalHidden] = useState(fallbackHidden);
+  const [localError, setLocalError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+
+  const effectiveHidden = ctx ? ctx.explicitHidden(componentKey) : localHidden;
+  const pending = ctx
+    ? ctx.isPendingPublish(componentKey)
+    : fallbackPublishedHidden != null && localHidden !== fallbackPublishedHidden;
+  const errorToShow = ctx ? ctx.lastError : localError;
 
   const dim = size === "sm" ? 14 : 18;
-  const Icon = optimisticHidden ? EyeOffIcon : EyeIcon;
-  const pending =
-    publishedHidden != null && optimisticHidden !== publishedHidden;
+  const Icon = effectiveHidden ? EyeOffIcon : EyeIcon;
 
   async function onClick() {
-    setError(null);
-    const next = !optimisticHidden;
-    setOptimisticHidden(next);
+    const next = !effectiveHidden;
+    if (ctx) {
+      await ctx.setHidden(componentKey, next, { reportingYear, reportingMonth });
+      return;
+    }
+    // Legacy fallback path.
+    setLocalError(null);
+    setLocalHidden(next);
     try {
       const res = await fetch("/api/admin/reporting/monthly/visibility", {
         method: "POST",
@@ -113,9 +128,8 @@ export function VisibilityToggle({
       }
       startTransition(() => router.refresh());
     } catch (e) {
-      // Rollback optimistic state on failure.
-      setOptimisticHidden(hidden);
-      setError(e instanceof Error ? e.message : "Toggle failed.");
+      setLocalHidden(effectiveHidden);
+      setLocalError(e instanceof Error ? e.message : "Toggle failed.");
     }
   }
 
@@ -126,23 +140,23 @@ export function VisibilityToggle({
       disabled={isPending}
       aria-label={
         label ??
-        `${optimisticHidden ? "Show" : "Hide"} ${componentKey} in published report`
+        `${effectiveHidden ? "Show" : "Hide"} ${componentKey} in published report`
       }
       title={
-        error ??
-        `${optimisticHidden ? "Hidden" : "Visible"} in published report${
+        errorToShow ??
+        `${effectiveHidden ? "Hidden" : "Visible"} in published report${
           pending ? " · pending publish" : ""
         }`
       }
       data-testid={`visibility-toggle-${componentKey}`}
       data-component-key={componentKey}
-      data-hidden={optimisticHidden ? "true" : "false"}
+      data-hidden={effectiveHidden ? "true" : "false"}
       data-pending={pending ? "true" : "false"}
       className={
         "relative inline-flex items-center justify-center rounded " +
         (size === "sm" ? "h-5 w-5" : "h-6 w-6") +
         " " +
-        (optimisticHidden
+        (effectiveHidden
           ? "text-stone-400 hover:text-stone-600"
           : "text-club-green-700 hover:text-club-green-900") +
         " transition-colors disabled:opacity-50"

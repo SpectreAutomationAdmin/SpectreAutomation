@@ -55,7 +55,21 @@ RUN NODE_OPTIONS="--max-old-space-size=3840" \
 # ---- runner stage (DRH-1 slim runtime) ----
 FROM node:20-alpine AS runner
 WORKDIR /app
-RUN apk add --no-cache libc6-compat openssl curl
+# MBR-VIS-2 §5 (2026-10-11) — the Monthly Reporting Package PDF
+# export (/api/reporting/monthly/pdf) uses the npm `playwright`
+# package to drive a headless chromium against /app/print/monthly-
+# package. Playwright 1.60 looks for its own `chrome-headless-shell`
+# binary at ~/.cache/ms-playwright/, which is NOT installed in this
+# runtime stage; downloading it on alpine (musl) also fails without
+# glibc shims. Install alpine's system chromium (musl-linked, works
+# on alpine out of the box) and point Playwright at it via the
+# PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH + PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+# env vars the PDF route consumes.
+RUN apk add --no-cache \
+      libc6-compat openssl curl \
+      chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
