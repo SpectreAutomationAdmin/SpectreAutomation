@@ -530,9 +530,26 @@ export async function publishMonthlyPackage(
     liveReport.executiveSummary.kpis.find((k) => k.key === key),
   ).filter(Boolean);
 
+  // MBR-VIS-1 (2026-10-11) — freeze the current draft visibility
+  // config into the published payload. The Board snapshot + PDF
+  // path reads `packagePayloadJson.visibility` verbatim; subsequent
+  // draft edits in `MonthlyPackageVisibility` never alter what the
+  // Board sees until an explicit republish lands here again.
+  const { snapshotVisibilityForPublish } = await import(
+    "@/lib/reporting/monthly-package-visibility"
+  );
+  const visibilitySnapshot = await snapshotVisibilityForPublish(
+    pkg.clubId,
+    pkg.reportingYear,
+    pkg.reportingMonth,
+  );
+
   // Full payload — gives the archive the option to re-render the
   // entire document in its frozen state.
-  const packagePayload = liveReport;
+  const packagePayload = {
+    ...liveReport,
+    visibility: visibilitySnapshot,
+  };
 
   const publishedAt = new Date();
   const publishedPayloadHash = computePublishedPayloadHash(atAGlanceKpis);

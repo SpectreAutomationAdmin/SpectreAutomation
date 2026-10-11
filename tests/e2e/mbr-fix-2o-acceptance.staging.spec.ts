@@ -46,7 +46,7 @@ function matchKpiMoneyAfterLabel(txt: string, label: string): string | null {
   return m ? m[1] : null;
 }
 
-async function openPackage(browser: Parameters<typeof test>[1]["browser"], period: string) {
+async function openPackage(browser: import("@playwright/test").Browser, period: string) {
   const ctx = await browser.newContext({ viewport: { width: 1650, height: 930 } });
   const page = await loginAsFounder(ctx);
   await page.goto(

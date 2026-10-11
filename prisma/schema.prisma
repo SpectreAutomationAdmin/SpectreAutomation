@@ -201,6 +201,7 @@ model Club {
   packageDistributions             PackageDistribution[]
   packageApprovals                 PackageApproval[]
   monthlyPackages                  MonthlyPackage[]
+  monthlyPackageVisibilities       MonthlyPackageVisibility[]
   boardRoles                       BoardRole[]
   auditorGrants                    AuditorAccessGrant[]
   auditorSessions                  AuditorSession[]
@@ -5588,6 +5589,40 @@ model MonthlyPackage {
   @@unique([clubId, reportingYear, reportingMonth])
   @@index([clubId])
   @@index([clubId, status])
+}
+
+// MBR-VIS-1 (2026-10-11) — Monthly Board Reporting Publication
+// Visibility Controls.
+//
+// Per-club, per-period, per-component (chapter / card / row /
+// commentary) hidden flag. Draft rows live here; published
+// visibility is frozen into `MonthlyPackage.packagePayloadJson.
+// visibility` at publish time and read verbatim by the Board
+// snapshot + PDF view.
+//
+// Component key convention (enforced in service layer):
+//   "chapter:<anchor-id>"
+//   "card:<anchor-id>:<card-key>"
+//   "row:<anchor-id>:<card-key>:<row-key>"
+//   "commentary:<anchor-id>:<card-key>:<block-key>"
+//
+// Draft edits never alter frozen `packagePayloadJson.visibility` —
+// the Board / PDF continue to render the previously published state
+// until the Controller explicitly republishes.
+model MonthlyPackageVisibility {
+  id              String   @id @default(cuid())
+  clubId          String
+  club            Club     @relation(fields: [clubId], references: [id])
+  reportingYear   Int
+  reportingMonth  Int
+  componentKey    String
+  hidden          Boolean  @default(false)
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  @@unique([clubId, reportingYear, reportingMonth, componentKey])
+  @@index([clubId, reportingYear, reportingMonth])
 }
 
 // status: PENDING | SENT | OPENED | FAILED | BOUNCED

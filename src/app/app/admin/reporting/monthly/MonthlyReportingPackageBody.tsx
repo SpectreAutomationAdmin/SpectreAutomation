@@ -55,6 +55,14 @@ import { AtAGlanceBlock } from "@/components/reporting/AtAGlanceBlock";
 // surface (same chapters, same chrome, same scroll behaviour) with
 // the only difference being the admin-header slot.
 // ============================================================================
+// MBR-VIS-1 (2026-10-11) — visibility config shape the body consumes.
+// Mirrors `VisibilityConfig` from monthly-package-visibility.ts
+// but kept locally so the body stays free of a server-only import.
+export type MonthlyBodyVisibilityConfig = {
+  source: "draft" | "published";
+  entries: Record<string, boolean>;
+};
+
 type MonthlyReportingPackageBodyProps = {
   /** The full reporting payload. Either live (admin) or frozen
    *  snapshot (board). The two paths use the same type. */
@@ -62,12 +70,79 @@ type MonthlyReportingPackageBodyProps = {
   /** Admin-only header content (the PublishHeaderButton portal
    *  source). Omit on the board surface. */
   adminHeader?: React.ReactNode;
+  /** MBR-VIS-1 — resolved visibility (draft when editing, frozen
+   *  published snapshot otherwise).  When omitted, every component
+   *  is treated visible. */
+  visibility?: MonthlyBodyVisibilityConfig;
+  /** MBR-VIS-1 — comparison config for the "pending publish" dot on
+   *  toggle buttons.  Only populated in editing mode so the Controller
+   *  sees which rows differ from the frozen snapshot. */
+  publishedVisibility?: MonthlyBodyVisibilityConfig;
+  /** MBR-VIS-1 — true in the admin editing surface.  Renders the
+   *  Eye / EyeOff toggles + mutes hidden components in place.  False
+   *  in Draft Preview, Published State, Board view, and PDF — hidden
+   *  components disappear from render. */
+  editing?: boolean;
+  /** MBR-VIS-1 — period descriptor the toggle buttons POST back to
+   *  the API with.  Required when editing is true. */
+  period?: { reportingYear: number; reportingMonth: number };
 };
+
+/** MBR-VIS-1 — effective visibility of a component honoring the
+ *  chapter / card parent-child cascade.  Returns `true` when the
+ *  component should render; `false` when it should be hidden. */
+function isComponentVisible(
+  componentKey: string,
+  config?: MonthlyBodyVisibilityConfig,
+): boolean {
+  if (!config) return true;
+  if (config.entries[componentKey] === true) return false;
+  // Walk ancestors.
+  const parts = componentKey.split(":");
+  if (parts.length < 2) return true;
+  const [tier, anchor, cardKey] = parts;
+  if (tier === "chapter") return true;
+  if (tier === "card") {
+    return config.entries[`chapter:${anchor}`] !== true;
+  }
+  if (tier === "row" || tier === "commentary") {
+    if (config.entries[`chapter:${anchor}`] === true) return false;
+    if (cardKey && config.entries[`card:${anchor}:${cardKey}`] === true) return false;
+    return true;
+  }
+  return true;
+}
+
+/** MBR-VIS-1 — true when `componentKey`'s draft state differs from
+ *  the frozen published state.  Drives the amber "pending publish"
+ *  dot on toggle buttons.  Returns `undefined` when either config
+ *  is absent, so the toggle hides the dot entirely. */
+function pendingPublishState(
+  componentKey: string,
+  draft?: MonthlyBodyVisibilityConfig,
+  published?: MonthlyBodyVisibilityConfig,
+): boolean | undefined {
+  if (!draft || !published) return undefined;
+  return published.entries[componentKey] ?? false;
+}
 
 export function MonthlyReportingPackageBody({
   pkg,
   adminHeader,
+  visibility,
+  publishedVisibility,
+  editing = false,
+  period,
 }: MonthlyReportingPackageBodyProps) {
+  // MBR-VIS-1 — reserved for future use (hoisted so later per-row
+  // + per-card toggle work can read it without a prop-threading
+  // refactor).  Explicit void keeps lint quiet while the ChapterGate
+  // + ChairsDashboard calls that consume it land in subsequent
+  // slices.
+  void publishedVisibility;
+  void period;
+  const visibilityCtx = { visibility, editing };
+  void visibilityCtx;
   return (
     <div data-testid="monthly-reporting-body" className="min-w-0">
       {/* Publish button — portals into the dark green ReportingShell
