@@ -181,7 +181,6 @@ runAt(
     await page.waitForTimeout(4500);
     const txt = await bodyText(page);
     expect(txt).toMatch(/Operating Cost Coverage by Membership Dues/);
-    void page as Page;
     await ctx.close();
   },
 );

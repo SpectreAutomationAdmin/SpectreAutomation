@@ -146,10 +146,24 @@ export async function buildOperatingScorecardLive(
 ): Promise<StewardshipScorecard> {
   const fiscalYear = period.periodEnd.getUTCFullYear();
   const throughMonth = period.periodEnd.getUTCMonth() + 1;
+  // MBR-FIX-2O (2026-10-11) — DEF-4 fix. The Jonas TB snapshot's
+  // YTD-slice `sameDay(snapshot.periodStart, filter.from)` gate
+  // requires `from = fiscal-year start` (Jan 1). The `Period` arg
+  // carries `periodStart = current-month start` (e.g. Mar 1 for a
+  // Mar package), which fails the match for every month after
+  // January and returns zero balances → every IS metric is marked
+  // unavailable → the four Operating Scorecard Actual cells
+  // (Dues-to-Revenue, Payroll Ratio, NOI margin, NOI vs Budget)
+  // render blank even though Mar committed data is loaded.
+  //
+  // Same DEF-4 pattern MBR-FIX-1 / 2A / 2B / 2C / 2D / 2E / 2G /
+  // 2H / 2J / payroll-ratio-trend-live corrected on their paths.
+  // The scorecard builder was the last path still carrying it.
+  const fiscalYearStart = new Date(Date.UTC(fiscalYear, 0, 1));
   const [metrics, budgetIs, budgetDues] = await Promise.all([
     resolveJanuaryMetricSet({
       clubId,
-      periodStart: period.periodStart,
+      periodStart: fiscalYearStart,
       periodEnd: period.periodEnd,
     }).catch(() => null),
     resolveBudgetIncomeStatement({ clubId, fiscalYear, throughMonth }).catch(() => null),
@@ -386,9 +400,16 @@ export async function buildCapitalScorecardLive(
   period: Period,
   ancillary: ScorecardLiveAncillary = {},
 ): Promise<StewardshipScorecard> {
+  // MBR-FIX-2O (2026-10-11) — same DEF-4 fiscal-YTD gate fix as the
+  // Operating builder above. BS metrics are AS-OF reads and don't
+  // hit the YTD-slice path, but Capital Assessments YTD and other
+  // IS-derived metrics on the capital scorecard DO. Use fiscal-
+  // year start for the periodStart arg so every metric resolves
+  // consistently.
+  const fiscalYearStart = new Date(Date.UTC(period.periodEnd.getUTCFullYear(), 0, 1));
   const metrics = await resolveJanuaryMetricSet({
     clubId,
-    periodStart: period.periodStart,
+    periodStart: fiscalYearStart,
     periodEnd: period.periodEnd,
   }).catch(() => null);
 
