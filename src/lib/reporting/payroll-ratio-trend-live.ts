@@ -81,9 +81,20 @@ export async function buildPayrollRatioTrendLive(
     ),
   );
 
-  // Monthly Actual = payroll_MTD / revenue_MTD × 100.
-  // Revenue rows are credit-normal on the projection, so flip the sign
-  // of totals.operatingRevenue.cmActual to get a positive scalar.
+  // Monthly Actual = YTD payroll(m) / YTD revenue(m) × 100 at each
+  // month-end.  We intentionally use YTD-at-month-end rather than
+  // MTD subtraction because private clubs collect annual dues in
+  // January: a pure MTD ratio for Feb would divide February's small
+  // MTD payroll by February's near-zero MTD revenue (dues already
+  // booked in Jan), producing a nonsensical >100 % spike that is
+  // arithmetically correct but useless as a trend signal.  The YTD-
+  // at-month-end semantic produces a steady, board-legible curve
+  // and also reconciles to the "YTD Ratio" KPI tile at every
+  // monthly step.
+  //
+  // Revenue rows are credit-normal on the projection, so flip the
+  // sign of totals.operatingRevenue.ytdActual for the positive
+  // scalar.
   const monthlyActual: PayrollRatioMonthlyInput[] = MONTH_LABELS.map(
     (label, i) => {
       if (i >= reportingMonth) {
@@ -92,13 +103,13 @@ export async function buildPayrollRatioTrendLive(
         return { label, ratio: 0 };
       }
       const proj = projections[i];
-      const payrollMtd = Math.abs(
+      const payrollYtd = Math.abs(
         proj.operatingExpense.find((r) => r.fsGroupKey === "IS_PAYROLL")
-          ?.cmActual ?? 0,
+          ?.ytdActual ?? 0,
       );
-      const revenueMtd = Math.abs(proj.totals.operatingRevenue.cmActual);
+      const revenueYtd = Math.abs(proj.totals.operatingRevenue.ytdActual);
       const ratio =
-        revenueMtd > 0 ? (payrollMtd / revenueMtd) * 100 : 0;
+        revenueYtd > 0 ? (payrollYtd / revenueYtd) * 100 : 0;
       return { label, ratio };
     },
   );
@@ -136,8 +147,12 @@ export async function buildPayrollRatioTrendLive(
     });
     const metaByNumber = new Map(accounts.map((a) => [a.accountNumber, a]));
 
-    const budgetPayrollByMonth = new Array<number>(12).fill(0);
-    const budgetRevenueByMonth = new Array<number>(12).fill(0);
+    // Pass 1: aggregate per-month increments across every account.
+    // Pass 2: convert increments to cumulative YTD per month-end so
+    // the ratio mirrors the Actual semantic (dues-heavy January
+    // doesn't force Feb MTD into the triple-digit range).
+    const budgetPayrollMtd = new Array<number>(12).fill(0);
+    const budgetRevenueMtd = new Array<number>(12).fill(0);
 
     for (const b of budgetResult.byAccount) {
       const meta = metaByNumber.get(b.accountNumber);
@@ -156,14 +171,25 @@ export async function buildPayrollRatioTrendLive(
 
       for (let m = 0; m < 12; m++) {
         const amt = sign * (b.monthlyTotals[m] ?? 0);
-        if (isPayroll) budgetPayrollByMonth[m] += amt;
-        else if (isRevenue) budgetRevenueByMonth[m] += amt;
+        if (isPayroll) budgetPayrollMtd[m] += amt;
+        else if (isRevenue) budgetRevenueMtd[m] += amt;
       }
     }
 
+    const budgetPayrollYtd = new Array<number>(12).fill(0);
+    const budgetRevenueYtd = new Array<number>(12).fill(0);
+    let runPayroll = 0;
+    let runRevenue = 0;
+    for (let m = 0; m < 12; m++) {
+      runPayroll += budgetPayrollMtd[m];
+      runRevenue += budgetRevenueMtd[m];
+      budgetPayrollYtd[m] = runPayroll;
+      budgetRevenueYtd[m] = runRevenue;
+    }
+
     for (let i = 0; i < 12; i++) {
-      const p = budgetPayrollByMonth[i];
-      const r = budgetRevenueByMonth[i];
+      const p = budgetPayrollYtd[i];
+      const r = budgetRevenueYtd[i];
       monthlyBudget[i] = {
         label: MONTH_LABELS[i],
         ratio: r > 0 ? (p / r) * 100 : 0,

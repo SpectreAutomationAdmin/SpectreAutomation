@@ -169,13 +169,17 @@ describe("MBR-FIX-2H §B2 — live Trend builder composes per-committed-month pr
     expect(src).toMatch(/for\s*\(\s*let\s+m\s*=\s*1\s*;\s*m\s*<=\s*reportingMonth/);
   });
 
-  it("reads MTD payroll via cmActual on the IS_PAYROLL row", () => {
+  it("reads YTD payroll via ytdActual on the IS_PAYROLL row", () => {
+    // Semantic: YTD-at-month-end (not MTD subtraction) so the trend
+    // doesn't spike into the triple-digit range in a dues-heavy
+    // January club where Feb MTD revenue is near zero.  See the
+    // in-file comment above `monthlyActual` for the full rationale.
     expect(src).toMatch(/fsGroupKey === "IS_PAYROLL"/);
-    expect(src).toMatch(/cmActual/);
+    expect(src).toMatch(/ytdActual/);
   });
 
-  it("reads MTD operating revenue via totals.operatingRevenue.cmActual", () => {
-    expect(src).toMatch(/totals\.operatingRevenue\.cmActual/);
+  it("reads YTD operating revenue via totals.operatingRevenue.ytdActual", () => {
+    expect(src).toMatch(/totals\.operatingRevenue\.ytdActual/);
   });
 
   it("benchmark comes from a config constant (not a hardcoded chart arg)", () => {
