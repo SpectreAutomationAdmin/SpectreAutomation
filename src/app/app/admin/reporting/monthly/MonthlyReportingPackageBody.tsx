@@ -1,7 +1,17 @@
+"use client";
+
 // Monthly Reporting Package — shared body component (rendered by
 // both the admin /app/admin/reporting/monthly route and the board
 // read-only /app/reports/monthly-package/[id] route). See the
 // MonthlyReportingPackageBody export below for the contract.
+//
+// MBR-VIS-2 (2026-10-11) — the body is now a client component so
+// its `ChapterSection` / `StewardshipScorecardCard` subcomponents
+// can call `useVisibilityState()` to subscribe to the client-side
+// visibility map that drives §1-§3 immediate feedback.  The admin
+// page.tsx + the print page.tsx both pass `pkg` as a server-
+// resolved serialisable prop, so the client/server boundary stays
+// at those pages.
 //
 // This file owns the full chapter library: cover, Chair's
 // Dashboard, Stewardship KPIs, Statement of Activities, Capital
