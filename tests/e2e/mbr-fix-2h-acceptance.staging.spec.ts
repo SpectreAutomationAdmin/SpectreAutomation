@@ -116,20 +116,19 @@ runAt(
     // Benchmark tile reads "57%+" (config threshold).
     expect(txt).toMatch(/57\s*%\s*\+/);
 
-    // The YTD ratio tile must NOT be "0.0%".  Feb YTD payroll ratio
-    // ≈ 10.95% per MBR-FIX-2G reconciliation.  Accept 1-50% band.
-    // We parse all percentages, find the YTD one by proximity to
-    // "YTD" / "Ratio" labels, and assert non-zero.
-    const pctMatches = Array.from(txt.matchAll(/([\d.]+)%/g)).map((m) => Number(m[1]));
-    console.log(`MBR_FIX_2H_FEB_TREND_PCTS ${JSON.stringify(pctMatches.slice(0, 10))}`);
-    // At least one non-benchmark, non-zero ratio tile must be present.
-    const nonBenchmark = pctMatches.filter((p) => p > 0 && p !== 57);
-    expect(nonBenchmark.length).toBeGreaterThan(0);
-    const maxYtd = Math.max(...nonBenchmark);
-    expect(maxYtd).toBeGreaterThan(0.5);
-    expect(maxYtd).toBeLessThan(50);
-    // suppress unused-var lint for parsePct helper
-    void parsePct;
+    // The YTD Ratio KPI tile must NOT be "0.0%".  Feb YTD payroll
+    // ratio ≈ 10.95% per the MBR-FIX-2G reconciliation; the live
+    // builder emits YTD-avg-of-monthlies, which lands around 8-11%
+    // for Feb (Jan 5.2 %, Feb 11.0 %).  Accept 1-25% band for the
+    // specific YTD RATIO tile value — the regex anchors on the
+    // label so the commentary's dues-ratio (~96%) doesn't false-
+    // positive the matcher.
+    const ytdTileMatch = txt.match(/([\d.]+)%\s+YTD RATIO/i);
+    expect(ytdTileMatch, "YTD Ratio KPI tile parse").not.toBeNull();
+    const ytdTile = parsePct(ytdTileMatch![0]);
+    console.log(`MBR_FIX_2H_FEB_TREND_YTD ${ytdTile}`);
+    expect(ytdTile).toBeGreaterThan(1);
+    expect(ytdTile).toBeLessThan(25);
 
     await ctx.close();
   },
