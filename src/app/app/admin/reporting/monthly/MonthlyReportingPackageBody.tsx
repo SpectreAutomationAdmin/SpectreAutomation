@@ -2804,7 +2804,12 @@ function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
               - font 12 → 14 px         (+17 % size)
               - gap-1.5 → gap-2.5       (6 → 10 px between rows)
               - swatch 10 → 12 px       (matches the larger font)
-              - percent column 2.5 → 2.8 rem  (room for "100 %")
+              - percent column 2.5 → 2.8 → 3.6 rem  (room for "100.00%")
+                MBR-FIX-2I (2026-10-11): pct now renders at two
+                decimal places (`11.39%`, `77.43%`, worst-case
+                `100.00%` ≈ 54 px at 14 px bold tabular-nums), so
+                the column must be ≥ 3.4 rem to avoid clipping.
+                3.6 rem gives a 2 px cushion.
               - lineHeight 1.3 → 1.4    (more breathing room)
             Result: legend reads cleanly at boardroom distance and
             fills the donut row's vertical space more naturally. */}
@@ -2814,7 +2819,7 @@ function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
               key={c.key}
               data-testid={`dues-legend-${c.key}`}
               className="grid items-center"
-              style={{ gridTemplateColumns: "12px minmax(0, 1fr) 2.8rem", columnGap: "0.6rem" }}
+              style={{ gridTemplateColumns: "12px minmax(0, 1fr) 3.6rem", columnGap: "0.6rem" }}
             >
               <span
                 aria-hidden="true"
