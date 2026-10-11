@@ -59,6 +59,33 @@ export type StewardshipAvailabilityInputs = {
    *  penny. When null OR not AVAILABLE, the card stays precisely
    *  unavailable. */
   arCurrentPct: ResolvedMetric | null;
+  /** MBR-FIX-2J §3A (2026-10-11) — canonical Working Capital =
+   *  Current Assets − Current Liabilities from the ratio-registry
+   *  (which reclassifies via the current CoA). Supersedes the
+   *  frozen `bs.lines[*].category` path that was mis-aggregating
+   *  for Coulee (produced ~$34M instead of the authoritative
+   *  ~$3.94M that Executive Opening + Statement of Financial
+   *  Position both show). When AVAILABLE, Section III Working
+   *  Capital card consumes this value exclusively; the frozen
+   *  bs.lines sum is never read. */
+  workingCapital: ResolvedMetric | null;
+  /** MBR-FIX-2J §3B (2026-10-11) — canonical Long-Term Debt-to-
+   *  Equity = Σ(BS_LONG_TERM_DEBT) / Members' Equity from the
+   *  ratio-registry. Supersedes `bs.lines[category === "long-term-
+   *  liability"]` which produced 0.00 for Coulee because the
+   *  frozen snapshot's category mapping didn't reach the LT Debt
+   *  account. */
+  longTermDebtToEquity: ResolvedMetric | null;
+  /** MBR-FIX-2J §4 (2026-10-11) — F&B Net Operating Result from
+   *  Section X Departmental P&L (fsGroupKey-aggregated committed
+   *  TB).  Positive scalar: the ABSOLUTE value of the department's
+   *  operating loss (dollars absorbed by Operating Dues). Null when
+   *  the F&B department has no committed activity for the period. */
+  fbNetOperatingLoss: number | null;
+  /** MBR-FIX-2J §4 (2026-10-11) — Operating Dues YTD, the
+   *  denominator for F&B Subsidy = loss ÷ dues × 100.  Positive
+   *  scalar. Null when no committed operating dues. */
+  operatingDuesYtd: number | null;
   /** True when the loaded Budget source carries capital-fund revenue
    *  budget lines. False (current Coulee state — operating-only CSV)
    *  → Capital Income vs Plan renders without a Plan comparator
@@ -1025,7 +1052,12 @@ function buildOperatingKpiCards(
     buildDuesRevenueCard(is, projection, aux),
     buildPayrollRatioCard(is, projection, aux),
     buildNoiMarginCard(is, projection, aux),
-    aux.auxiliaryKpiCards.operating.fbSubsidy,
+    // MBR-FIX-2J §4 (2026-10-11) — F&B Subsidy reads the F&B
+    // Net Operating Result from Section X (committed TB
+    // department aggregation) + Operating Dues. Falls back to the
+    // auxiliary SOURCE_NOT_CONNECTED sentinel when either input
+    // is unavailable.
+    buildFbSubsidyCard(aux, availability),
     aux.auxiliaryKpiCards.operating.rounds,
     aux.auxiliaryKpiCards.operating.covers,
     // STEWARDSHIP-LIVE-2A §1 — AR Current % from the canonical
@@ -1052,10 +1084,23 @@ function buildCapitalKpiCards(
     aux.auxiliaryKpiCards.capital.reserveCoverage,
     buildCapitalIncomeVsPlanCard(is, projection, aux, availability),
     aux.auxiliaryKpiCards.capital.capitalSpend,
-    buildDebtEquityCard(bs, aux),
+    // MBR-FIX-2J §3B (2026-10-11) — Long-Term Debt-to-Equity now
+    // consumes the ratio-registry's `longTermDebtToEquity`
+    // (BS_LONG_TERM_DEBT fsGroup / Members' Equity) when
+    // AVAILABLE.  Falls back to the frozen BS line scan only when
+    // the registry metric is missing (preserves demo tenant
+    // behaviour).  Fix for the 0.00 defect caused by the
+    // bs.lines[category === "long-term-liability"] path not
+    // reaching Coulee's LT Debt accounts.
+    buildDebtEquityCard(bs, aux, availability),
     buildPpeReinvestmentCard(bs, aux, availability),
     aux.auxiliaryKpiCards.capital.reserveSufficiency,
-    buildWorkingCapitalCard(bs, aux),
+    // MBR-FIX-2J §3A (2026-10-11) — Working Capital now consumes
+    // the ratio-registry's `workingCapital` metric when AVAILABLE.
+    // Fix for the ~$34.4M vs ~$3.94M discrepancy that arose from
+    // the frozen bs.lines classification path diverging from the
+    // Executive Opening (ratio-registry) classification path.
+    buildWorkingCapitalCard(bs, aux, availability),
     aux.auxiliaryKpiCards.capital.projectCompletion,
   ];
 }
@@ -1126,6 +1171,65 @@ function buildInitFeeSubsidyCard(
   // When entrance fees ARE operating (or availability not known), fall
   // back to the auxiliary SOURCE_NOT_CONNECTED sentinel.
   return aux.auxiliaryKpiCards.operating.initFeeSubsidy;
+}
+
+// ---------------------------------------------------------------------------
+// MBR-FIX-2J §4 (2026-10-11) — F&B Subsidy
+//
+// Reads the F&B department's Net Operating Result from Section X
+// (committed TB departmental aggregation) and expresses it as a
+// percentage of Operating Dues YTD.
+//
+// Definition (per directive §4):
+//   F&B Subsidy = |F&B Net Operating Loss| ÷ Operating Dues YTD × 100
+//
+// This is the "net departmental operating loss absorbed by the Club"
+// metric the directive explicitly authorizes.  It is distinct from
+// "subsidy per cover" (which would require POS cover counts) and
+// from "dues allocated to F&B" (which would require a founder-
+// approved allocation methodology).  When those richer metrics are
+// wanted later, they stack ON TOP of this one — this one is the
+// base signal available from the committed GL alone.
+//
+// A positive subsidy percentage represents dues absorbing F&B
+// losses; a negative percentage would represent F&B generating a
+// surplus that offsets dues (rare at private clubs).
+// ---------------------------------------------------------------------------
+
+function buildFbSubsidyCard(
+  aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
+): StewardshipKpi {
+  const loss = availability?.fbNetOperatingLoss ?? null;
+  const dues = availability?.operatingDuesYtd ?? null;
+
+  if (loss == null || dues == null || dues <= 0) {
+    // Fall back to the auxiliary SOURCE_NOT_CONNECTED sentinel.
+    return aux.auxiliaryKpiCards.operating.fbSubsidy;
+  }
+
+  // Subsidy = |loss| / dues × 100. The `loss` input is already the
+  // ABSOLUTE value of the dept's negative net operating result (sign
+  // handling lives at the resolver boundary so this stays clean).
+  const subsidyPct = (loss / dues) * 100;
+
+  // No founder-configured policy ceiling for Coulee today. Emit
+  // neutral tone + a precise fact-only assessment per directive §13
+  // (no favourable status without an approved target).
+  const assessment = loss > 0
+    ? `${formatMoneyShort(loss)} absorbed by Operating Dues YTD`
+    : "No F&B operating loss this period";
+  return {
+    key: "fb-subsidy",
+    name: "F&B Subsidy",
+    whatIsIt: "Share of operating dues absorbed by F&B net operating losses.",
+    whyItMatters: "F&B almost always runs at a loss at a private club; the subsidy size signals whether it is contained or growing.",
+    assessment,
+    actual: `${subsidyPct.toFixed(1)}%`,
+    budget: "No policy target configured",
+    benchmark: aux.auxiliaryKpiCards.operating.fbSubsidy.benchmark,
+    tone: "neutral",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,33 +1431,61 @@ function buildCapitalIncomeVsPlanCard(
 function buildDebtEquityCard(
   bs: BalanceSheetSnapshot,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi {
-  // Long-term debt from BS lines categorised as long-term-liability.
-  const ltDebt = bs.lines
-    .filter((l) => l.category === "long-term-liability")
-    .reduce((s, l) => s + l.amount, 0);
-  const ratio = bs.totalEquity > 0 ? ltDebt / bs.totalEquity : 0;
+  // MBR-FIX-2J §3B (2026-10-11) — ratio-registry is the authoritative
+  // source. When AVAILABLE, use its ratio directly so the card
+  // reconciles to Executive Opening + Statement of Financial Position
+  // to the penny. Only fall back to the (demo-only) bs.lines scan
+  // when the registry metric is missing.
+  const registryMetric = availability?.longTermDebtToEquity;
+  let ratio: number;
+  if (
+    registryMetric &&
+    registryMetric.metric.provenance.availability === "AVAILABLE" &&
+    registryMetric.metric.value != null
+  ) {
+    ratio = typeof registryMetric.metric.value === "number"
+      ? registryMetric.metric.value
+      : Number(registryMetric.metric.value.toString());
+  } else {
+    const ltDebt = bs.lines
+      .filter((l) => l.category === "long-term-liability")
+      .reduce((s, l) => s + l.amount, 0);
+    ratio = bs.totalEquity > 0 ? ltDebt / bs.totalEquity : 0;
+  }
   const ceiling = aux.kpiThresholds.debtEquityCeiling;
-  const tone: KpiTone =
-    ratio <= ceiling
+  // MBR-FIX-2J §13 — no favourable status unless an approved policy
+  // target exists. ceiling === 0 on live tenants without a
+  // configured policy; emit neutral tone + "No policy target
+  // configured" rather than silently reading 0 as "approved ceiling
+  // of 0 → anything positive = red".
+  const policyConfigured = ceiling > 0;
+  const tone: KpiTone = policyConfigured
+    ? ratio <= ceiling
       ? "green"
       : ratio <= ceiling * 1.5
         ? "amber"
-        : "red";
-  const assessment =
-    ratio <= ceiling * 0.5
+        : "red"
+    : "neutral";
+  const assessment = policyConfigured
+    ? ratio <= ceiling * 0.5
       ? "Very low leverage"
       : ratio <= ceiling
         ? "Within policy ceiling"
-        : "Above policy ceiling; capital structure review";
+        : "Above policy ceiling; capital structure review"
+    : "No policy ceiling configured";
+  // Format the display: multiple notation (0.14x) when supported per
+  // directive §3B.
+  const displayActual = `${formatRatio(ratio)}x`;
   return {
     key: "debt-equity",
     name: "Long-Term Debt-to-Equity",
     whatIsIt: "Long-term debt as a share of member equity.",
     whyItMatters: "Conservative leverage protects future members from inheriting today's debt-service obligations.",
     assessment,
-    actual: formatRatio(ratio),
-    budget: `Policy ≤ ${formatRatio(ceiling)}`,
+    actual: displayActual,
+    budget: policyConfigured ? `Policy ≤ ${formatRatio(ceiling)}x` : "Policy target not configured",
     benchmark: aux.kpiThresholds.debtEquityPeerMedianLabel,
     tone,
   };
@@ -1418,23 +1550,53 @@ function buildPpeReinvestmentCard(
 function buildWorkingCapitalCard(
   bs: BalanceSheetSnapshot,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi {
-  let currentAssets = 0;
-  let currentLiabilities = 0;
-  for (const l of bs.lines) {
-    if (l.category === "current-asset") currentAssets += l.amount;
-    else if (l.category === "current-liability") currentLiabilities += l.amount;
+  // MBR-FIX-2J §3A (2026-10-11) — ratio-registry is the authoritative
+  // source. Executive Opening + Statement of Financial Position both
+  // consume this metric; Section III now does too.  Fixes the
+  // ~$34.4M vs ~$3.94M divergence that came from reading the frozen
+  // bs.lines[*].category classification path (older account-range
+  // mapping) instead of the CoA-metadata-driven ratio-registry.
+  const registryMetric = availability?.workingCapital;
+  let wc: number;
+  if (
+    registryMetric &&
+    registryMetric.metric.provenance.availability === "AVAILABLE" &&
+    registryMetric.metric.value != null
+  ) {
+    wc = typeof registryMetric.metric.value === "number"
+      ? registryMetric.metric.value
+      : Number(registryMetric.metric.value.toString());
+  } else {
+    let currentAssets = 0;
+    let currentLiabilities = 0;
+    for (const l of bs.lines) {
+      if (l.category === "current-asset") currentAssets += l.amount;
+      else if (l.category === "current-liability") currentLiabilities += l.amount;
+    }
+    wc = currentAssets - currentLiabilities;
   }
-  const wc = currentAssets - currentLiabilities;
   const floor = aux.kpiThresholds.workingCapitalPolicyFloor;
-  const tone: KpiTone = wc >= floor ? "green" : wc >= floor * 0.9 ? "amber" : "red";
+  // MBR-FIX-2J §13 — no favourable status unless an approved policy
+  // target exists. floor === 0 on live tenants without a configured
+  // policy; emit neutral tone + "No policy floor configured".
+  const policyConfigured = floor > 0;
+  const tone: KpiTone = policyConfigured
+    ? wc >= floor
+      ? "green"
+      : wc >= floor * 0.9
+        ? "amber"
+        : "red"
+    : "neutral";
   const cushion = wc - floor;
-  const assessment =
-    wc >= floor
+  const assessment = policyConfigured
+    ? wc >= floor
       ? `${formatMoneyShort(cushion)} above policy floor`
       : wc >= floor * 0.9
         ? `${formatMoneyShort(Math.abs(cushion))} short of policy floor; monitor`
-        : `${formatMoneyShort(Math.abs(cushion))} short of policy floor; corrective action`;
+        : `${formatMoneyShort(Math.abs(cushion))} short of policy floor; corrective action`
+    : "No policy floor configured";
   return {
     key: "working-capital",
     name: "Working Capital",
@@ -1442,7 +1604,9 @@ function buildWorkingCapitalCard(
     whyItMatters: "Working capital is the cushion for normal operating swings; below the policy floor and the club starts relying on credit lines.",
     assessment,
     actual: formatMoneyShort(wc),
-    budget: `Policy floor ${formatMoneyShort(floor)}`,
+    budget: policyConfigured
+      ? `Policy floor ${formatMoneyShort(floor)}`
+      : "Policy floor not configured",
     tone,
   };
 }

@@ -2694,31 +2694,87 @@ export async function getMonthlyReportingPackage(
     //     the Initiation Fee Operating Subsidy card as structurally
     //     N/A rather than source-not-connected.
     availability: hasRealData
-      ? {
-          arCurrentPct: januaryMetricSet?.arCurrentPct ?? null,
-          // CAPITAL-LIVE-1 §2 (2026-10-05) — staging audit of the
-          // committed Budget confirmed 6 CAPITAL BudgetLines totaling
-          // FY2026 $1.585M (Initiation Fee, Facility Improvement Fee,
-          // LRP Capital Improvement Dues, etc. — see the acceptance
-          // package). STEWARDSHIP-LIVE-2A hardcoded false; flipping
-          // to true so Section III Capital Income vs Plan can
-          // reconcile Actual vs Budget normally.
-          capitalBudgetConnected: true,
-          // Coulee's IS_ENTRANCE_FEES fsGroup has 1 account (4085
-          // Initiation Fee) tagged fundApplicability = "CAPITAL".
-          // Hardcoded false until a tenant ships an operating-fund
-          // entrance fee classification (which would be non-standard
-          // for private clubs). Flip to a per-tenant lookup when a
-          // tenant disagrees.
-          entranceFeesAreOperating: false,
-          // REPORT-AUDIT-1A §1 — Coulee's BS merges PP&E gross +
-          // accumulated depreciation into one BS_CAPITAL_ASSETS
-          // fsGroup. Section III PP&E Reinvestment card renders
-          // precise unavailable until a BS category split exists.
-          // Mirrors the Section V ppeSplitAvailable: false signal
-          // established by CAPITAL-LIVE-1.
-          ppeSplitAvailable: false,
-        }
+      ? await (async () => {
+          // MBR-FIX-2J §4 (2026-10-11) — pre-resolve F&B subsidy
+          // inputs so Section III's F&B card reconciles to Section X
+          // Departmental P&L (same resolver; same Jonas snapshot).
+          const stewardshipFyStart = new Date(Date.UTC(
+            reportingPeriod.periodEnd.getUTCFullYear(), 0, 1,
+          ));
+          let fbNetOperatingLoss: number | null = null;
+          let operatingDuesYtd: number | null = null;
+          try {
+            const deptPL = await incomeStatementByDepartmentFromSnapshot(
+              club.id,
+              stewardshipFyStart,
+              reportingPeriod.periodEnd,
+            );
+            // Section X aggregation: F&B row's net operating result =
+            // revenue − cogs − payroll − otherOpEx.  All values on
+            // `deptPL.rows[*]` are Prisma.Decimal; convert carefully.
+            const fbRow = deptPL.rows.find(
+              (r) => r.departmentCode === "FOOD_AND_BEVERAGE" ||
+                     r.departmentName === "Food & Beverage",
+            );
+            if (fbRow) {
+              const revenue = -Number(fbRow.revenue.toString()); // credit-normal → positive
+              const cogs = Number(fbRow.cogs.toString());
+              const payroll = Number(fbRow.payroll.toString());
+              const opex = Number(fbRow.opex.toString());
+              const netResult = revenue - cogs - payroll - opex;
+              // Loss = ABS of a negative netResult; positive netResult
+              // (F&B surplus) is reported as zero loss (no subsidy).
+              fbNetOperatingLoss = netResult < 0 ? Math.abs(netResult) : 0;
+            }
+          } catch {
+            fbNetOperatingLoss = null;
+          }
+          // Operating Dues YTD from the canonical FS-Group projection
+          // (same source Section IV + Operating Cost Coverage donut
+          // consume).  Sign-flipped positive.
+          if (fsGroupProjection) {
+            const duesRow = fsGroupProjection.operatingRevenue.find(
+              (r) => r.fsGroupKey === "IS_MEMBERSHIP_DUES",
+            );
+            if (duesRow) operatingDuesYtd = Math.abs(duesRow.ytdActual);
+          }
+          return {
+            arCurrentPct: januaryMetricSet?.arCurrentPct ?? null,
+            // MBR-FIX-2J §3A (2026-10-11) — thread ratio-registry's
+            // authoritative Working Capital metric so Section III
+            // reconciles to Executive Opening + Statement of
+            // Financial Position cent-for-cent.
+            workingCapital: januaryMetricSet?.workingCapital ?? null,
+            // MBR-FIX-2J §3B (2026-10-11) — thread ratio-registry's
+            // Long-Term Debt-to-Equity so Section III reads the
+            // same ratio Executive uses (fixes the 0.00 defect).
+            longTermDebtToEquity: januaryMetricSet?.longTermDebtToEquity ?? null,
+            // MBR-FIX-2J §4 — F&B subsidy inputs.
+            fbNetOperatingLoss,
+            operatingDuesYtd,
+            // CAPITAL-LIVE-1 §2 (2026-10-05) — staging audit of the
+            // committed Budget confirmed 6 CAPITAL BudgetLines
+            // totaling FY2026 $1.585M (Initiation Fee, Facility
+            // Improvement Fee, LRP Capital Improvement Dues, etc.
+            // — see the acceptance package). Flipping to true so
+            // Section III Capital Income vs Plan can reconcile
+            // Actual vs Budget normally.
+            capitalBudgetConnected: true,
+            // Coulee's IS_ENTRANCE_FEES fsGroup has 1 account
+            // (4085 Initiation Fee) tagged fundApplicability =
+            // "CAPITAL". Hardcoded false until a tenant ships an
+            // operating-fund entrance fee classification (which
+            // would be non-standard for private clubs). Flip to
+            // a per-tenant lookup when a tenant disagrees.
+            entranceFeesAreOperating: false,
+            // REPORT-AUDIT-1A §1 — Coulee's BS merges PP&E gross +
+            // accumulated depreciation into one BS_CAPITAL_ASSETS
+            // fsGroup. Section III PP&E Reinvestment card renders
+            // precise unavailable until a BS category split
+            // exists. Mirrors Section V's ppeSplitAvailable: false.
+            ppeSplitAvailable: false,
+          };
+        })()
       : null,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
