@@ -1109,26 +1109,75 @@ function buildCapitalKpiCards(
 // ratio-registry metric (which itself reads resolveArAgingAsOf). On
 // a live tenant with a committed AR snapshot, renders the live value
 // matching Executive + Section VIII exactly.
+//
+// MBR-FIX-2K (2026-10-11) — the resolver requires an EXACT-DAY match
+// between `sourceEffectiveDate` and the requested period end (no
+// carry-forward).  When no AR snapshot is loaded for the specific
+// period, surface the resolver's precise reason ("No committed AR
+// aging snapshot for 2026-02-28") instead of the generic "AR Aging
+// projection pending" sentinel — the projection IS implemented;
+// the operational gap is the missing snapshot import for that
+// period.
 function buildArCurrentCard(
   aux: StewardshipAuxiliaryInputs,
   availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi {
   const ar = availability?.arCurrentPct;
+
+  // MBR-FIX-2K branch 1: ratio-registry metric present but the
+  // specific-period snapshot wasn't committed.  Emit a precise
+  // period-aware explanation sourced from the resolver's own
+  // provenance.reason string.  The ratio-registry wraps the AR
+  // resolver's SOURCE_NOT_LOADED as `MetricAvailability.
+  // SOURCE_NOT_CONNECTED` with a period-aware reason like
+  // "AR aging source not imported for 2026-02-28".
+  if (
+    ar &&
+    ar.metric.provenance.availability === "SOURCE_NOT_CONNECTED" &&
+    ar.metric.value == null
+  ) {
+    return {
+      key: "ar-current",
+      name: "AR Current %",
+      whatIsIt: aux.auxiliaryKpiCards.operating.arCurrent.whatIsIt,
+      whyItMatters: aux.auxiliaryKpiCards.operating.arCurrent.whyItMatters,
+      assessment: ar.metric.provenance.reason ??
+        "No AR aging snapshot committed for this period.",
+      actual: "—",
+      tone: "neutral",
+    };
+  }
+
+  // Branch 2: completely absent metric (demo tenants) — generic
+  // auxiliary sentinel.
   if (!ar || ar.metric.provenance.availability !== "AVAILABLE" || ar.metric.value == null) {
-    // Fall back to the UNAVAILABLE sentinel (Source not connected).
     return aux.auxiliaryKpiCards.operating.arCurrent;
   }
+
+  // Branch 3: live value.  Metric value already in percent (99.3 =
+  // 99.3%).  MBR-FIX-2K §6 — no favourable tone unless an approved
+  // policy threshold exists.  Live tenants without a configured
+  // threshold render neutral with a factual assessment.
   const valueNum = typeof ar.metric.value === "number"
     ? ar.metric.value
     : Number(ar.metric.value.toString());
-  // Metric value is already in percent (e.g. 99.3 means 99.3%).
   const ratio = valueNum / 100;
-  // Target ≥ 80% policy convention — same as the demo auxiliary card.
-  const target = 0.80;
-  const tone: KpiTone =
-    ratio >= target ? "green" : ratio >= target * 0.95 ? "amber" : "red";
-  const assessment =
-    ratio >= target
+  // Demo seeds configure `budget: "Target ≥ 80%"` on the auxiliary;
+  // detect that convention + reuse it. Live tenants with no
+  // configured threshold stay neutral per §6.
+  const demoBudget = aux.auxiliaryKpiCards.operating.arCurrent.budget ?? "";
+  const demoTargetMatch = demoBudget.match(/≥\s*(\d+(?:\.\d+)?)\s*%/);
+  const target = demoTargetMatch ? Number(demoTargetMatch[1]) / 100 : null;
+  const tone: KpiTone = target == null
+    ? "neutral"
+    : ratio >= target
+      ? "green"
+      : ratio >= target * 0.95
+        ? "amber"
+        : "red";
+  const assessment = target == null
+    ? `${(ratio * 100).toFixed(1)}% current; no policy target configured`
+    : ratio >= target
       ? "Above target; collections healthy"
       : ratio >= target * 0.95
         ? "Near target; monitor"
@@ -1140,7 +1189,7 @@ function buildArCurrentCard(
     whyItMatters: "Members carrying old balances eventually become bad debt; a falling current % is the earliest collections signal.",
     assessment,
     actual: ar.metric.display,
-    budget: "Target ≥ 80%",
+    budget: target != null ? demoBudget : "No policy target configured",
     benchmark: aux.auxiliaryKpiCards.operating.arCurrent.benchmark,
     tone,
   };
