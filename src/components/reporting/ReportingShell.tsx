@@ -789,16 +789,18 @@ function DownloadPdfButton() {
       // push so the label sits visually centred inside the pill).
       // Gold accent is identical to Publish — no amber/gold divergence.
       //
-      // MBR-VIS-4B — `[&>*]:translate-y-[0.5px]` shifts the icon
-      // and the label span down 0.5px via sub-pixel transform.
-      // Both children ride the transform together so icon ↔ label
+      // MBR-VIS-4B/4C — `[&>*]:translate-y-[1px]` shifts the icon
+      // and the label span down 1px via sub-pixel transform.  Both
+      // children ride the transform together so icon ↔ label
       // vertical alignment is preserved.  Pill padding + border +
-      // outer height are unchanged.
+      // outer height are unchanged.  (0.5px centres the line-box;
+      // the other 0.5px compensates the ascent-vs-descent asymmetry
+      // of the monospace stack at 10px font-size.)
       className={
         "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
         "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
         "tracking-[0.18em] [text-indent:0.18em] transition " +
-        "[&>*]:translate-y-[0.5px] " +
+        "[&>*]:translate-y-[1px] " +
         "focus:outline-none focus:ring-2 focus:ring-club-gold/50 " +
         "border-club-gold/70 bg-club-gold/15 text-club-gold hover:bg-club-gold/25 " +
         "disabled:opacity-60 disabled:cursor-wait"

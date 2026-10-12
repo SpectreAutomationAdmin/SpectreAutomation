@@ -292,11 +292,13 @@ describe("MBR-VIS-4B §J — optical vertical centering of visible glyphs", () =
   const shell = src(path.join(REPO, "src/components/reporting/ReportingShell.tsx"));
   const publish = src(path.join(REPO, "src/app/app/admin/reporting/monthly/PublishHeaderButton.tsx"));
 
-  it("all three pills apply a shared 0.5px downward translate on direct children", () => {
-    // Compensates the font-mono upper-ascender gap that put the
-    // visible glyphs 0.5px above the pill's true vertical centre
-    // (measured on staging: pill cy=28.0 vs glyph cy=27.5).
-    const token = "[&>*]:translate-y-[0.5px]";
+  it("all three pills apply a shared 1px downward translate on direct children", () => {
+    // MBR-VIS-4C — refined from 0.5px to 1px after Canvas
+    // measureText showed the font ascent (9px) ≠ descent (3px) at
+    // 10px font-size in the monospace stack, which puts the ink
+    // silhouette 0.5px above the line-box centre.  0.5px centres
+    // the line-box; the second 0.5px centres the ink inside it.
+    const token = "[&>*]:translate-y-[1px]";
     expect(chip).toContain(token);
     expect(shell).toContain(token);
     expect(publish).toContain(token);

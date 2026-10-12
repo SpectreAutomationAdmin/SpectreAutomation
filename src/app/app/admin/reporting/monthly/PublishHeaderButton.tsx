@@ -76,21 +76,33 @@ const SLOT_ID = "reporting-shell-header-action-slot";
 // visual rendering is balanced.  Shared verbatim with
 // DownloadPdfButton so Publish + Download Draft PDF look identical.
 //
-// MBR-VIS-4B (2026-10-11) — added `[&>*]:translate-y-[0.5px]` to
-// correct an optical VERTICAL skew.  The bounding-box centre of
-// the label span was mathematically centred (dy=0), but
-// Range.getBoundingClientRect() on the glyph ink showed the actual
-// visible letters centred 0.5px ABOVE the pill's true vertical
-// midpoint (staging measurement: pill cy=28.0 vs glyph cy=27.5).
-// Shifting every direct child DOWN by 0.5px via `transform`
-// honours sub-pixel precision and leaves the pill's padding,
-// border, and dimensions untouched.  Shared verbatim across every
-// masthead pill.
+// MBR-VIS-4B (2026-10-11) — added `[&>*]:translate-y-[Npx]` to
+// correct an optical VERTICAL skew.  Shifting direct children
+// down via `transform` honours sub-pixel precision and leaves the
+// pill's padding, border, and dimensions untouched.  Shared
+// verbatim across every masthead pill.
+//
+// MBR-VIS-4C (2026-10-11) — refined the shift from 0.5px → 1px
+// after a Canvas `measureText()` probe exposed the real cause.
+// Range.getBoundingClientRect returns the LINE-BOX of the text,
+// not the glyph silhouette; centring the line-box doesn't centre
+// the ink inside it when the font's ascent (9px at 10px font-size
+// in the monospace stack) is larger than its descent (3px).  The
+// 0.5px translate from VIS-4B landed the line-box dead-centre but
+// left the ink 0.5px above pill centre — exactly matching the
+// founder's "still too high" review.
+//
+// Canvas-measured state before VIS-4C (post-VIS-4B, live staging):
+//   pill   centerY = 28.0
+//   ink    centerY = 27.5    (-0.5px above pill centre)
+//   suggestedDownShift = 0.5px
+// Updating the translate from 0.5px → 1px adds another 0.5px of
+// downward shift so the ink lands at pill centre exactly.
 const BASE_CHIP =
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
   "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
   "tracking-[0.18em] [text-indent:0.18em] transition " +
-  "[&>*]:translate-y-[0.5px] " +
+  "[&>*]:translate-y-[1px] " +
   "focus:outline-none focus:ring-2 focus:ring-club-gold/50";
 
 const STYLE_ACTION_PRIMARY =
