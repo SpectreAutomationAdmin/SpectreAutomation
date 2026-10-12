@@ -34,6 +34,12 @@ export type PublicationStateBannerProps = {
    *  links to the current period. Caller composes these. */
   editingHref: string;
   oppositeHref: string;
+  /** MBR-VIS-4 — direct `/api/reporting/monthly/pdf` URL for the
+   *  download affordance built into the banner.  Draft banner
+   *  receives the mode=draft URL; Published banner receives the
+   *  mode=published URL.  Omitting it hides the download link
+   *  (used in Published State when no snapshot exists yet). */
+  downloadPdfHref?: string;
 };
 
 function formatPublished(date: Date | null | undefined): string {
@@ -57,6 +63,7 @@ export function PublicationStateBanner({
   publishedByName,
   editingHref,
   oppositeHref,
+  downloadPdfHref,
 }: PublicationStateBannerProps) {
   if (mode === "draft") {
     const n = pendingCount ?? 0;
@@ -78,6 +85,15 @@ export function PublicationStateBanner({
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {downloadPdfHref && (
+              <a
+                href={downloadPdfHref}
+                className="underline hover:no-underline"
+                data-testid="publication-state-draft-download-pdf"
+              >
+                Download Draft PDF
+              </a>
+            )}
             <Link
               href={editingHref}
               className="underline hover:no-underline"
@@ -115,6 +131,15 @@ export function PublicationStateBanner({
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {downloadPdfHref && (
+            <a
+              href={downloadPdfHref}
+              className="underline hover:no-underline"
+              data-testid="publication-state-published-download-pdf"
+            >
+              Download Published PDF
+            </a>
+          )}
           <Link
             href={editingHref}
             className="underline hover:no-underline"

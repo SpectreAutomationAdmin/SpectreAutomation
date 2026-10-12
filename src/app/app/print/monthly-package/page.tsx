@@ -3,13 +3,33 @@
 //
 // Route: /app/print/monthly-package
 // Modes (mutually exclusive query params):
-//   ?id=<MonthlyPackage id>     → board path. Renders the FROZEN
-//                                 snapshot stored at publish time.
-//                                 Same authz as the board view.
-//   ?period=YYYY-MM             → admin path. Renders the LIVE
-//                                 reporting service output.
-//                                 Requires `reports:board` on the
-//                                 active club.
+//   ?id=<MonthlyPackage id>                 → board path. Renders the FROZEN
+//                                             snapshot stored at publish time.
+//                                             Same authz as the board view.
+//   ?period=YYYY-MM&mode=published          → admin path, PUBLISHED mode.
+//                                             Renders `packagePayloadJson`
+//                                             VERBATIM — a complete financial
+//                                             + visibility snapshot captured
+//                                             at publish time. Never rebuilds
+//                                             from live ledger data, so the
+//                                             Published PDF is byte-identical
+//                                             to Published State and immune
+//                                             to subsequent TB imports /
+//                                             budget revisions / COA edits.
+//                                             404 if no snapshot exists.
+//   ?period=YYYY-MM&mode=draft              → admin path, DRAFT mode.
+//                                             Renders LIVE reporting service
+//                                             output + current draft
+//                                             visibility. Watermarked DRAFT
+//                                             on every page via the PDF route's
+//                                             header/footer template. Never
+//                                             creates or alters a publication
+//                                             record.
+//   ?period=YYYY-MM                         → legacy fallback: defaults to
+//                                             DRAFT mode (matches the
+//                                             behaviour the Shell button
+//                                             produces from an editing URL).
+// All admin paths require `reports:board` on the active club.
 //
 // Layout: stripped to the bone. NO ReportingShell, NO sidebar, NO
 // header chip, NO close button — Playwright captures THIS page's
@@ -48,8 +68,15 @@ const ORDINAL_WORDS: Record<number, string> = {
 };
 
 type Props = {
-  searchParams?: { id?: string; period?: string };
+  searchParams?: { id?: string; period?: string; mode?: string };
 };
+
+type PdfMode = "draft" | "published";
+
+function parseMode(mode: string | undefined): PdfMode | null {
+  if (mode === "draft" || mode === "published") return mode;
+  return null;
+}
 
 function parsePeriodQuery(period: string | undefined): { start: Date; end: Date } | null {
   if (!period) return null;
@@ -70,6 +97,18 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
   // ── Resolve the payload via one of two paths ───────────────────
   let pkg: MonthlyReportingPackage | null = null;
   let clubName = "";
+  let effectiveMode: PdfMode = "published";
+  // MBR-VIS-4 — visibility applied to the body.  Set by whichever
+  // branch resolves pkg (published / draft / board snapshot).
+  let visibilityForBody: {
+    source: "draft" | "published";
+    entries: Record<string, boolean>;
+  } | undefined;
+  // MBR-VIS-4 — when mode=draft and we had to resolve draft rows,
+  // we need the (clubId, year, month) for the body's visibility
+  // props so toggles are rendered correctly (they aren't in print,
+  // but the body gates them on `editing=false`).
+  let generatedAt: string = new Date().toISOString();
 
   if (searchParams?.id) {
     // Board / member path: read the frozen snapshot. Authz lives
@@ -81,6 +120,15 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
     if (!view.fullPayload) notFound();
     pkg = view.fullPayload as unknown as MonthlyReportingPackage;
     clubName = (pkg.club?.name as string | undefined) ?? "";
+    effectiveMode = "published";
+    // Frozen snapshot — the published payload's visibility rides
+    // along verbatim in the pkg object we just loaded.
+    const frozen = (pkg as unknown as {
+      visibility?: { entries?: Record<string, boolean> };
+    }).visibility;
+    if (frozen?.entries) {
+      visibilityForBody = { source: "published", entries: frozen.entries };
+    }
   } else {
     // Admin path: live reporting service. Requires reports:board
     // on the active club — same gate the admin route uses.
@@ -90,28 +138,46 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
     });
     if (!hasPermission(principal, clubId, "reports:board")) notFound();
     const periodOpt = parsePeriodQuery(searchParams?.period);
-    // Founder rule 2026-07-13 v15.14 — PDF captures MUST render the
-    // Board-safe summarised statement, never the expanded drill-down.
-    // Playwright captures the current DOM, so any account detail
-    // rendered here would end up in the PDF payload. Explicit
-    // `viewerCanDrillDown: false` locks the intent even if the
-    // default ever changes.
-    pkg = periodOpt
-      ? await getMonthlyReportingPackage(clubId, { period: periodOpt, viewerCanDrillDown: false })
-      : await getMonthlyReportingPackage(clubId, { viewerCanDrillDown: false });
-    clubName = pkg.club?.name ?? "";
 
-    // MBR-VIS-3 §3 (2026-10-11) — the admin PDF path previously
-    // rendered the LIVE pkg with no `visibility` attached, which
-    // meant every component rendered as visible regardless of
-    // the Controller's draft toggles.  The directive is explicit:
-    // "Downloaded PDF: Hidden KPI rows are omitted according to
-    // the frozen published visibility snapshot."  Look up the
-    // MonthlyPackage row for the period and, when a published
-    // payload exists, lift its `visibility` into the live pkg so
-    // the body component applies the frozen visibility snapshot.
-    // Draft edits never flow into the PDF — only publish.
-    if (periodOpt) {
+    // MBR-VIS-4 §2 (2026-10-11) — mode selection.
+    //
+    // The admin PDF path now takes an explicit `mode` param:
+    //
+    //   mode=published — Published PDF. Serve `packagePayloadJson`
+    //                    VERBATIM.  Financial values + visibility
+    //                    are both frozen; the PDF must match the
+    //                    Published State HTML byte-for-byte. 404
+    //                    when no snapshot exists (the UI gates the
+    //                    button, so a direct URL hit is the only
+    //                    way to reach this branch — fail loudly
+    //                    rather than silently substituting live
+    //                    data as the pre-VIS-4 code did).
+    //
+    //   mode=draft     — Draft PDF.  Live reporting service output
+    //                    (today's ledger state) + current draft
+    //                    visibility.  Never creates or modifies a
+    //                    publication record.  The PDF API route
+    //                    paints a DRAFT · NOT FOR BOARD DISTRIBUTION
+    //                    footer on every page.
+    //
+    //   mode absent    — legacy fallback.  Treated as DRAFT so the
+    //                    existing Shell `Download PDF` button
+    //                    (which does NOT yet pass `mode`) still
+    //                    produces a correctly-watermarked DRAFT
+    //                    PDF rather than silently serving an
+    //                    all-visible report dressed up as "published".
+    const requestedMode = parseMode(searchParams?.mode) ?? "draft";
+    effectiveMode = requestedMode;
+
+    if (requestedMode === "published") {
+      // ─── Published PDF path ─────────────────────────────────
+      //
+      // Serve the frozen packagePayloadJson as the full pkg.  This
+      // is the data-integrity fix for MBR-VIS-4 §5: a Published
+      // PDF must reproduce the frozen snapshot — never a live
+      // rebuild — so subsequent ledger changes cannot silently
+      // alter a previously published PDF.
+      if (!periodOpt) notFound();
       const periodEnd = periodOpt.end;
       const row = await prismaImport.monthlyPackage.findUnique({
         where: {
@@ -121,23 +187,59 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
             reportingMonth: periodEnd.getUTCMonth() + 1,
           },
         },
-        select: { packagePayloadJson: true },
+        select: {
+          status: true,
+          packagePayloadJson: true,
+          publishedAt: true,
+        },
       });
-      if (row?.packagePayloadJson) {
+      if (!row || !row.packagePayloadJson || row.status === "DRAFT") {
+        // No frozen snapshot available.  The UI gates the Download
+        // Published PDF button on this same condition; a direct URL
+        // hit lands here with a 404 so we never silently substitute
+        // a live rebuild for a missing publication.
+        notFound();
+      }
+      try {
+        const parsed = JSON.parse(row!.packagePayloadJson!) as MonthlyReportingPackage & {
+          visibility?: { entries?: Record<string, boolean> };
+        };
+        pkg = parsed as MonthlyReportingPackage;
+        clubName = pkg.club?.name ?? "";
+        const frozen = parsed.visibility;
+        if (frozen?.entries) {
+          visibilityForBody = { source: "published", entries: frozen.entries };
+        }
+      } catch {
+        // Corrupted snapshot JSON — the only safe action is to
+        // refuse publication of a broken payload.
+        notFound();
+      }
+    } else {
+      // ─── Draft PDF path ─────────────────────────────────────
+      //
+      // Live reporting service output + current draft visibility
+      // + DRAFT watermark (applied by the PDF route's header /
+      // footer template, driven by this page's `data-pdf-mode`).
+      pkg = periodOpt
+        ? await getMonthlyReportingPackage(clubId, { period: periodOpt, viewerCanDrillDown: false })
+        : await getMonthlyReportingPackage(clubId, { viewerCanDrillDown: false });
+      clubName = pkg.club?.name ?? "";
+
+      if (periodOpt) {
+        const periodEnd = periodOpt.end;
+        const { resolveDraftVisibility } = await import(
+          "@/lib/reporting/monthly-package-visibility"
+        );
         try {
-          const frozen = JSON.parse(row.packagePayloadJson) as {
-            visibility?: { entries?: Record<string, boolean> };
-          };
-          if (frozen?.visibility?.entries) {
-            (pkg as unknown as {
-              visibility: { source: "published"; entries: Record<string, boolean> };
-            }).visibility = {
-              source: "published",
-              entries: frozen.visibility.entries,
-            };
-          }
+          const draft = await resolveDraftVisibility(
+            clubId,
+            periodEnd.getUTCFullYear(),
+            periodEnd.getUTCMonth() + 1,
+          );
+          visibilityForBody = { source: "draft", entries: draft.entries };
         } catch {
-          /* corrupted snapshot — fall through to default-visible */
+          // No draft config available — fall back to default-visible.
         }
       }
     }
@@ -595,27 +697,44 @@ export default async function PrintMonthlyPackagePage({ searchParams }: Props) {
         data-testid="print-monthly-package"
         data-period-label={periodLabel}
         data-club-name={clubName}
+        data-pdf-mode={effectiveMode}
+        data-generated-at={generatedAt}
         className="bg-white text-club-ink"
       >
+        {/* MBR-VIS-4 §3 (2026-10-11) — DRAFT in-page banner.
+            Rendered only when `effectiveMode === "draft"`.  The PDF
+            API route also stamps a DRAFT marker in the running
+            footer via Playwright's footerTemplate so the DRAFT
+            designation appears on every PDF page; this in-page
+            banner ensures the first page (title) also carries it
+            even though Playwright's running footer sits in the
+            page margins. */}
+        {effectiveMode === "draft" && (
+          <div
+            data-testid="pdf-draft-banner"
+            style={{
+              background: "#7c2d12",
+              color: "#fef3c7",
+              textAlign: "center",
+              padding: "6pt 12pt",
+              fontSize: "9pt",
+              letterSpacing: "0.32em",
+              textTransform: "uppercase",
+              fontWeight: 600,
+              borderBottom: "0.5pt solid #431407",
+            }}
+          >
+            Draft · Not for Board Distribution · Generated {generatedAt}
+          </div>
+        )}
         <MonthlyReportingPackageBody
           pkg={pkg}
-          /* MBR-VIS-1 Part B — PDF reads the frozen visibility
-             snapshot from the published payload if present. Draft
-             edits in `MonthlyPackageVisibility` never alter the
-             PDF until an explicit republish lands a new snapshot. */
-          visibility={
-            (pkg as unknown as {
-              visibility?: { entries?: Record<string, boolean> };
-            }).visibility?.entries
-              ? {
-                  source: "published",
-                  entries:
-                    (pkg as unknown as {
-                      visibility: { entries: Record<string, boolean> };
-                    }).visibility.entries,
-                }
-              : undefined
-          }
+          /* MBR-VIS-4 — the PDF body renders through the resolved
+             visibility config.  Published mode: frozen snapshot
+             from `packagePayloadJson.visibility`.  Draft mode:
+             live `MonthlyPackageVisibility` rows.  Both honor the
+             same parent-child cascade in the body component. */
+          visibility={visibilityForBody}
           editing={false}
         />
       </main>

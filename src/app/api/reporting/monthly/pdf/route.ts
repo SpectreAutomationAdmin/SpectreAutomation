@@ -49,11 +49,21 @@ const MONTH_LONG = [
   "July", "August", "September", "October", "November", "December",
 ];
 
+type PdfMode = "draft" | "published";
+
 type ResolvedPackage = {
   period: string;            // "June 2026" for the filename
   filenameSafe: string;      // "June-2026"
   clubName: string;
+  mode: PdfMode;
+  /** Draft mode: present for the filename decoration ("-DRAFT"). */
+  draftTimestamp?: string;
 };
+
+function parseMode(raw: string | null): PdfMode | null {
+  if (raw === "draft" || raw === "published") return raw;
+  return null;
+}
 
 /**
  * Resolve the package identity from the request before we spend the
@@ -77,6 +87,8 @@ async function resolveRequest(
     // Board / member path. We don't re-run the full visibility
     // check here (the print route does it); we just need the
     // metadata for the filename + a fast 404 if the id is bogus.
+    // Board snapshot is always PUBLISHED by definition — the only
+    // snapshot that getBoardPackageView surfaces is the frozen one.
     const row = await prisma.monthlyPackage.findUnique({
       where: { id },
       select: {
@@ -90,7 +102,12 @@ async function resolveRequest(
     const filenameSafe = `${MONTH_LONG[row.reportingMonth - 1]}-${row.reportingYear}`;
     return {
       ok: true,
-      pkg: { period: periodLabel, filenameSafe, clubName: row.club.name },
+      pkg: {
+        period: periodLabel,
+        filenameSafe,
+        clubName: row.club.name,
+        mode: "published",
+      },
     };
   }
 
@@ -106,6 +123,39 @@ async function resolveRequest(
   }
   const year = Number(m[1]);
   const month = Number(m[2]);
+
+  // MBR-VIS-4 §2 (2026-10-11) — resolve mode.  Default to "draft"
+  // so the existing Shell Download PDF button (which does NOT yet
+  // pass `mode`) produces a watermarked DRAFT PDF rather than
+  // silently serving an all-visible live rebuild as if it were a
+  // published report.
+  const requestedMode = parseMode(req.nextUrl.searchParams.get("mode")) ?? "draft";
+
+  // Pre-flight: for mode=published, verify a snapshot exists so we
+  // can return a clean 404 up-front instead of burning Chromium
+  // start-up on a request that would 404 inside the print page.
+  if (requestedMode === "published") {
+    const row = await prisma.monthlyPackage.findUnique({
+      where: {
+        clubId_reportingYear_reportingMonth: {
+          clubId,
+          reportingYear: year,
+          reportingMonth: month,
+        },
+      },
+      select: { status: true, packagePayloadJson: true },
+    });
+    if (!row || !row.packagePayloadJson || row.status === "DRAFT") {
+      return {
+        ok: false,
+        status: 404,
+        message:
+          "No published snapshot available for this period. " +
+          "Publish or Overwrite Package before downloading a Published PDF.",
+      };
+    }
+  }
+
   const club = await prisma.club.findUnique({
     where: { id: clubId },
     select: { name: true },
@@ -118,19 +168,45 @@ async function resolveRequest(
       period: periodLabel,
       filenameSafe,
       clubName: club?.name ?? "Spectre",
+      mode: requestedMode,
+      draftTimestamp:
+        requestedMode === "draft"
+          ? new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC"
+          : undefined,
     },
   };
 }
 
-function headerTemplate(periodLabel: string, clubName: string): string {
+function escapeHtml(s: string): string {
+  return s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function headerTemplate(
+  periodLabel: string,
+  clubName: string,
+  mode: PdfMode,
+): string {
   // Playwright accepts an HTML template for header/footer. Inline
   // styles are required (no external stylesheets reach the header
   // band). Keep the typography close to the Spectre report shell:
   // small caps + wide letter spacing + ivory on a deep-green strip.
   // Total height is tuned (~28px) so it fits inside the 0.75in top
   // margin we set on the print page.
-  const safeClub = clubName.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const safePeriod = periodLabel.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  //
+  // MBR-VIS-4 — draft mode: prepend a prominent DRAFT marker so
+  // every page of the exported PDF visibly carries the DRAFT
+  // designation (not just the first page's in-page banner).
+  const safeClub = escapeHtml(clubName);
+  const safePeriod = escapeHtml(periodLabel);
+  const draftMarker =
+    mode === "draft"
+      ? `<span style="
+          color: #7c2d12;
+          font-weight: 700;
+          letter-spacing: 0.32em;
+          margin-right: 0.4in;
+        ">DRAFT</span>`
+      : "";
   return `
     <div style="
       width: 100%;
@@ -144,16 +220,28 @@ function headerTemplate(periodLabel: string, clubName: string): string {
       justify-content: space-between;
       align-items: center;
     ">
-      <span>${safeClub}</span>
+      <span>${draftMarker}${safeClub}</span>
       <span>Monthly Board Reporting Package &middot; ${safePeriod}</span>
     </div>
   `;
 }
 
-function footerTemplate(): string {
+function footerTemplate(mode: PdfMode, draftTimestamp?: string): string {
   // Playwright substitutes <span class="pageNumber"> + ".totalPages"
   // at render time. The footer band sits inside the 0.85in bottom
   // margin we set on the print page.
+  //
+  // MBR-VIS-4 — draft mode: replace the "Confidential ·
+  // For Board distribution only" line with the DRAFT disclaimer so
+  // the PDF cannot reasonably be mistaken for a published report
+  // even if the title page is removed.
+  const leftText =
+    mode === "draft"
+      ? `<span style="color: #7c2d12; font-weight: 700;">DRAFT · NOT FOR BOARD DISTRIBUTION</span>` +
+        (draftTimestamp
+          ? ` <span style="opacity: 0.75;">&middot; Generated ${escapeHtml(draftTimestamp)}</span>`
+          : "")
+      : "Confidential &middot; For Board distribution only";
   return `
     <div style="
       width: 100%;
@@ -167,7 +255,7 @@ function footerTemplate(): string {
       justify-content: space-between;
       align-items: center;
     ">
-      <span>Confidential &middot; For Board distribution only</span>
+      <span>${leftText}</span>
       <span>
         Page <span class="pageNumber"></span> of <span class="totalPages"></span>
       </span>
@@ -214,6 +302,11 @@ async function handle(req: NextRequest) {
   const printUrl = new URL("/app/print/monthly-package", base);
   if (id) printUrl.searchParams.set("id", id);
   if (period) printUrl.searchParams.set("period", period);
+  // MBR-VIS-4 — forward the resolved mode so the print page renders
+  // the matching data source (frozen packagePayloadJson vs live
+  // reporting service + draft visibility) and emits the matching
+  // in-page DRAFT banner for the first page.
+  printUrl.searchParams.set("mode", resolved.pkg.mode);
 
   // Dynamic import so the playwright dependency doesn't load on
   // routes that don't use it (smaller cold-start, no surprise dev
@@ -362,8 +455,15 @@ async function handle(req: NextRequest) {
       scale: 0.825,
       printBackground: true,
       displayHeaderFooter: true,
-      headerTemplate: headerTemplate(resolved.pkg.period, resolved.pkg.clubName),
-      footerTemplate: footerTemplate(),
+      headerTemplate: headerTemplate(
+        resolved.pkg.period,
+        resolved.pkg.clubName,
+        resolved.pkg.mode,
+      ),
+      footerTemplate: footerTemplate(
+        resolved.pkg.mode,
+        resolved.pkg.draftTimestamp,
+      ),
       margin: {
         top: "0.55in",
         bottom: "0.7in",
@@ -373,7 +473,8 @@ async function handle(req: NextRequest) {
       preferCSSPageSize: true,
     });
 
-    const filename = `Monthly-Board-Reporting-Package-${resolved.pkg.filenameSafe}.pdf`;
+    const draftSuffix = resolved.pkg.mode === "draft" ? "-DRAFT" : "";
+    const filename = `Monthly-Board-Reporting-Package-${resolved.pkg.filenameSafe}${draftSuffix}.pdf`;
     return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {

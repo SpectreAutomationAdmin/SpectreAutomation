@@ -320,6 +320,71 @@ export default async function MonthlyReportingPage({
   const draftPreviewHref = `/app/admin/reporting/monthly${periodQueryStr}${periodQueryStr ? "&" : "?"}preview=draft`;
   const publishedPreviewHref = `/app/admin/reporting/monthly${periodQueryStr}${periodQueryStr ? "&" : "?"}preview=published`;
 
+  // MBR-VIS-4 §3/§4 (2026-10-11) — PDF download URLs for the two
+  // preview-mode banners.  Draft Preview always offers Draft PDF.
+  // Published State offers Published PDF ONLY when a frozen
+  // snapshot exists; if the period has never been published the
+  // published-PDF link stays undefined so the banner hides it.
+  const periodForPdf = searchParams?.period ?? "";
+  const draftPdfHref =
+    periodForPdf !== ""
+      ? `/api/reporting/monthly/pdf?period=${periodForPdf}&mode=draft`
+      : undefined;
+  const hasPublishedSnapshot =
+    !!headerRow &&
+    headerRow.status !== "DRAFT" &&
+    typeof headerRow.packagePayloadJson === "string" &&
+    headerRow.packagePayloadJson.length > 0;
+  const publishedPdfHref =
+    periodForPdf !== "" && hasPublishedSnapshot
+      ? `/api/reporting/monthly/pdf?period=${periodForPdf}&mode=published`
+      : undefined;
+
+  // MBR-VIS-4 §4 — publication-status chip for the Editing mode.
+  // Three states:
+  //   DRAFT - Not yet published  : no publication exists
+  //   UNPUBLISHED CHANGES        : previously published, but draft
+  //                                differs (either financial drift
+  //                                per `hasUnpublishedEdits`, or
+  //                                visibility drift per `pendingCount`)
+  //   PUBLISHED <timestamp>      : draft matches published state
+  type PublicationStatusChip = {
+    label: string;
+    detail: string;
+    tone: "draft" | "pending" | "published";
+  } | null;
+  let publicationChip: PublicationStatusChip = null;
+  if (editing && headerRow) {
+    if (headerRow.status === "DRAFT" || !hasPublishedSnapshot) {
+      publicationChip = {
+        label: "Draft",
+        detail: "Not yet published",
+        tone: "draft",
+      };
+    } else if (hasUnpublishedEdits || pendingCount > 0) {
+      const bits: string[] = [];
+      if (hasUnpublishedEdits) bits.push("report content");
+      if (pendingCount > 0) bits.push(`${pendingCount} visibility edit${pendingCount === 1 ? "" : "s"}`);
+      publicationChip = {
+        label: "Unpublished changes",
+        detail: `The Board still sees the previously published package. Changes pending: ${bits.join(" + ")}.`,
+        tone: "pending",
+      };
+    } else if (headerRow.publishedAt) {
+      publicationChip = {
+        label: "Published",
+        detail: `Live to the Board since ${headerRow.publishedAt.toLocaleString("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}`,
+        tone: "published",
+      };
+    }
+  } else if (editing && !headerRow) {
+    publicationChip = {
+      label: "Draft",
+      detail: "Not yet published",
+      tone: "draft",
+    };
+  }
+
   return (
     <>
       {isDraftPreview && (
@@ -328,6 +393,7 @@ export default async function MonthlyReportingPage({
           pendingCount={pendingCount}
           editingHref={editingHref}
           oppositeHref={publishedPreviewHref}
+          downloadPdfHref={draftPdfHref}
         />
       )}
       {isPublishedPreview && (
@@ -337,46 +403,59 @@ export default async function MonthlyReportingPage({
           publishedByName={publishedByName}
           editingHref={editingHref}
           oppositeHref={draftPreviewHref}
+          downloadPdfHref={publishedPdfHref}
         />
       )}
-      {/* MBR-VIS-3 §4 (2026-10-11) — editing-mode pending-publish
-          notice.  When the draft visibility differs from the frozen
-          published snapshot, the exported PDF renders the LAST
-          PUBLISHED version — not the draft.  Make that explicit
-          so the Controller knows a Publish/Overwrite is required
-          before the PDF reflects their pending edits. */}
-      {editing && pendingCount > 0 && (
+      {editing && publicationChip && (
         <div
-          data-testid="pending-visibility-notice"
+          data-testid="publication-status-chip"
+          data-tone={publicationChip.tone}
           role="status"
-          className="border-b border-amber-700/40 bg-amber-50 text-amber-900"
+          className={
+            "border-b " +
+            (publicationChip.tone === "draft"
+              ? "border-amber-700/40 bg-amber-100 text-amber-900"
+              : publicationChip.tone === "pending"
+                ? "border-amber-700/40 bg-amber-50 text-amber-900"
+                : "border-club-sand bg-club-cream text-club-green-900")
+          }
           style={{ padding: "8px 18px" }}
         >
           <div className="flex items-center justify-between gap-3 text-xs">
             <div>
               <strong className="font-semibold uppercase tracking-wider">
-                Unpublished visibility changes
+                {publicationChip.label}
               </strong>
               <span className="mx-2 opacity-70">·</span>
-              <span>
-                {pendingCount} pending edit{pendingCount === 1 ? "" : "s"} —
-                the Download PDF currently reflects the last published
-                version.  Review Draft Preview and publish to update the
-                PDF.
-              </span>
+              <span>{publicationChip.detail}</span>
             </div>
             <div className="flex items-center gap-3">
               <a
                 href={draftPreviewHref}
                 className="underline hover:no-underline"
-                data-testid="pending-visibility-review-link"
+                data-testid="publication-status-draft-preview-link"
               >
                 Review Draft Preview
               </a>
+              {publishedPdfHref && (
+                <a
+                  href={publishedPreviewHref}
+                  className="underline hover:no-underline"
+                  data-testid="publication-status-published-state-link"
+                >
+                  View Published State
+                </a>
+              )}
             </div>
           </div>
         </div>
       )}
+      {/* MBR-VIS-4 (2026-10-11) — the MBR-VIS-3 pending-visibility
+          notice has been subsumed by the publication-status chip
+          above, which conveys the same intent across all three
+          editing states (DRAFT / UNPUBLISHED CHANGES / PUBLISHED)
+          and surfaces the Download Published PDF affordance only
+          when a snapshot exists. */}
       <MonthlyReportingPackageBody
         pkg={pkg}
         visibility={renderConfig ? {

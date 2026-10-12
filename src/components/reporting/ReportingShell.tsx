@@ -670,6 +670,19 @@ export function ReportingShell({
 //     /app/print/monthly-package route, snapshots a PDF, returns it
 //     with a descriptive Content-Disposition filename.
 //   • The browser Print dialog is NEVER invoked.
+//
+// MBR-VIS-4 (2026-10-11) — the button is now mode-aware based on
+// the current URL's `?preview=` query:
+//
+//   • `?preview=published`  → requests mode=published; labels the
+//                             button "Download Published PDF".
+//   • `?preview=draft` OR
+//     no preview (editing)  → requests mode=draft; labels the
+//                             button "Download Draft PDF" so the
+//                             user never silently receives a
+//                             watermarked DRAFT labelled as PDF.
+//   • Board snapshot URL    → mode=published (board snapshots are
+//                             published by definition).
 function DownloadPdfButton() {
   // Both URL bits are read inside the component so any caller that
   // mounts the shell on a Monthly Reporting Package route gets the
@@ -682,6 +695,19 @@ function DownloadPdfButton() {
 
   const boardMatch = /\/app\/reports\/monthly-package\/([^/?#]+)/.exec(pathname);
   const periodParam = searchParams?.get("period") ?? null;
+  const previewParam = searchParams?.get("preview") ?? null;
+
+  // Resolve mode from URL context.  Board snapshots are always
+  // published.  Admin surfaces default to draft unless the URL
+  // explicitly says `preview=published`.
+  const mode: "draft" | "published" = boardMatch
+    ? "published"
+    : previewParam === "published"
+      ? "published"
+      : "draft";
+
+  const buttonLabel =
+    mode === "published" ? "Download Published PDF" : "Download Draft PDF";
 
   const onClick = async () => {
     setIsDownloading(true);
@@ -692,11 +718,24 @@ function DownloadPdfButton() {
       } else if (periodParam) {
         apiUrl.searchParams.set("period", periodParam);
       }
+      apiUrl.searchParams.set("mode", mode);
       const res = await fetch(apiUrl.toString(), { credentials: "same-origin" });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         // eslint-disable-next-line no-console
         console.error("Download PDF failed", res.status, body);
+        // MBR-VIS-4 — surface the "no published snapshot" case as a
+        // friendly alert.  The button is only visible on surfaces
+        // where the server-side gate already decided it should be
+        // (we don't render Download Published PDF on an unpublished
+        // period), but a direct URL hit or race condition can still
+        // reach this branch.
+        if (res.status === 404 && mode === "published") {
+          window.alert(
+            "No published snapshot exists for this period yet. " +
+              "Open Draft Preview and publish the package first.",
+          );
+        }
         return;
       }
       // The server sets a descriptive Content-Disposition; surface
@@ -723,13 +762,20 @@ function DownloadPdfButton() {
     <button
       type="button"
       data-testid="download-pdf-button"
+      data-pdf-mode={mode}
       onClick={onClick}
       disabled={isDownloading}
       aria-busy={isDownloading || undefined}
-      title="Download a PDF of this Monthly Reporting Package"
+      title={
+        mode === "published"
+          ? "Download the frozen Board-ready PDF of this Monthly Reporting Package"
+          : "Download a DRAFT PDF reflecting the current draft visibility and today's reporting data"
+      }
       className={
         `inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-0.5 text-[10px] uppercase tracking-[0.18em] focus:outline-none focus:ring-2 focus:ring-club-gold/50 ` +
-        "border-club-gold/45 bg-club-green-900/40 text-club-gold hover:text-club-cream " +
+        (mode === "draft"
+          ? "border-amber-500/50 bg-amber-900/30 text-amber-200 hover:text-amber-100 "
+          : "border-club-gold/45 bg-club-green-900/40 text-club-gold hover:text-club-cream ") +
         "disabled:opacity-60 disabled:cursor-wait"
       }
     >
@@ -751,7 +797,7 @@ function DownloadPdfButton() {
         <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
         <rect x="6" y="14" width="12" height="8" rx="1" />
       </svg>
-      <span>{isDownloading ? "Preparing…" : "Download PDF"}</span>
+      <span>{isDownloading ? "Preparing…" : buttonLabel}</span>
     </button>
   );
 }
