@@ -4407,7 +4407,20 @@ function stewardshipBrandDotClass(tone: KpiTone): string {
   }
 }
 
-function StewardshipMetricCard({ kpi }: { kpi: StewardshipCard }) {
+function StewardshipMetricCard({
+  kpi,
+  componentKey,
+  cardLabel,
+}: {
+  kpi: StewardshipCard;
+  /** MBR-VIS-5I — opt-in per-metric visibility.  When both props are
+   *  provided, the card mounts an inline eye-icon beside its metric
+   *  name and wraps its article in CardVisibilityWrapper so hidden
+   *  metrics are omitted from Draft Preview + PDF.  Omitting the
+   *  props preserves the pre-VIS-5I rendering exactly. */
+  componentKey?: string;
+  cardLabel?: string;
+}) {
   const tone = kpi.tone ?? "neutral";
   // 2026-06-14 compaction pass: padding tightened p-7 → p-5; spacing
   // between name/value/definitions/footer tightened mt-5/mt-6 →
@@ -4417,7 +4430,7 @@ function StewardshipMetricCard({ kpi }: { kpi: StewardshipCard }) {
   // Target, Benchmark). Status dot upsized from h-2 w-2 (8 px) to
   // h-2.5 w-2.5 (10 px) and recoloured via the brand-palette
   // helper above.
-  return (
+  const body = (
     <article
       data-testid={`stewardship-${kpi.key}`}
       data-tone={tone}
@@ -4431,12 +4444,17 @@ function StewardshipMetricCard({ kpi }: { kpi: StewardshipCard }) {
         >
           {kpi.name}
         </h4>
-        <span
-          data-testid={`stewardship-${kpi.key}-tone`}
-          data-tone={tone}
-          className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${stewardshipBrandDotClass(tone)}`}
-          aria-hidden="true"
-        />
+        <div className="flex items-start gap-1.5">
+          {componentKey && cardLabel && (
+            <InlineCardToggle componentKey={componentKey} cardLabel={cardLabel} />
+          )}
+          <span
+            data-testid={`stewardship-${kpi.key}-tone`}
+            data-tone={tone}
+            className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${stewardshipBrandDotClass(tone)}`}
+            aria-hidden="true"
+          />
+        </div>
       </div>
 
       {/* Headline KPI + result interpretation. */}
@@ -4515,6 +4533,14 @@ function StewardshipMetricCard({ kpi }: { kpi: StewardshipCard }) {
       )}
     </article>
   );
+  if (componentKey && cardLabel) {
+    return (
+      <CardVisibilityWrapper componentKey={componentKey} cardLabel={cardLabel}>
+        {body}
+      </CardVisibilityWrapper>
+    );
+  }
+  return body;
 }
 
 // ============================================================================
@@ -4547,21 +4573,41 @@ function StewardshipMetricCard({ kpi }: { kpi: StewardshipCard }) {
  * subtitle) so the two surfaces read as peers in the same system.
  */
 function StewardshipKpiPanelHeader({
-  testid, title, question,
-}: { testid: string; title: string; question: string }) {
+  testid, title, question, componentKey, cardLabel,
+}: {
+  testid: string;
+  title: string;
+  question: string;
+  /** MBR-VIS-5I — opt-in subsection visibility.  When both props are
+   *  provided, the header renders a white inline eye-icon beside the
+   *  title.  The caller is responsible for wrapping the entire
+   *  subsection in CardVisibilityWrapper so hidden subsections are
+   *  omitted from Draft Preview + PDF. */
+  componentKey?: string;
+  cardLabel?: string;
+}) {
   return (
     <header
       data-testid={`${testid}-header`}
       className="rounded-t-md bg-club-green-900"
       style={{ padding: "14px 20px" }}
     >
-      <h3
-        data-testid={`${testid}-title`}
-        className="font-serif text-club-cream"
-        style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
-      >
-        {title}
-      </h3>
+      <div className="flex items-start justify-between gap-3">
+        <h3
+          data-testid={`${testid}-title`}
+          className="font-serif text-club-cream"
+          style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
+        >
+          {title}
+        </h3>
+        {componentKey && cardLabel && (
+          <InlineCardToggle
+            componentKey={componentKey}
+            cardLabel={cardLabel}
+            tone="cream"
+          />
+        )}
+      </div>
       <p
         data-testid={`${testid}-question`}
         className="mt-1.5 font-serif italic text-club-cream/75"
@@ -4612,8 +4658,33 @@ function StewardshipKpiPairedGrid({
   operating,
   capital,
 }: {
-  operating: { testid: string; title: string; question: string; description: string; cards: ReadonlyArray<StewardshipCard> };
-  capital:   { testid: string; title: string; question: string; description: string; cards: ReadonlyArray<StewardshipCard> };
+  operating: {
+    testid: string;
+    title: string;
+    question: string;
+    description: string;
+    cards: ReadonlyArray<StewardshipCard>;
+    /** MBR-VIS-5I — optional subsection key + per-metric key prefix.
+     *  When provided, the panel header renders an inline eye-icon
+     *  for the subsection and each metric card inside the panel
+     *  wraps itself with CardVisibilityWrapper under
+     *  `${metricKeyPrefix}:${kpi.key}`. */
+    subsectionKey?: string;
+    subsectionLabel?: string;
+    metricKeyPrefix?: string;
+    metricLabelPrefix?: string;
+  };
+  capital: {
+    testid: string;
+    title: string;
+    question: string;
+    description: string;
+    cards: ReadonlyArray<StewardshipCard>;
+    subsectionKey?: string;
+    subsectionLabel?: string;
+    metricKeyPrefix?: string;
+    metricLabelPrefix?: string;
+  };
 }) {
   const rowCount = Math.max(operating.cards.length, capital.cards.length);
   const rows: Array<{ key: string; op: StewardshipCard | null; cap: StewardshipCard | null }> = [];
@@ -4632,11 +4703,15 @@ function StewardshipKpiPairedGrid({
         testid={operating.testid}
         title={operating.title}
         question={operating.question}
+        componentKey={operating.subsectionKey}
+        cardLabel={operating.subsectionLabel}
       />
       <StewardshipKpiPanelHeader
         testid={capital.testid}
         title={capital.title}
         question={capital.question}
+        componentKey={capital.subsectionKey}
+        cardLabel={capital.subsectionLabel}
       />
 
       {/* Row 1 — italic section-level descriptions. */}
@@ -4654,7 +4729,19 @@ function StewardshipKpiPairedGrid({
       {rows.map((row, idx) => (
         <Fragment key={row.key}>
           {row.op ? (
-            <StewardshipMetricCard kpi={row.op} />
+            <StewardshipMetricCard
+              kpi={row.op}
+              componentKey={
+                operating.metricKeyPrefix
+                  ? `${operating.metricKeyPrefix}:${row.op.key}`
+                  : undefined
+              }
+              cardLabel={
+                operating.metricLabelPrefix
+                  ? `${operating.metricLabelPrefix} · ${row.op.name}`
+                  : undefined
+              }
+            />
           ) : (
             <div
               data-testid={`${operating.testid}-row-${idx}-empty`}
@@ -4663,7 +4750,19 @@ function StewardshipKpiPairedGrid({
             />
           )}
           {row.cap ? (
-            <StewardshipMetricCard kpi={row.cap} />
+            <StewardshipMetricCard
+              kpi={row.cap}
+              componentKey={
+                capital.metricKeyPrefix
+                  ? `${capital.metricKeyPrefix}:${row.cap.key}`
+                  : undefined
+              }
+              cardLabel={
+                capital.metricLabelPrefix
+                  ? `${capital.metricLabelPrefix} · ${row.cap.name}`
+                  : undefined
+              }
+            />
           ) : (
             <div
               data-testid={`${capital.testid}-row-${idx}-empty`}
@@ -4704,7 +4803,7 @@ type VarianceSubtext = {
 };
 
 function StewardshipKpiSummaryCard({
-  testId, label, value, sub, variance,
+  testId, label, value, sub, variance, componentKey, cardLabel,
 }: {
   testId: string;
   label: string;
@@ -4713,18 +4812,30 @@ function StewardshipKpiSummaryCard({
   sub?: string;
   /** Variance subtext where ONLY the amount is tone-coloured. */
   variance?: VarianceSubtext;
+  /** MBR-VIS-5I — opt-in per-tile visibility.  When both props are
+   *  provided, the tile mounts an inline eye-icon beside its label
+   *  and wraps its article in CardVisibilityWrapper so hidden tiles
+   *  are omitted from Draft Preview + PDF.  Omitting the props
+   *  preserves the pre-VIS-5I rendering exactly. */
+  componentKey?: string;
+  cardLabel?: string;
 }) {
-  return (
+  const body = (
     <article
       data-testid={testId}
       className="flex flex-col rounded-lg bg-white p-6 ring-1 ring-club-sand/60"
     >
-      <h4
-        data-testid={`${testId}-label`}
-        className="text-[10px] uppercase tracking-[0.22em] text-club-green-800/75"
-      >
-        {label}
-      </h4>
+      <div className="flex items-start justify-between gap-2">
+        <h4
+          data-testid={`${testId}-label`}
+          className="text-[10px] uppercase tracking-[0.22em] text-club-green-800/75"
+        >
+          {label}
+        </h4>
+        {componentKey && cardLabel && (
+          <InlineCardToggle componentKey={componentKey} cardLabel={cardLabel} />
+        )}
+      </div>
       <p
         data-testid={`${testId}-value`}
         className="mt-3 font-serif text-4xl leading-none tracking-tight tabular-nums text-club-green-900"
@@ -4754,6 +4865,14 @@ function StewardshipKpiSummaryCard({
       </p>
     </article>
   );
+  if (componentKey && cardLabel) {
+    return (
+      <CardVisibilityWrapper componentKey={componentKey} cardLabel={cardLabel}>
+        {body}
+      </CardVisibilityWrapper>
+    );
+  }
+  return body;
 }
 
 function StewardshipKpiDashboard({
@@ -4852,14 +4971,29 @@ function StewardshipKpiDashboard({
           blocks. Style matches the Tenure Distribution section header
           exactly: mt-10 wrapper, bordered block with border-b
           border-club-sand pb-2, font-serif text-2xl tracking-tight
-          text-club-green-900. */}
+          text-club-green-900.
+
+          MBR-VIS-5I — the entire Operating vs. Capital Stewardship
+          section (heading + intro + 4-tile ribbon + paired grid)
+          is wrapped in CardVisibilityWrapper under
+          `card:stewardship-dashboard:operating-vs-capital-stewardship`
+          so the Controller can hide the whole section in one toggle.
+          The inline eye-icon sits beside the section h3. */}
+      <CardVisibilityWrapper
+        componentKey="card:stewardship-dashboard:operating-vs-capital-stewardship"
+        cardLabel="Operating vs. Capital Stewardship"
+      >
       <div
         data-testid="stewardship-kpi-dashboard-op-vs-cap-heading"
         className="mt-10"
       >
         <div className="border-b border-club-sand pb-2">
-          <h3 className="font-serif text-2xl tracking-tight text-club-green-900">
-            Operating vs. Capital Stewardship
+          <h3 className="flex items-start justify-between gap-2 font-serif text-2xl tracking-tight text-club-green-900">
+            <span>Operating vs. Capital Stewardship</span>
+            <InlineCardToggle
+              componentKey="card:stewardship-dashboard:operating-vs-capital-stewardship"
+              cardLabel="Operating vs. Capital Stewardship"
+            />
           </h3>
         </div>
       </div>
@@ -4873,13 +5007,20 @@ function StewardshipKpiDashboard({
 
       {/* Top KPI summary cards — 4-up grid that collapses to 2-up
           (sm) then 1-up (default) so the surface stays readable down
-          to 1280 px. */}
+          to 1280 px.
+          MBR-VIS-5I — each of the four ribbon tiles carries an
+          independent `tile:stewardship-dashboard:*` key.  Reserve
+          Coverage's ribbon key is DISTINCT from the detailed Capital
+          Stewardship card key below, so the Controller can show one
+          presentation and hide the other. */}
       <div
         data-testid="stewardship-kpi-dashboard-summary"
         className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
       >
         <StewardshipKpiSummaryCard
           testId="stewardship-summary-revenue"
+          componentKey="tile:stewardship-dashboard:total-operating-revenue"
+          cardLabel="Total Operating Revenue"
           label="Total Operating Revenue"
           value={dashboard.summaryCards.revenue.value}
           variance={{
@@ -4890,6 +5031,8 @@ function StewardshipKpiDashboard({
         />
         <StewardshipKpiSummaryCard
           testId="stewardship-summary-noi"
+          componentKey="tile:stewardship-dashboard:noi-before-depreciation"
+          cardLabel="NOI Before Depreciation"
           label="NOI Before Depreciation"
           value={dashboard.summaryCards.noiBeforeDep.value}
           variance={{
@@ -4901,12 +5044,16 @@ function StewardshipKpiDashboard({
         />
         <StewardshipKpiSummaryCard
           testId="stewardship-summary-capital-fund-income"
+          componentKey="tile:stewardship-dashboard:capital-fund-income-ytd"
+          cardLabel="Capital Fund Income YTD"
           label="Capital Fund Income YTD"
           value={dashboard.summaryCards.capitalFundIncome.value}
           sub={dashboard.summaryCards.capitalFundIncome.subtext}
         />
         <StewardshipKpiSummaryCard
           testId="stewardship-summary-reserve-coverage"
+          componentKey="tile:stewardship-dashboard:reserve-coverage-ratio"
+          cardLabel="Reserve Coverage Ratio"
           label="Reserve Coverage Ratio"
           value={dashboard.summaryCards.reserveCoverage.value}
           sub={`${dashboard.summaryCards.reserveCoverage.balance} · ${dashboard.summaryCards.reserveCoverage.benchmark}`}
@@ -4925,7 +5072,14 @@ function StewardshipKpiDashboard({
           cards on rows 2..N. CSS Grid stretches both cells in each
           row to the row's natural height — Operating KPI N and
           Capital KPI N start AND end at the same y position so the
-          two columns read as symmetrical, never staggered. */}
+          two columns read as symmetrical, never staggered.
+          MBR-VIS-5I — subsection toggles (Operating / Capital) sit
+          on the dark-green panel headers; each individual metric
+          card carries its own `row:stewardship-dashboard:
+          operating-stewardship-subsection:<kpi.key>` or
+          `row:...capital-stewardship-subsection:<kpi.key>` key so a
+          detailed metric that also appears in the ribbon above has a
+          distinct visibility toggle. */}
       <StewardshipKpiPairedGrid
         operating={{
           testid: "stewardship-kpi-panel-operating",
@@ -4933,6 +5087,10 @@ function StewardshipKpiDashboard({
           question: "Is the club living within the plan?",
           description: "These metrics confirm the operating model is sustaining the member experience without borrowing from capital or future years.",
           cards: pkg.operatingKPIs.cards,
+          subsectionKey: "card:stewardship-dashboard:operating-stewardship-subsection",
+          subsectionLabel: "Operating Stewardship",
+          metricKeyPrefix: "row:stewardship-dashboard:operating-stewardship-subsection",
+          metricLabelPrefix: "Operating Stewardship",
         }}
         capital={{
           testid: "stewardship-kpi-panel-capital",
@@ -4940,6 +5098,10 @@ function StewardshipKpiDashboard({
           question: "Is the club protecting its future?",
           description: "These metrics confirm capital obligations are being funded, projects are executing on plan, and the club’s long-range asset position is moving in the right direction.",
           cards: pkg.capitalKPIs.cards,
+          subsectionKey: "card:stewardship-dashboard:capital-stewardship-subsection",
+          subsectionLabel: "Capital Stewardship",
+          metricKeyPrefix: "row:stewardship-dashboard:capital-stewardship-subsection",
+          metricLabelPrefix: "Capital Stewardship",
         }}
       />
 
@@ -5001,6 +5163,7 @@ function StewardshipKpiDashboard({
           })}
         </ul>
       </div>
+      </CardVisibilityWrapper>
     </div>
   );
 }

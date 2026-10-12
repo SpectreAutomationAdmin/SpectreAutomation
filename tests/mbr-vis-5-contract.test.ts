@@ -277,6 +277,81 @@ describe("MBR-VIS-5H §N — Stewardship Dashboard component visibility", () => 
   });
 });
 
+describe("MBR-VIS-5I §O — Operating vs. Capital Stewardship visibility", () => {
+  const body = src(BODY);
+
+  it("section wrapper + heading toggle wired under card:stewardship-dashboard:operating-vs-capital-stewardship", () => {
+    expect(body).toContain("card:stewardship-dashboard:operating-vs-capital-stewardship");
+    // The heading h3 must carry the InlineCardToggle inline next to
+    // the "Operating vs. Capital Stewardship" title.
+    const heading = body.slice(body.indexOf("stewardship-kpi-dashboard-op-vs-cap-heading"));
+    const chunk = heading.slice(0, 1_200);
+    expect(chunk).toContain("Operating vs. Capital Stewardship");
+    expect(chunk).toContain("InlineCardToggle");
+  });
+
+  it("4 ribbon tiles wired with independent tile:stewardship-dashboard:* keys", () => {
+    for (const key of [
+      "tile:stewardship-dashboard:total-operating-revenue",
+      "tile:stewardship-dashboard:noi-before-depreciation",
+      "tile:stewardship-dashboard:capital-fund-income-ytd",
+      "tile:stewardship-dashboard:reserve-coverage-ratio",
+    ]) {
+      expect(body).toContain(key);
+    }
+  });
+
+  it("StewardshipKpiSummaryCard accepts opt-in componentKey + cardLabel + mounts the wrapper + inline toggle", () => {
+    const fn = body.slice(body.indexOf("function StewardshipKpiSummaryCard"));
+    const scope = fn.slice(0, 3_000);
+    expect(scope).toMatch(/componentKey\?:\s*string/);
+    expect(scope).toMatch(/cardLabel\?:\s*string/);
+    expect(scope).toContain("InlineCardToggle");
+    expect(scope).toContain("CardVisibilityWrapper");
+  });
+
+  it("Operating + Capital subsection toggles wired on the dark-green panel headers", () => {
+    expect(body).toContain("card:stewardship-dashboard:operating-stewardship-subsection");
+    expect(body).toContain("card:stewardship-dashboard:capital-stewardship-subsection");
+    // The panel-header toggle uses the cream tone so the eye renders
+    // white on the dark-green header band.
+    const hdrFn = body.slice(body.indexOf("function StewardshipKpiPanelHeader"));
+    const scope = hdrFn.slice(0, 2_500);
+    expect(scope).toMatch(/tone="cream"/);
+    expect(scope).toContain("InlineCardToggle");
+  });
+
+  it("every per-metric card is keyed under row:stewardship-dashboard:(operating|capital)-stewardship-subsection:<kpi.key>", () => {
+    expect(body).toContain("row:stewardship-dashboard:operating-stewardship-subsection");
+    expect(body).toContain("row:stewardship-dashboard:capital-stewardship-subsection");
+    // The paired grid composes the per-metric key by concatenating
+    // the prefix with the kpi key — confirm the template is present.
+    expect(body).toMatch(/\$\{operating\.metricKeyPrefix\}:\$\{row\.op\.key\}/);
+    expect(body).toMatch(/\$\{capital\.metricKeyPrefix\}:\$\{row\.cap\.key\}/);
+  });
+
+  it("StewardshipMetricCard accepts opt-in componentKey + cardLabel + mounts the wrapper + inline toggle", () => {
+    const fn = body.slice(body.indexOf("function StewardshipMetricCard"));
+    const scope = fn.slice(0, 3_500);
+    expect(scope).toMatch(/componentKey\?:\s*string/);
+    expect(scope).toMatch(/cardLabel\?:\s*string/);
+    expect(scope).toContain("InlineCardToggle");
+    expect(scope).toContain("CardVisibilityWrapper");
+  });
+
+  it("ribbon Reserve Coverage key is DISTINCT from any detailed-card capital key", () => {
+    // Per the directive: a metric displayed in both the four-tile
+    // ribbon AND the detailed stewardship-card list must have SEPARATE
+    // visibility keys.  The ribbon tile uses tile:...:reserve-coverage-ratio;
+    // the detailed capital card uses the row: prefix with the kpi's
+    // key (e.g. reserve-coverage).  The two prefixes must not collide.
+    expect(body).toContain("tile:stewardship-dashboard:reserve-coverage-ratio");
+    expect(body).not.toContain("tile:stewardship-dashboard:reserve-coverage-ratio-row");
+    // Row-tier prefix for capital metrics must exist.
+    expect(body).toContain("row:stewardship-dashboard:capital-stewardship-subsection");
+  });
+});
+
 describe("MBR-VIS-5F §M — Executive Opening KPI tile visibility (15 tiles)", () => {
   const body = src(BODY);
   const atAGlance = src(path.join(REPO, "src/components/reporting/AtAGlanceBlock.tsx"));
