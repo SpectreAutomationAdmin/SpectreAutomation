@@ -2,66 +2,77 @@
 
 // MBR-VIS-5 (2026-10-11) — Reusable card-level visibility wrapper.
 //
-// Wraps any independently rendered report component (card, panel,
-// chart container, scorecard, commentary block) with a card-level
-// visibility toggle and the explicit-vs-effective render rules
-// shared across chapter, card, and row tiers:
+// MBR-VIS-5C (2026-10-11) — critical regression fix.  The VIS-5B
+// release introduced this wrapper around previously unwrapped
+// Financial Performance cards, which added an extra `<div>` as the
+// direct child of the grid/flex rows that hold the card pairs
+// (Equity + Operating Results, Operating + Capital Scorecards,
+// Department Net Performance + Dues Subsidy, Payroll Dept + Payroll
+// Ratio).  The row expected `<article className="flex-1 w-full">`
+// children; the wrapper's `<div className="relative">` had none of
+// that, so each card collapsed to its content width and the
+// side-by-side layout broke.
 //
-//   • Editing + any state → always rendered.  Children shown at
-//     reduced opacity (0.55) when effectively hidden so the
-//     Controller can see what's being suppressed and click the
-//     toggle to restore it.
-//   • Non-editing + effectively hidden → returns null.  Draft
-//     Preview, Published State, and PDF omit the whole card
-//     (no blank frame, no reserved column, no orphan heading).
-//   • Non-editing + visible → renders children unchanged.
+// VIS-5C fix: the wrapper no longer renders ANY DOM element.  It
+// uses `React.cloneElement` to inject `data-component-key`,
+// `data-card-hidden`, and an `opacity` style directly onto the
+// child element (which is always the card's own article/section
+// root).  The child remains the direct grid/flex child, so every
+// pre-VIS-5B measurement — card width, card height, chart container
+// width, chart plot area, grid proportions, header height, KPI
+// tile dimensions — is preserved exactly.
 //
-// The visibility toggle is rendered via a floating overlay
-// positioned at the TOP-RIGHT of the card (absolute relative to
-// the wrapper's `position: relative`), small enough to sit over a
-// dark-green card header without displacing its content.  For
-// cards that want the toggle inline in their own header (e.g. the
-// Stewardship Scorecard which already renders a dark-green header
-// band and prefers to flex-align the toggle inside), use
-// `renderInlineToggle={false}` and mount the toggle in the card's
-// own header via <VisibilityToggle> directly.
+// Semantics are unchanged:
+//   • Editing + any state → child renders, with opacity 0.55 when
+//     effectively hidden so the Controller can see what's suppressed.
+//   • Non-editing + effectively hidden → wrapper returns null (card
+//     omitted from Draft Preview, Published State, PDF).
+//   • Non-editing + visible → child renders unchanged.
+//
+// The visibility toggle itself is NOT rendered by the wrapper —
+// each card mounts its own <InlineCardToggle> inside its h3 title
+// (established in VIS-5A).  This wrapper is now purely a
+// zero-DOM-impact decorator for hidden-state behaviour.
 
-import type { ReactNode } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { MonthlyBodyVisibilityConfig } from "@/app/app/admin/reporting/monthly/visibility-types";
-import { VisibilityToggle } from "./VisibilityToggle";
 import { useVisibilityState } from "./VisibilityState";
 
 export type CardVisibilityWrapperProps = {
   /** Full componentKey — "card:<chapter-anchor>:<card-key>". */
   componentKey: string;
-  /** Human-readable card label, used in the a11y toggle label. */
+  /** Human-readable card label, used in the a11y toggle label.
+   *  Retained for API stability — VIS-5A moved the toggle UI inline
+   *  into each card's own title; this wrapper no longer renders it. */
   cardLabel: string;
   /** MBR-VIS-5B — optional.  When omitted, the wrapper treats the
    *  presence of VisibilityState context as the "editing" signal
    *  (the Provider only mounts on editing surfaces).  Pass
    *  explicitly to force a specific mode. */
   editing?: boolean;
-  period?: { reportingYear: number; reportingMonth: number };
+  /** Server-passed visibility config used only on non-editing
+   *  surfaces (where no Provider is mounted). */
   visibility?: MonthlyBodyVisibilityConfig;
+  /** Retained for API stability; the wrapper no longer uses it
+   *  (VIS-5A moved the visible toggle UI inline). */
   publishedVisibility?: MonthlyBodyVisibilityConfig;
-  /** MBR-VIS-5A — defaults to FALSE.  The chip overlay was retired;
-   *  component toggles now live inside each sub-card's own title
-   *  via <InlineCardToggle>.  Set to true only if a caller needs
-   *  the legacy icon overlay (used nowhere in-tree today). */
+  /** Retained for API stability; always false in-tree today
+   *  (VIS-5A retired the floating overlay chrome). */
   renderInlineToggle?: boolean;
-  /** Optional class name applied to the wrapper div. */
+  /** Retained for API stability; the wrapper no longer owns a
+   *  layout node to style. */
   className?: string;
+  /** Reporting period — retained for API stability. */
+  period?: { reportingYear: number; reportingMonth: number };
   children: ReactNode;
 };
-
-function pendingPublishState(
-  componentKey: string,
-  draft?: MonthlyBodyVisibilityConfig,
-  published?: MonthlyBodyVisibilityConfig,
-): boolean | undefined {
-  if (!draft || !published) return undefined;
-  return published.entries[componentKey] ?? false;
-}
 
 /** Shared ancestor-hidden check (identical to the server resolver).
  *  Kept inline here so the client wrapper has no server-only import. */
@@ -84,83 +95,56 @@ function isAncestorHidden(
 
 export function CardVisibilityWrapper({
   componentKey,
-  cardLabel,
   editing,
-  period,
   visibility,
-  publishedVisibility,
-  renderInlineToggle = false,
-  className,
   children,
 }: CardVisibilityWrapperProps) {
   const ctx = useVisibilityState();
-  // MBR-VIS-5B — "editing" defaults to context presence.  The
-  // VisibilityStateProvider only mounts on the Editing surface
-  // (the Draft Preview / Published State / Board / PDF surfaces
-  // render without a Provider), so `ctx != null` is an accurate
-  // signal.  Callers can still override by passing `editing`
-  // explicitly for tests.
+  // "editing" defaults to context presence (Provider only mounts on
+  // the editing surface).  Callers can still override.
   const resolvedEditing = editing ?? ctx != null;
-  const explicitHidden = ctx
-    ? ctx.explicitHidden(componentKey)
-    : visibility?.entries[componentKey] === true;
   const effectiveHidden = ctx
     ? ctx.effectiveHidden(componentKey)
     : visibility
       ? visibility.entries[componentKey] === true ||
         isAncestorHidden(componentKey, visibility.entries)
       : false;
-  const publishedHidden = pendingPublishState(
-    componentKey,
-    visibility,
-    publishedVisibility,
-  );
 
-  // Non-editing + effectively hidden → omit entirely.
+  // Non-editing + effectively hidden → omit the card entirely.
   if (!resolvedEditing && effectiveHidden) return null;
 
-  const wrapperClass =
-    "relative" + (className ? ` ${className}` : "");
+  // VIS-5C — zero-DOM-impact decoration.  The child must be a single
+  // valid React element whose root receives the data attributes +
+  // the opacity style.  No new wrapper div is rendered, so the
+  // child remains the direct child of its grid/flex parent and the
+  // pre-VIS-5B layout geometry is preserved exactly.
+  const only = Children.only(children);
+  if (!isValidElement(only)) return <>{children}</>;
+  const child = only as ReactElement<{
+    style?: CSSProperties;
+    className?: string;
+    "data-component-key"?: string;
+    "data-card-hidden"?: string;
+    "data-testid"?: string;
+  }>;
 
-  return (
-    <div
-      data-testid={`card-visibility-wrap-${componentKey}`}
-      data-component-key={componentKey}
-      data-card-hidden={effectiveHidden ? "true" : "false"}
-      className={wrapperClass}
-      style={{
-        opacity: resolvedEditing && effectiveHidden ? 0.55 : 1,
-        transition: "opacity 150ms linear",
-      }}
-    >
-      {/* MBR-VIS-5A — visible chrome retired.  Component visibility
-          toggles are now rendered INLINE inside each sub-card's own
-          title via <InlineCardToggle> (icon only, no chip).  The
-          wrapper still owns the cascade/opacity/hidden-state render
-          decision, so the frozen snapshot + draft/published parity
-          continue to resolve through the single `MonthlyPackageVisibility`
-          source.  `renderInlineToggle` is retained for callers that
-          need it; defaults to false (no visible overlay).
-          Suppresses the redundant control on single-component
-          chapters per the directive — the chapter toggle on the
-          panel's h2 is the only visible control. */}
-      {resolvedEditing && period && renderInlineToggle && (
-        <span
-          data-testid={`card-visibility-overlay-${componentKey}`}
-          className="ml-2 inline-flex items-center align-middle"
-        >
-          <VisibilityToggle
-            reportingYear={period.reportingYear}
-            reportingMonth={period.reportingMonth}
-            componentKey={componentKey}
-            hidden={explicitHidden}
-            publishedHidden={publishedHidden}
-            size="sm"
-            label={`${explicitHidden ? "Show" : "Hide"} ${cardLabel} in published report`}
-          />
-        </span>
-      )}
-      {children}
-    </div>
-  );
+  const mergedStyle: CSSProperties = {
+    ...(child.props.style ?? {}),
+    opacity:
+      resolvedEditing && effectiveHidden ? 0.55 : child.props.style?.opacity ?? 1,
+    transition: child.props.style?.transition ?? "opacity 150ms linear",
+  };
+
+  // Preserve any pre-existing data-testid; only add our testid when
+  // the child doesn't already carry one.
+  const extraTestId = child.props["data-testid"]
+    ? {}
+    : { "data-testid": `card-visibility-wrap-${componentKey}` };
+
+  return cloneElement(child, {
+    style: mergedStyle,
+    "data-component-key": componentKey,
+    "data-card-hidden": effectiveHidden ? "true" : "false",
+    ...extraTestId,
+  });
 }

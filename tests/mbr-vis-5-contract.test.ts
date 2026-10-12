@@ -91,24 +91,43 @@ describe("MBR-VIS-5 §B — CardVisibilityWrapper shared component", () => {
     expect(code).toMatch(/card:\$\{anchor\}:\$\{cardKey\}/);
   });
 
-  it("surfaces explicit vs effective visibility distinctly", () => {
-    expect(code).toMatch(/explicitHidden/);
+  it("resolves effective visibility (parent cascade honoured)", () => {
+    // MBR-VIS-5C simplified: the wrapper reads effective hidden
+    // from either the Provider (editing surfaces) or the server-
+    // passed visibility prop (non-editing surfaces).
     expect(code).toMatch(/effectiveHidden/);
   });
 
   it("omits children entirely when non-editing + effectively hidden", () => {
-    // MBR-VIS-5B — renamed to `resolvedEditing` (context presence
-    // fallback when the editing prop isn't passed explicitly).
     expect(code).toMatch(/if\s*\(!resolvedEditing\s*&&\s*effectiveHidden\)\s*return\s*null/);
   });
 
-  it("mutes children at 0.55 opacity when editing + effectively hidden", () => {
-    expect(code).toMatch(/opacity:\s*resolvedEditing\s*&&\s*effectiveHidden\s*\?\s*0\.55\s*:\s*1/);
+  it("mutes children at 0.55 opacity via cloneElement (no new DOM node)", () => {
+    // MBR-VIS-5C — opacity is now injected onto the child element's
+    // style via React.cloneElement, so the card's own article/section
+    // root receives it.  No wrapper div exists, so flex-1 / w-full /
+    // grid placement on the child are preserved exactly.
+    expect(code).toMatch(/opacity:\s*\n?\s*resolvedEditing\s*&&\s*effectiveHidden\s*\?\s*0\.55/);
+    expect(code).toMatch(/cloneElement/);
+    expect(code).toMatch(/Children\.only/);
   });
 
-  it("defaults renderInlineToggle to FALSE (VIS-5A — chip is retired; icons live inline in panel titles)", () => {
-    expect(code).toMatch(/renderInlineToggle\s*=\s*false/);
-    expect(code).toMatch(/renderInlineToggle\s*&&/);
+  it("renders NO DOM wrapper node — uses React.cloneElement so the child is the layout root", () => {
+    // MBR-VIS-5C — regression fix.  The prior wrapper div as a flex/
+    // grid intermediate broke `flex-1` on sibling articles in the
+    // Financial Performance card pairs.  The wrapper now returns
+    // either `null` (hidden on non-editing) or `cloneElement(child, …)`
+    // (zero new DOM nodes).
+    //
+    // Scope the search to the wrapper function body only (not the
+    // doc-block comments at the top of the file, which legitimately
+    // mention <div>).
+    const fnStart = code.indexOf("export function CardVisibilityWrapper");
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnBody = code.slice(fnStart);
+    expect(fnBody).not.toMatch(/<div\s/);
+    expect(fnBody).not.toMatch(/<span\s/);
+    expect(fnBody).toMatch(/cloneElement/);
   });
 });
 
