@@ -97,11 +97,13 @@ describe("MBR-VIS-5 §B — CardVisibilityWrapper shared component", () => {
   });
 
   it("omits children entirely when non-editing + effectively hidden", () => {
-    expect(code).toMatch(/if\s*\(!editing\s*&&\s*effectiveHidden\)\s*return\s*null/);
+    // MBR-VIS-5B — renamed to `resolvedEditing` (context presence
+    // fallback when the editing prop isn't passed explicitly).
+    expect(code).toMatch(/if\s*\(!resolvedEditing\s*&&\s*effectiveHidden\)\s*return\s*null/);
   });
 
   it("mutes children at 0.55 opacity when editing + effectively hidden", () => {
-    expect(code).toMatch(/opacity:\s*editing\s*&&\s*effectiveHidden\s*\?\s*0\.55\s*:\s*1/);
+    expect(code).toMatch(/opacity:\s*resolvedEditing\s*&&\s*effectiveHidden\s*\?\s*0\.55\s*:\s*1/);
   });
 
   it("defaults renderInlineToggle to FALSE (VIS-5A — chip is retired; icons live inline in panel titles)", () => {

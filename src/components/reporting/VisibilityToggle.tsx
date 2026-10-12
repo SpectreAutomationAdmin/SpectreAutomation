@@ -156,10 +156,17 @@ export function VisibilityToggle({
         "relative inline-flex items-center justify-center rounded " +
         (size === "sm" ? "h-5 w-5" : "h-6 w-6") +
         " " +
+        // MBR-VIS-5B — inherit colour from the parent via text-current
+        // so the icon reads correctly on both the cream page body AND
+        // the dark-green card headers.  InlineChapterToggle +
+        // InlineCardToggle each set their own text colour on the
+        // wrapping <span>; this button picks it up via currentColor.
+        // Fallback hover tightens the shade on hover without hard-
+        // coding a palette value.
         (effectiveHidden
-          ? "text-stone-400 hover:text-stone-600"
-          : "text-club-green-700 hover:text-club-green-900") +
-        " transition-colors disabled:opacity-50"
+          ? "text-current opacity-70 hover:opacity-100"
+          : "text-current hover:opacity-80") +
+        " transition-opacity disabled:opacity-50"
       }
     >
       <Icon size={dim} />

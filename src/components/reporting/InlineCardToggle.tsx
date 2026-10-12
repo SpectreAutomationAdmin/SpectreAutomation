@@ -37,7 +37,11 @@ export function InlineCardToggle({
       data-component-key={componentKey}
       className={
         "ml-2 inline-flex items-center align-middle " +
-        (tone === "cream" ? "text-club-cream/70 " : "text-club-green-800/70 ")
+        // MBR-VIS-5B — "cream" tone renders WHITE for the dark-green
+        // card headers (Operating / Capital Stewardship + sub-cards).
+        // The underlying VisibilityToggle inherits via `text-current`,
+        // so the icon stroke matches whatever colour we set here.
+        (tone === "cream" ? "text-white " : "text-club-green-800/80 ")
       }
     >
       <VisibilityToggle

@@ -36,7 +36,11 @@ export type CardVisibilityWrapperProps = {
   componentKey: string;
   /** Human-readable card label, used in the a11y toggle label. */
   cardLabel: string;
-  editing: boolean;
+  /** MBR-VIS-5B — optional.  When omitted, the wrapper treats the
+   *  presence of VisibilityState context as the "editing" signal
+   *  (the Provider only mounts on editing surfaces).  Pass
+   *  explicitly to force a specific mode. */
+  editing?: boolean;
   period?: { reportingYear: number; reportingMonth: number };
   visibility?: MonthlyBodyVisibilityConfig;
   publishedVisibility?: MonthlyBodyVisibilityConfig;
@@ -90,6 +94,13 @@ export function CardVisibilityWrapper({
   children,
 }: CardVisibilityWrapperProps) {
   const ctx = useVisibilityState();
+  // MBR-VIS-5B — "editing" defaults to context presence.  The
+  // VisibilityStateProvider only mounts on the Editing surface
+  // (the Draft Preview / Published State / Board / PDF surfaces
+  // render without a Provider), so `ctx != null` is an accurate
+  // signal.  Callers can still override by passing `editing`
+  // explicitly for tests.
+  const resolvedEditing = editing ?? ctx != null;
   const explicitHidden = ctx
     ? ctx.explicitHidden(componentKey)
     : visibility?.entries[componentKey] === true;
@@ -106,7 +117,7 @@ export function CardVisibilityWrapper({
   );
 
   // Non-editing + effectively hidden → omit entirely.
-  if (!editing && effectiveHidden) return null;
+  if (!resolvedEditing && effectiveHidden) return null;
 
   const wrapperClass =
     "relative" + (className ? ` ${className}` : "");
@@ -118,7 +129,7 @@ export function CardVisibilityWrapper({
       data-card-hidden={effectiveHidden ? "true" : "false"}
       className={wrapperClass}
       style={{
-        opacity: editing && effectiveHidden ? 0.55 : 1,
+        opacity: resolvedEditing && effectiveHidden ? 0.55 : 1,
         transition: "opacity 150ms linear",
       }}
     >
@@ -133,7 +144,7 @@ export function CardVisibilityWrapper({
           Suppresses the redundant control on single-component
           chapters per the directive — the chapter toggle on the
           panel's h2 is the only visible control. */}
-      {editing && period && renderInlineToggle && (
+      {resolvedEditing && period && renderInlineToggle && (
         <span
           data-testid={`card-visibility-overlay-${componentKey}`}
           className="ml-2 inline-flex items-center align-middle"

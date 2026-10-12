@@ -2169,6 +2169,8 @@ function StewardshipCard({
   title, subtitle, chipLabel, kpis, chart, interpretation, testid,
   layout = "default",
   insetCommentary = false,
+  componentKey,
+  cardLabel,
 }: {
   title: string;
   /** Smallcaps subtitle inside the dark header band — the "question"
@@ -2193,6 +2195,15 @@ function StewardshipCard({
    *  convention. Default false to preserve Operating Results' full-
    *  width treatment. */
   insetCommentary?: boolean;
+  /** MBR-VIS-5B — opt into independent visibility.  When provided,
+   *  the card mounts an InlineCardToggle (white eye on the dark-
+   *  green header) beside the title and wraps its body in a
+   *  CardVisibilityWrapper so Draft Preview / Published State /
+   *  PDF omit the entire card when hidden.  Omitting the two props
+   *  preserves the pre-VIS-5B rendering exactly (no toggle, no
+   *  hidden-state resolution). */
+  componentKey?: string;
+  cardLabel?: string;
 }) {
   const dims = layout === "chart-dominant"
     ? {
@@ -2217,7 +2228,7 @@ function StewardshipCard({
         chartMarginTop: 14,
         commentaryMarginTop: 10,
       };
-  return (
+  const cardBody = (
     <article
       data-testid={testid}
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
@@ -2234,6 +2245,16 @@ function StewardshipCard({
         <div className="min-w-0 flex-1 pr-3">
           <h3 className="font-serif text-club-cream" style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}>
             {title}
+            {/* MBR-VIS-5B — inline white eye icon beside the title,
+                mounted only when the caller opts into independent
+                visibility via componentKey + cardLabel. */}
+            {componentKey && cardLabel && (
+              <InlineCardToggle
+                componentKey={componentKey}
+                cardLabel={cardLabel}
+                tone="cream"
+              />
+            )}
           </h3>
           {/* Subtitle: the "question" the chart answers, rendered as
               quiet smallcaps per Saguaro. Readability bumps (founder
@@ -2330,6 +2351,21 @@ function StewardshipCard({
       )}
     </article>
   );
+  // MBR-VIS-5B — when the card opts into independent visibility,
+  // wrap the body in CardVisibilityWrapper so Draft Preview /
+  // Published State / PDF omit it entirely when hidden, and the
+  // editing surface mutes it at 0.55 opacity.  The InlineCardToggle
+  // in the h3 above drives the state; the wrapper applies it.
+  if (componentKey && cardLabel) {
+    // CardVisibilityWrapper detects editing automatically from the
+    // VisibilityState context presence (no editing prop needed).
+    return (
+      <CardVisibilityWrapper componentKey={componentKey} cardLabel={cardLabel}>
+        {cardBody}
+      </CardVisibilityWrapper>
+    );
+  }
+  return cardBody;
 }
 
 // Card 1 — Equity Value Over Time. Long-term stewardship.
@@ -2466,6 +2502,8 @@ function EquityValueCard({ data }: {
     <StewardshipCard
       testid="stewardship-equity"
       title="Equity Value Over Time"
+      componentKey="card:financial-performance:equity-value"
+      cardLabel="Equity Value Over Time"
       subtitle='"Is the club’s financial health growing, stagnant, or declining?"'
       chipLabel="Net Worth"
       // Chart-dominant: KPI ribbon shrinks (77 → 60), commentary
@@ -2602,6 +2640,8 @@ function OperatingResultsCard({ data }: {
     <StewardshipCard
       testid="stewardship-operating"
       title="Operating Results — 12-Month Rolling Trend"
+      componentKey="card:financial-performance:operating-results"
+      cardLabel="Operating Results — 12-Month Rolling Trend"
       subtitle="Actual vs. Budget vs. Prior Year · Break-Even Zone (−2.8% to +3.3%)"
       chipLabel="NOI Trend"
       // Mirror the Equity card's chart-dominant hierarchy. KPI ribbon
@@ -3029,7 +3069,9 @@ type DepartmentData = Awaited<
 >["stewardshipDashboard"]["departmentPerformance"];
 
 function DepartmentNetPerformanceCard({ data }: { data: DepartmentData }) {
+  const componentKey = "card:financial-performance:department-net-performance";
   return (
+    <CardVisibilityWrapper componentKey={componentKey} cardLabel={data.title}>
     <article
       data-testid="department-net-performance"
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
@@ -3046,6 +3088,11 @@ function DepartmentNetPerformanceCard({ data }: { data: DepartmentData }) {
             style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
           >
             {data.title}
+            <InlineCardToggle
+              componentKey={componentKey}
+              cardLabel={data.title}
+              tone="cream"
+            />
           </h3>
           <p
             data-testid="department-net-performance-subtitle"
@@ -3178,6 +3225,7 @@ function DepartmentNetPerformanceCard({ data }: { data: DepartmentData }) {
         </p>
       </div>
     </article>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -3203,7 +3251,9 @@ type DuesData = Awaited<
 // SVG, hover state, tooltip, and slice-separator gaps.)
 
 function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
+  const componentKey = "card:financial-performance:dues-subsidy-analysis";
   return (
+    <CardVisibilityWrapper componentKey={componentKey} cardLabel={data.title}>
     <article
       data-testid="dues-subsidy-analysis"
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
@@ -3219,6 +3269,11 @@ function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
             style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
           >
             {data.title}
+            <InlineCardToggle
+              componentKey={componentKey}
+              cardLabel={data.title}
+              tone="cream"
+            />
           </h3>
           <p
             data-testid="dues-subsidy-analysis-subtitle"
@@ -3307,6 +3362,7 @@ function DuesSubsidyAnalysisCard({ data }: { data: DuesData }) {
         </div>
       </div>
     </article>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -3321,11 +3377,18 @@ function CardHeaderBand({
   title,
   subtitle,
   pillLabel,
+  componentKey,
+  cardLabel,
 }: {
   testid: string;
   title: string;
   subtitle: string;
   pillLabel: string;
+  /** MBR-VIS-5B — opt-in: mounts an inline white eye-icon toggle
+   *  beside the title.  The ancestor CardVisibilityWrapper applies
+   *  the hidden-state effects. */
+  componentKey?: string;
+  cardLabel?: string;
 }) {
   return (
     <header
@@ -3339,6 +3402,13 @@ function CardHeaderBand({
           style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
         >
           {title}
+          {componentKey && cardLabel && (
+            <InlineCardToggle
+              componentKey={componentKey}
+              cardLabel={cardLabel}
+              tone="cream"
+            />
+          )}
         </h3>
         <p
           data-testid={`${testid}-subtitle`}
@@ -3407,7 +3477,9 @@ function PayrollKpiTile({ value, label }: { value: string | null; label: string 
 }
 
 function PayrollDepartmentCard({ data }: { data: PayrollDeptData }) {
+  const componentKey = "card:financial-performance:payroll-dept-breakdown";
   return (
+    <CardVisibilityWrapper componentKey={componentKey} cardLabel={data.title}>
     <article
       data-testid="payroll-department"
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
@@ -3417,6 +3489,8 @@ function PayrollDepartmentCard({ data }: { data: PayrollDeptData }) {
         title={data.title}
         subtitle={data.subtitle}
         pillLabel={data.pillLabel}
+        componentKey={componentKey}
+        cardLabel={data.title}
       />
 
       {/* KPI ribbon */}
@@ -3510,6 +3584,7 @@ function PayrollDepartmentCard({ data }: { data: PayrollDeptData }) {
         </div>
       </div>
     </article>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -3526,7 +3601,9 @@ type PayrollTrendData = Awaited<
 >["stewardshipDashboard"]["payrollRatioTrend"];
 
 function PayrollRatioTrendCard({ data }: { data: PayrollTrendData }) {
+  const componentKey = "card:financial-performance:payroll-ratio-trend";
   return (
+    <CardVisibilityWrapper componentKey={componentKey} cardLabel={data.title}>
     <article
       data-testid="payroll-ratio-trend"
       className="flex w-full flex-1 flex-col overflow-hidden rounded-md border border-club-green-800/10 bg-club-cream"
@@ -3536,6 +3613,8 @@ function PayrollRatioTrendCard({ data }: { data: PayrollTrendData }) {
         title={data.title}
         subtitle={data.subtitle}
         pillLabel={data.pillLabel}
+        componentKey={componentKey}
+        cardLabel={data.title}
       />
 
       {/* KPI ribbon */}
@@ -3668,6 +3747,7 @@ function PayrollRatioTrendCard({ data }: { data: PayrollTrendData }) {
         </p>
       </div>
     </article>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -3897,12 +3977,20 @@ function ChairsDashboard({
       ) : null}
 
       {pkg.stewardshipTiles && pkg.stewardshipTiles.tiles.length > 0 ? (
+        <CardVisibilityWrapper
+          componentKey="card:financial-performance:tile-availability"
+          cardLabel="Stewardship — Tile-Level Availability"
+        >
         <section
           data-testid="stewardship-tiles"
           className="mt-6 border-t border-club-green-800/25 pt-5"
         >
           <h3 className="text-[13px] uppercase tracking-[0.18em] font-semibold text-club-green-900">
             Stewardship — Tile-Level Availability
+            <InlineCardToggle
+              componentKey="card:financial-performance:tile-availability"
+              cardLabel="Stewardship — Tile-Level Availability"
+            />
           </h3>
           <p className="mt-2 max-w-[760px] font-serif italic text-[14px] leading-snug text-club-green-800/85">
             {pkg.stewardshipTiles.footerNote}
@@ -3948,6 +4036,7 @@ function ChairsDashboard({
             ))}
           </div>
         </section>
+        </CardVisibilityWrapper>
       ) : null}
 
       {/* Chapter description — single editorial sentence mirroring
