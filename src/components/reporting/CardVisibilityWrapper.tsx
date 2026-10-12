@@ -108,9 +108,16 @@ export function CardVisibilityWrapper({
   children,
 }: CardVisibilityWrapperProps) {
   const ctx = useVisibilityState();
-  // "editing" defaults to context presence (Provider only mounts on
-  // the editing surface).  Callers can still override.
-  const resolvedEditing = editing ?? ctx != null;
+  // MBR-VIS-5E — "editing" defaults to the context's `editing`
+  // flag (not merely context presence).  Pre-VIS-5E the Provider
+  // only mounted on editing surfaces, so `ctx != null` was a valid
+  // proxy — but Draft Preview + Published State now also mount the
+  // Provider (to supply the server-resolved visibility entries),
+  // so `ctx != null` would incorrectly report every preview
+  // surface as "editing" and MUTE hidden cards instead of OMITTING
+  // them.  Reading the explicit `editing` flag restores the
+  // omit-on-preview behaviour.
+  const resolvedEditing = editing ?? ctx?.editing ?? false;
   const effectiveHidden = ctx
     ? ctx.effectiveHidden(componentKey)
     : visibility

@@ -653,18 +653,29 @@ export function MonthlyReportingPackageBody({
   // round-trip.  In every other mode (Draft Preview / Published
   // State / Board / PDF), skip the Provider so hidden components
   // read the frozen server-passed config directly.
-  if (editing) {
-    return (
-      <VisibilityStateProvider
-        initialDraft={vis?.entries}
-        initialPublished={pub?.entries}
-        period={period}
-      >
-        {bodyInner}
-      </VisibilityStateProvider>
-    );
-  }
-  return bodyInner;
+  // MBR-VIS-5E — mount the VisibilityStateProvider UNCONDITIONALLY
+  // so every surface (Editing, Draft Preview, Published State,
+  // Board, PDF) resolves hidden state through a single code path.
+  // Pre-VIS-5E the Provider was only mounted when editing=true,
+  // which meant Draft Preview + PDF leaf components (CardVisibilityWrapper
+  // + ChapterSection) fell back to a server-passed `visibility` prop
+  // that was never threaded down to the tile grid — individually-
+  // hidden tiles rendered normally in Draft Preview and PDF.
+  //
+  // The Provider's authoritative `editing` flag decides whether
+  // hidden components are muted-in-place (editing=true) or omitted
+  // entirely (editing=false).  `period` is only set in editing mode
+  // so the inline eye-icon leaf components stay gated to Editing.
+  return (
+    <VisibilityStateProvider
+      initialDraft={vis?.entries}
+      initialPublished={pub?.entries}
+      period={editing ? period : undefined}
+      editing={editing}
+    >
+      {bodyInner}
+    </VisibilityStateProvider>
+  );
 }
 
 // ============================================================================

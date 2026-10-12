@@ -71,8 +71,17 @@ type VisibilityStateContextValue = {
   /** MBR-VIS-5A — reporting period exposed via context so leaf
    *  toggles can self-identify the (year, month) without threading
    *  props through 11 panel components.  Null when the Provider
-   *  wasn't given a period. */
+   *  wasn't given a period (i.e. non-editing surfaces: Draft
+   *  Preview, Published State, Board, PDF). */
   period: { reportingYear: number; reportingMonth: number } | null;
+  /** MBR-VIS-5E — true on the Editing surface (toggles active,
+   *  hidden components rendered muted), false on Draft Preview /
+   *  Published State / Board / PDF (toggles absent, hidden
+   *  components omitted entirely).  Replaces the prior
+   *  `ctx != null` heuristic — the Provider is now mounted on
+   *  every surface so leaf resolvers always see a non-null context,
+   *  and this flag is the authoritative mode signal. */
+  editing: boolean;
 };
 
 const VisibilityStateContext = createContext<VisibilityStateContextValue | null>(null);
@@ -106,6 +115,7 @@ export function VisibilityStateProvider({
   initialDraft,
   initialPublished,
   period,
+  editing = false,
   children,
 }: {
   initialDraft: VisibilityEntries | undefined;
@@ -113,6 +123,10 @@ export function VisibilityStateProvider({
   /** MBR-VIS-5A — reporting period exposed via context so inline
    *  toggles embedded in panel h2s self-identify without threading. */
   period?: { reportingYear: number; reportingMonth: number };
+  /** MBR-VIS-5E — true on the Editing surface, false on preview/
+   *  snapshot surfaces.  Drives whether hidden components are
+   *  muted-in-place or omitted entirely. */
+  editing?: boolean;
   children: ReactNode;
 }) {
   const [entries, setEntries] = useState<VisibilityEntries>(() => ({
@@ -184,8 +198,9 @@ export function VisibilityStateProvider({
       setHidden,
       lastError,
       period: period ?? null,
+      editing,
     }),
-    [entries, publishedEntries, explicitHidden, effectiveHidden, isPendingPublish, setHidden, lastError, period],
+    [entries, publishedEntries, explicitHidden, effectiveHidden, isPendingPublish, setHidden, lastError, period, editing],
   );
 
   return (

@@ -230,6 +230,36 @@ describe("MBR-VIS-5 §F — shared visibility-types module", () => {
   });
 });
 
+describe("MBR-VIS-5E §L — Provider mounts on EVERY surface + editing flag drives omit-vs-mute", () => {
+  const vstate = src(path.join(REPO, "src/components/reporting/VisibilityState.tsx"));
+  const wrapper = src(path.join(REPO, "src/components/reporting/CardVisibilityWrapper.tsx"));
+  const body = src(BODY);
+
+  it("VisibilityStateContextValue carries an `editing: boolean` field", () => {
+    expect(vstate).toMatch(/editing:\s*boolean/);
+  });
+
+  it("VisibilityStateProvider accepts an `editing` prop and threads it to context", () => {
+    expect(vstate).toMatch(/editing\s*=\s*false,?\s*\n/);
+    expect(vstate).toMatch(/editing\s*\?:\s*boolean/);
+  });
+
+  it("body mounts the Provider UNCONDITIONALLY (no `if (editing)` gate)", () => {
+    // The old `if (editing) { return <Provider>...</Provider> } return bodyInner`
+    // conditional is gone.  The Provider wraps bodyInner on every path.
+    expect(body).not.toMatch(/if\s*\(editing\)\s*\{\s*\n?\s*return\s*\(\s*\n?\s*<VisibilityStateProvider/);
+    // And the unconditional mount explicitly passes an `editing={editing}`
+    // prop so the context carries the mode flag.
+    expect(body).toMatch(/<VisibilityStateProvider[\s\S]{0,400}editing=\{editing\}/);
+    // Period is only set in editing mode so leaf toggles stay gated.
+    expect(body).toMatch(/period=\{editing\s*\?\s*period\s*:\s*undefined\}/);
+  });
+
+  it("CardVisibilityWrapper resolvedEditing falls back to ctx.editing (not ctx != null)", () => {
+    expect(wrapper).toMatch(/resolvedEditing\s*=\s*editing\s*\?\?\s*ctx\?\.editing/);
+  });
+});
+
 describe("MBR-VIS-5D §K — individual Stewardship KPI tile toggles", () => {
   const body = src(BODY);
   const vis = src(path.join(REPO, "src/lib/reporting/monthly-package-visibility.ts"));
