@@ -4983,6 +4983,7 @@ function StewardshipKpiDashboard({
         componentKey="card:stewardship-dashboard:operating-vs-capital-stewardship"
         cardLabel="Operating vs. Capital Stewardship"
       >
+      <div data-testid="stewardship-kpi-dashboard-op-vs-cap-section">
       <div
         data-testid="stewardship-kpi-dashboard-op-vs-cap-heading"
         className="mt-10"
@@ -5162,6 +5163,7 @@ function StewardshipKpiDashboard({
             );
           })}
         </ul>
+      </div>
       </div>
       </CardVisibilityWrapper>
     </div>
