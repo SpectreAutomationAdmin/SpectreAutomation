@@ -74,6 +74,9 @@ export type CardVisibilityWrapperProps = {
   children: ReactNode;
 };
 
+/** MBR-VIS-5D — the card that groups all `tile:<chapter>:<key>` keys. */
+const TILE_PARENT_CARD_KEY = "tile-availability";
+
 /** Shared ancestor-hidden check (identical to the server resolver).
  *  Kept inline here so the client wrapper has no server-only import. */
 function isAncestorHidden(
@@ -88,6 +91,11 @@ function isAncestorHidden(
   if (tier === "row" || tier === "commentary") {
     if (entries[`chapter:${anchor}`] === true) return true;
     if (cardKey && entries[`card:${anchor}:${cardKey}`] === true) return true;
+    return false;
+  }
+  if (tier === "tile") {
+    if (entries[`chapter:${anchor}`] === true) return true;
+    if (entries[`card:${anchor}:${TILE_PARENT_CARD_KEY}`] === true) return true;
     return false;
   }
   return false;

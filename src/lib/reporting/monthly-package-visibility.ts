@@ -34,11 +34,22 @@ import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
 import { hasPermission, type Principal } from "@/lib/rbac";
 
-/** Component-key convention. The service layer enforces the four
+/** Component-key convention. The service layer enforces the five
  *  known tiers; the DB stores free-form strings so new tiers can
- *  land without a migration. */
+ *  land without a migration.
+ *
+ *  MBR-VIS-5D (2026-10-11) — added `tile` for individual KPI tile
+ *  controls (e.g. the 11 Stewardship Tile-Level Availability
+ *  tiles).  Shape: `tile:<chapter-anchor>:<tile-key>`.  Cascades
+ *  from both the chapter AND the containing card
+ *  (`card:<chapter-anchor>:tile-availability`). */
 export const COMPONENT_KEY_PATTERN =
-  /^(chapter|card|row|commentary):[a-z][a-z0-9-]*(:[a-z0-9-]+){0,2}$/;
+  /^(chapter|card|row|commentary|tile):[a-z][a-z0-9-]*(:[a-z0-9-]+){0,2}$/;
+
+/** MBR-VIS-5D — the card that groups all `tile:<chapter>:<key>` keys.
+ *  When this card is hidden, every tile under the same chapter
+ *  anchor cascades to hidden regardless of its own explicit state. */
+const TILE_PARENT_CARD_KEY = "tile-availability";
 
 export type VisibilitySource = "draft" | "published";
 
@@ -66,6 +77,10 @@ function isAncestorHidden(componentKey: string, entries: Record<string, boolean>
   //   → ancestors: "card:X:Y", "chapter:X"
   // componentKey = "commentary:X:Y:Z"
   //   → ancestors: "card:X:Y", "chapter:X"
+  // componentKey = "tile:X:Z"
+  //   → ancestors: "card:X:tile-availability", "chapter:X"
+  //     (MBR-VIS-5D — tiles live inside the Tile-Level
+  //     Availability card by convention.)
   // componentKey = "card:X:Y"
   //   → ancestors: "chapter:X"
   // componentKey = "chapter:X"
@@ -80,6 +95,11 @@ function isAncestorHidden(componentKey: string, entries: Record<string, boolean>
   if (tier === "row" || tier === "commentary") {
     if (entries[`chapter:${anchor}`] === true) return true;
     if (cardKey && entries[`card:${anchor}:${cardKey}`] === true) return true;
+    return false;
+  }
+  if (tier === "tile") {
+    if (entries[`chapter:${anchor}`] === true) return true;
+    if (entries[`card:${anchor}:${TILE_PARENT_CARD_KEY}`] === true) return true;
     return false;
   }
   return false;

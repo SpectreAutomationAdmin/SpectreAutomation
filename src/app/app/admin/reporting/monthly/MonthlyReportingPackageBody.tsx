@@ -3996,15 +3996,32 @@ function ChairsDashboard({
             {pkg.stewardshipTiles.footerNote}
           </p>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {pkg.stewardshipTiles.tiles.map((t) => (
-              <article
+            {pkg.stewardshipTiles.tiles.map((t) => {
+              // MBR-VIS-5D — per-tile visibility.  The wrapper uses
+              // the VIS-5C cloneElement pattern (zero DOM nodes), so
+              // the article remains the direct grid child and the
+              // existing 3-column layout is preserved exactly.
+              const tileKey = `tile:financial-performance:${t.key}`;
+              return (
+              <CardVisibilityWrapper
                 key={t.key}
+                componentKey={tileKey}
+                cardLabel={t.name}
+              >
+              <article
                 data-testid={`stewardship-tile-${t.key}`}
                 data-availability={t.metricAvailability}
                 className="rounded border border-stone-200 bg-white px-3 py-2.5"
               >
-                <div className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">
-                  {t.name}
+                {/* MBR-VIS-5D — label row carries the inline eye at
+                    top-right via flex-justify-between.  No absolute
+                    positioning, no change to tile height or padding. */}
+                <div className="flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">
+                  <span>{t.name}</span>
+                  <InlineCardToggle
+                    componentKey={tileKey}
+                    cardLabel={t.name}
+                  />
                 </div>
                 <div
                   data-testid={`stewardship-tile-${t.key}-metric`}
@@ -4033,7 +4050,9 @@ function ChairsDashboard({
                   </span>
                 </div>
               </article>
-            ))}
+              </CardVisibilityWrapper>
+              );
+            })}
           </div>
         </section>
         </CardVisibilityWrapper>

@@ -229,3 +229,46 @@ describe("MBR-VIS-5 §F — shared visibility-types module", () => {
     expect(code).toMatch(/entries:\s*Record<string,\s*boolean>/);
   });
 });
+
+describe("MBR-VIS-5D §K — individual Stewardship KPI tile toggles", () => {
+  const body = src(BODY);
+  const vis = src(path.join(REPO, "src/lib/reporting/monthly-package-visibility.ts"));
+  const vstate = src(path.join(REPO, "src/components/reporting/VisibilityState.tsx"));
+  const wrapper = src(path.join(REPO, "src/components/reporting/CardVisibilityWrapper.tsx"));
+
+  it("extends COMPONENT_KEY_PATTERN to accept the `tile:` tier", () => {
+    expect(vis).toMatch(/\(chapter\|card\|row\|commentary\|tile\)/);
+  });
+
+  it("server resolver cascades `tile:X:Z` from chapter:X and card:X:tile-availability", () => {
+    expect(vis).toMatch(/TILE_PARENT_CARD_KEY\s*=\s*"tile-availability"/);
+    const resolver = vis.slice(vis.indexOf("function isAncestorHidden"));
+    expect(resolver).toMatch(/tier\s*===\s*"tile"/);
+    expect(resolver).toMatch(/TILE_PARENT_CARD_KEY/);
+  });
+
+  it("client VisibilityState context mirrors the cascade", () => {
+    expect(vstate).toMatch(/TILE_PARENT_CARD_KEY\s*=\s*"tile-availability"/);
+    expect(vstate).toMatch(/tier\s*===\s*"tile"/);
+  });
+
+  it("client CardVisibilityWrapper cascade mirrors the server too", () => {
+    expect(wrapper).toMatch(/TILE_PARENT_CARD_KEY\s*=\s*"tile-availability"/);
+    expect(wrapper).toMatch(/tier\s*===\s*"tile"/);
+  });
+
+  it("body wires every tile with componentKey tile:financial-performance:${t.key}", () => {
+    expect(body).toMatch(/tile:financial-performance:\$\{t\.key\}/);
+    // Each tile wrapped by the shared cloneElement-based wrapper
+    // so the 3-column grid stays untouched.
+    const tileBlock = body.slice(body.indexOf("stewardshipTiles.tiles.map"));
+    const end = tileBlock.indexOf("</CardVisibilityWrapper>");
+    expect(end).toBeGreaterThan(-1);
+    const scope = tileBlock.slice(0, end + 100);
+    expect(scope).toMatch(/<CardVisibilityWrapper/);
+    expect(scope).toMatch(/<InlineCardToggle/);
+    // No absolute-positioned eye on the tile — the toggle rides a
+    // flex row to preserve the pre-VIS-5D geometry.
+    expect(scope).toMatch(/flex items-start justify-between/);
+  });
+});

@@ -77,6 +77,9 @@ type VisibilityStateContextValue = {
 
 const VisibilityStateContext = createContext<VisibilityStateContextValue | null>(null);
 
+// MBR-VIS-5D — the card that groups all `tile:<chapter>:<key>` keys.
+const TILE_PARENT_CARD_KEY = "tile-availability";
+
 function isAncestorHiddenIn(
   componentKey: string,
   entries: VisibilityEntries,
@@ -89,6 +92,11 @@ function isAncestorHiddenIn(
   if (tier === "row" || tier === "commentary") {
     if (entries[`chapter:${anchor}`] === true) return true;
     if (cardKey && entries[`card:${anchor}:${cardKey}`] === true) return true;
+    return false;
+  }
+  if (tier === "tile") {
+    if (entries[`chapter:${anchor}`] === true) return true;
+    if (entries[`card:${anchor}:${TILE_PARENT_CARD_KEY}`] === true) return true;
     return false;
   }
   return false;
