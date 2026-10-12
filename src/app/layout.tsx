@@ -1,45 +1,66 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { headers } from "next/headers";
-import { Source_Serif_4, Inter, Playfair_Display } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { getActiveBranding } from "@/lib/branding";
 
-// Editorial display serif for the Executive Reporting Theme. Loaded
-// once at the root so the font is cached across navigations; resolved
-// only inside [data-report-theme="executive"] via globals.css so the
-// rest of the project (POS, member portal, operational admin) keeps
-// the Georgia fallback unchanged. See the Saguaro comparison audit
-// (test-results/cmp-*.png) for the prestige-serif gap this closes.
-const sourceSerif = Source_Serif_4({
-  subsets: ["latin"],
-  weight: ["400", "600", "700"],
-  style: ["normal", "italic"],
+// DRH-FONT-1 (2026-10-11) — moved from `next/font/google` to
+// `next/font/local` with locally bundled OFL woff2 files.
+//
+// Root cause of the recurring staging build failure:
+//   `next/font/google` fetches the fonts' CSS from
+//   `fonts.googleapis.com` at BUILD time, then parses the response
+//   with a brittle regex.  When Google Fonts returns anything the
+//   regex doesn't match (new CSS format, HTML error page, upstream
+//   outage, rate-limit response), Next.js 14.2.x crashes with:
+//     "An error occurred in `next/font`.
+//      TypeError: Cannot read properties of null (reading '1')"
+//   The failure is non-deterministic from the repo's point of view
+//   and cannot be fixed by retrying the deployment.
+//
+// Fix: bundle the font files locally.  All three families (Inter,
+// Source Serif 4, Playfair Display) ship under the SIL Open Font
+// Licence 1.1, which permits redistribution — the files live in
+// `src/app/fonts/` and are loaded via `next/font/local`.  No
+// external network dependency during build.
+//
+// The CSS-variable names (`--font-inter`, `--font-source-serif-4`,
+// `--font-playfair`) are UNCHANGED so every consumer in globals.css
+// and component styling continues to resolve the correct face.
+
+// Editorial display serif for the Executive Reporting Theme.
+// Variable font — one woff2 covers every weight axis.
+const sourceSerif = localFont({
+  src: [
+    { path: "./fonts/source-serif-4-latin-wght-normal.woff2", style: "normal" },
+    { path: "./fonts/source-serif-4-latin-wght-italic.woff2", style: "italic" },
+  ],
   variable: "--font-source-serif-4",
   display: "swap",
 });
 
-// Inter — the Spectre Design Language primary sans (see
-// docs/design/Spectre Design Language.md §3). Exposed via the
-// `--font-inter` CSS variable so `.spectre-shell` (and any downstream
-// `spectre-*` class) picks it up. Loaded here so it caches across
-// navigations. Weights match the type-scale weights used in
-// components (400 body, 500 nav/data, 600 headings/labels).
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+// Inter — Spectre Design Language primary sans.  Variable font.
+const inter = localFont({
+  src: [
+    { path: "./fonts/inter-latin-wght-normal.woff2", style: "normal" },
+    { path: "./fonts/inter-latin-wght-italic.woff2", style: "italic" },
+  ],
   variable: "--font-inter",
   display: "swap",
 });
 
-// WEB-1B (2026-09-23) — Playfair Display for the Framer editorial hero
-// serif. High-contrast transitional face matches the Framer reference
-// aesthetic (vertical stress, distinctive italic). Loaded once at root
-// under --font-playfair; only marketing surfaces reference it.
-const playfair = Playfair_Display({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
+// Playfair Display — Framer editorial hero serif.  Not variable; the
+// WEB-1B type scale uses weights 400 / 500 / 600 in both styles.
+const playfair = localFont({
+  src: [
+    { path: "./fonts/playfair-display-latin-400-normal.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/playfair-display-latin-400-italic.woff2", weight: "400", style: "italic" },
+    { path: "./fonts/playfair-display-latin-500-normal.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/playfair-display-latin-500-italic.woff2", weight: "500", style: "italic" },
+    { path: "./fonts/playfair-display-latin-600-normal.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/playfair-display-latin-600-italic.woff2", weight: "600", style: "italic" },
+  ],
   variable: "--font-playfair",
   display: "swap",
 });
