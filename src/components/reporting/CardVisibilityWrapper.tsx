@@ -127,9 +127,15 @@ export function CardVisibilityWrapper({
       {editing && period && renderInlineToggle && (
         <div
           data-testid={`card-visibility-overlay-${componentKey}`}
-          className="absolute right-2 top-2 z-10 inline-flex items-center gap-1.5 rounded border border-club-sand bg-club-cream/90 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-club-green-900"
+          className="mb-2 inline-flex max-w-full flex-wrap items-center gap-1.5 rounded border border-club-sand bg-club-cream/90 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-club-green-900"
         >
-          <span>{explicitHidden ? "Hidden" : "Visible"}</span>
+          <span className="font-mono text-club-gold">Card</span>
+          <span className="opacity-60" aria-hidden="true">·</span>
+          <span className="truncate">{cardLabel}</span>
+          <span className="opacity-60" aria-hidden="true">·</span>
+          <span className="font-semibold">
+            {explicitHidden ? "Hidden" : "Visible"}
+          </span>
           <VisibilityToggle
             reportingYear={period.reportingYear}
             reportingMonth={period.reportingMonth}
