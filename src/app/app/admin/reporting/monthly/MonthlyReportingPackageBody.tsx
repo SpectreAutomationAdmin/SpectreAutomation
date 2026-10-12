@@ -48,6 +48,8 @@ import {
   VisibilityStateProvider,
   useVisibilityState,
 } from "@/components/reporting/VisibilityState";
+import { ChapterTitleToggle } from "@/components/reporting/ChapterTitleToggle";
+import { CardVisibilityWrapper } from "@/components/reporting/CardVisibilityWrapper";
 
 // ============================================================================
 // MonthlyReportingPackageBody — the shared report body component
@@ -229,16 +231,12 @@ function ChapterSectionInner({
   // EFFECTIVE (parent-cascade honored).  Chapters have no parent so
   // the two coincide for chapter tiers, but keeping the split makes
   // the convention uniform across tiers.
-  const explicitHidden = ctx
-    ? ctx.explicitHidden(componentKey)
-    : visibility?.entries[componentKey] === true;
   const effectiveHidden = ctx
     ? ctx.effectiveHidden(componentKey)
     : !isComponentVisible(componentKey, visibility);
   // Non-editing + effectively hidden → collapse the entire chapter.
   if (!editing && effectiveHidden) return null;
   const hidden = effectiveHidden;
-  const published = pendingPublishState(componentKey, visibility, publishedVisibility);
   return (
     <>
       {ornament && <ChapterOrnament />}
@@ -248,45 +246,27 @@ function ChapterSectionInner({
         data-chapter-anchor={anchorId}
         data-chapter-hidden={hidden ? "true" : "false"}
         style={{
-          position: "relative",
           opacity: editing && hidden ? 0.55 : 1,
           transition: "opacity 150ms linear",
         }}
       >
-        {editing && period && (
-          <div
-            data-testid={`chapter-toggle-wrap-${anchorId}`}
-            style={{
-              position: "absolute",
-              top: 4,
-              right: 4,
-              zIndex: 10,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              background: "rgba(248,245,239,0.9)",
-              border: "1px solid rgba(21,51,24,0.15)",
-              borderRadius: 4,
-              padding: "4px 6px",
-              fontSize: 10,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              color: "rgb(21,51,24)",
-            }}
-          >
-            <span>
-              Chapter {chapterNumber} · {explicitHidden ? "Hidden" : "Visible"}
-            </span>
-            <VisibilityToggle
-              reportingYear={period.reportingYear}
-              reportingMonth={period.reportingMonth}
-              componentKey={componentKey}
-              hidden={explicitHidden}
-              publishedHidden={published}
-              label={`${explicitHidden ? "Show" : "Hide"} chapter ${chapterLabel} in published report`}
-            />
-          </div>
-        )}
+        {/* MBR-VIS-5 — chapter visibility chip renders INLINE at the
+            top of the section, LEFT-aligned to sit immediately
+            above the chapter heading.  Replaces the previous
+            absolute-positioned `top: 4, right: 4` chip that
+            collided with chapter header elements (e.g. the
+            Statement of Activities "Statement No. IV" + document
+            chip in the right column).  No absolute positioning; the
+            chip wraps gracefully on narrow viewports. */}
+        <ChapterTitleToggle
+          anchorId={anchorId}
+          chapterNumber={chapterNumber}
+          chapterLabel={chapterLabel}
+          editing={editing}
+          period={period}
+          visibility={visibility}
+          publishedVisibility={publishedVisibility}
+        />
         {children}
       </section>
     </>
@@ -380,7 +360,16 @@ export function MonthlyReportingPackageBody({
           Statement of Activities `BoardStatement` invocation as the
           canonical surface; the duplicate render is removed below. */}
       <ChapterSection anchorId="statement-of-activities" chapterNumber="IV" chapterLabel="Statement of Activities" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <StatementOfActivitiesPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:statement-of-activities:soa-panel"
+          cardLabel="Statement of Activities panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <StatementOfActivitiesPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* V. Capital Fund Statement. Saguaro-style two-column capital
@@ -395,7 +384,16 @@ export function MonthlyReportingPackageBody({
           consumes the same per-period numerics through the shared
           ReportingPeriod, so the two surfaces never drift. */}
       <ChapterSection anchorId="capital-fund" chapterNumber="V" chapterLabel="Capital Fund" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <CapitalFundPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:capital-fund:capital-fund-panel"
+          cardLabel="Capital Fund panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <CapitalFundPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* VI. Capital Project Tracker. Saguaro-style nine-column
@@ -408,7 +406,16 @@ export function MonthlyReportingPackageBody({
           labels + the "Q[N] {year}" next-board-meeting reference
           flow from ReportingPeriod. */}
       <ChapterSection anchorId="capital-projects" chapterNumber="VI" chapterLabel="Capital Projects" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <CapitalProjectTrackerPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:capital-projects:capital-projects-panel"
+          cardLabel="Capital Projects panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <CapitalProjectTrackerPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* VII. Statement of Financial Position. Saguaro-style balance
@@ -419,7 +426,16 @@ export function MonthlyReportingPackageBody({
           Statement of Financial Position invocation as the
           canonical surface; the duplicate render is removed below. */}
       <ChapterSection anchorId="financial-position" chapterNumber="VII" chapterLabel="Financial Position" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <StatementOfFinancialPositionPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:financial-position:financial-position-panel"
+          cardLabel="Statement of Financial Position panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <StatementOfFinancialPositionPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* VIII. Accounts Receivable Aging. Saguaro-style AR aging
@@ -430,7 +446,16 @@ export function MonthlyReportingPackageBody({
           quarter-derived membership column headers flow from
           ReportingPeriod. */}
       <ChapterSection anchorId="ar-aging" chapterNumber="VIII" chapterLabel="AR Aging" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <AccountsReceivableAgingPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:ar-aging:ar-aging-panel"
+          cardLabel="AR Aging panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <AccountsReceivableAgingPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* IX. Operating Statistics & Focus Areas — first chapter of
@@ -438,7 +463,16 @@ export function MonthlyReportingPackageBody({
           prior-year statistics (month vs same month last year for
           monthly reports) + two Focus Area cards. */}
       <ChapterSection anchorId="operating-statistics" chapterNumber="IX" chapterLabel="Operating Statistics" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <OperatingStatisticsPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:operating-statistics:operating-statistics-panel"
+          cardLabel="Operating Statistics panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <OperatingStatisticsPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* X. Departmental P&L Summary — second chapter of the Operations
@@ -446,7 +480,16 @@ export function MonthlyReportingPackageBody({
           responsive 3-col grid + management-document notice +
           department notes. */}
       <ChapterSection anchorId="departmental-p-and-l" chapterNumber="X" chapterLabel="Departmental P&L" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <DepartmentalPLSummaryPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:departmental-p-and-l:departmental-pl-panel"
+          cardLabel="Departmental P&L panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <DepartmentalPLSummaryPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* XI. Monthly Weather Summary — third chapter of the Operations
@@ -456,7 +499,16 @@ export function MonthlyReportingPackageBody({
           correlation cards. All icons are premium inline SVGs — no
           emoji or SaaS-grade stoplight glyphs. */}
       <ChapterSection anchorId="weather-and-utilization" chapterNumber="XI" chapterLabel="Weather & Utilization" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <MonthlyWeatherSummaryPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:weather-and-utilization:weather-panel"
+          cardLabel="Weather & Utilization panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <MonthlyWeatherSummaryPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* XII. Departmental Payroll Analysis — fourth chapter of the
@@ -466,7 +518,16 @@ export function MonthlyReportingPackageBody({
           Benefits stacked bars) + MTD/YTD summary table with a
           dark-green Club Total band. */}
       <ChapterSection anchorId="payroll-analysis" chapterNumber="XII" chapterLabel="Payroll Analysis" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <DepartmentalPayrollAnalysisPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:payroll-analysis:payroll-panel"
+          cardLabel="Payroll Analysis panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <DepartmentalPayrollAnalysisPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* XIII. Food & Beverage Statistics — fifth chapter of the
@@ -476,7 +537,16 @@ export function MonthlyReportingPackageBody({
           Month line). Period-aware monthly trends + reactive
           callouts derive from `ReportingPeriod`. */}
       <ChapterSection anchorId="f-and-b-statistics" chapterNumber="XIII" chapterLabel="F&B Statistics" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <FoodBeverageStatisticsPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:f-and-b-statistics:f-and-b-panel"
+          cardLabel="F&B Statistics panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <FoodBeverageStatisticsPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* XIV. Inventory Analysis — sixth chapter of the Operations &
@@ -486,7 +556,16 @@ export function MonthlyReportingPackageBody({
           Management Flags & Action Items table. Final chapter of the
           14-statement reporting package. */}
       <ChapterSection anchorId="inventory-analysis" chapterNumber="XIV" chapterLabel="Inventory Analysis" className="mt-16 scroll-mt-24" ornament editing={editing} visibility={vis} publishedVisibility={pub} period={period}>
-        <InventoryAnalysisPanel pkg={pkg} />
+        <CardVisibilityWrapper
+          componentKey="card:inventory-analysis:inventory-panel"
+          cardLabel="Inventory Analysis panel"
+          editing={editing}
+          period={period}
+          visibility={vis}
+          publishedVisibility={pub}
+        >
+          <InventoryAnalysisPanel pkg={pkg} />
+        </CardVisibilityWrapper>
       </ChapterSection>
 
       {/* 2026-06-16 removal: the legacy pillar-panel deep-dives
@@ -2685,44 +2764,16 @@ function StewardshipScorecardCard({
         transition: "opacity 150ms linear",
       }}
     >
-      {/* Band 1 — Header. Dark deep-green slab with serif title on the
-          left + three legend dots on the right. */}
+      {/* Band 1 — Header. Dark deep-green slab with serif title on
+          the left + legend + card visibility toggle on the right.
+          MBR-VIS-5 — the card toggle is now INLINE in the header's
+          right cluster (no absolute positioning) so it sits
+          alongside the status legend without overlapping any
+          existing header content. */}
       <header
         className="flex items-start justify-between bg-club-green-900"
         style={{ padding: "12px 18px" }}
       >
-        {editing && period && cardKey && (
-          <div
-            data-testid={`${testid}-card-toggle-wrap`}
-            style={{
-              position: "absolute",
-              top: 6,
-              right: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              background: "rgba(248,245,239,0.85)",
-              padding: "3px 6px",
-              borderRadius: 4,
-              fontSize: 9,
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              color: "rgb(21,51,24)",
-              zIndex: 5,
-            }}
-          >
-            <span>Card · {cardExplicitHidden ? "Hidden" : "Visible"}</span>
-            <VisibilityToggle
-              reportingYear={period.reportingYear}
-              reportingMonth={period.reportingMonth}
-              componentKey={cardComponentKey}
-              hidden={cardExplicitHidden}
-              publishedHidden={cardPublishedHidden}
-              size="sm"
-              label={`${cardExplicitHidden ? "Show" : "Hide"} ${data.title} card in published report`}
-            />
-          </div>
-        )}
         <div className="min-w-0 flex-1 pr-3">
           <h3
             data-testid={`${testid}-title`}
@@ -2739,24 +2790,55 @@ function StewardshipScorecardCard({
             {data.subtitle}
           </p>
         </div>
-        {/* Top-right legend — three colored dots with smallcaps labels.
-            Saguaro convention: legend lives inside the header band, not
-            in a separate ribbon below it. */}
-        <div
-          data-testid={`${testid}-legend`}
-          className="flex shrink-0 items-center gap-3 pl-3"
-          style={{ fontSize: "9px", letterSpacing: "0.9px", lineHeight: 1, color: "rgba(248,245,239,0.75)" }}
-        >
-          {[
-            { status: "on-track" as const, label: "On Track" },
-            { status: "monitor" as const,  label: "Monitor" },
-            { status: "action" as const,   label: "Action" },
-          ].map((l) => (
-            <span key={l.status} className="inline-flex items-center gap-1.5 uppercase">
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${scorecardDotClass(l.status)}`} />
-              {l.label}
-            </span>
-          ))}
+        {/* Right cluster — Saguaro-style status legend + MBR-VIS-5
+            card visibility toggle.  Both inline, no absolute
+            positioning.  Legend keeps its exact pre-VIS-5 look;
+            toggle appears only in editing mode and only when the
+            card has a declared cardKey. */}
+        <div className="flex shrink-0 flex-wrap items-center gap-3 pl-3">
+          <div
+            data-testid={`${testid}-legend`}
+            className="flex items-center gap-3"
+            style={{
+              fontSize: "9px",
+              letterSpacing: "0.9px",
+              lineHeight: 1,
+              color: "rgba(248,245,239,0.75)",
+            }}
+          >
+            {[
+              { status: "on-track" as const, label: "On Track" },
+              { status: "monitor" as const,  label: "Monitor" },
+              { status: "action" as const,   label: "Action" },
+            ].map((l) => (
+              <span
+                key={l.status}
+                className="inline-flex items-center gap-1.5 uppercase"
+              >
+                <span
+                  className={`inline-block h-1.5 w-1.5 rounded-full ${scorecardDotClass(l.status)}`}
+                />
+                {l.label}
+              </span>
+            ))}
+          </div>
+          {editing && period && cardKey && (
+            <div
+              data-testid={`${testid}-card-toggle-wrap`}
+              className="inline-flex items-center gap-1.5 rounded border border-club-cream/30 bg-club-green-800/60 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-club-cream"
+            >
+              <span>{cardExplicitHidden ? "Hidden" : "Visible"}</span>
+              <VisibilityToggle
+                reportingYear={period.reportingYear}
+                reportingMonth={period.reportingMonth}
+                componentKey={cardComponentKey}
+                hidden={cardExplicitHidden}
+                publishedHidden={cardPublishedHidden}
+                size="sm"
+                label={`${cardExplicitHidden ? "Show" : "Hide"} ${data.title} card in published report`}
+              />
+            </div>
+          )}
         </div>
       </header>
 
