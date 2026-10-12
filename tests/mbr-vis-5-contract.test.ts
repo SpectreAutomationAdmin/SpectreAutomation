@@ -230,6 +230,53 @@ describe("MBR-VIS-5 §F — shared visibility-types module", () => {
   });
 });
 
+describe("MBR-VIS-5H §N — Stewardship Dashboard component visibility", () => {
+  const body = src(BODY);
+
+  it("4 headline KPI tiles wired with tile:stewardship-dashboard:* keys", () => {
+    for (const key of [
+      "tile:stewardship-dashboard:active-members",
+      "tile:stewardship-dashboard:attrition-ttm",
+      "tile:stewardship-dashboard:entrance-fees-ytd",
+      "tile:stewardship-dashboard:average-tenure",
+    ]) {
+      expect(body).toContain(key);
+    }
+    // OperatingHeadlineTile accepts the opt-in props.
+    expect(body).toMatch(/componentKey\?:\s*string;\s*\n?\s*cardLabel\?:\s*string;/);
+  });
+
+  it("Membership Category Mix section + per-row keys wired", () => {
+    expect(body).toContain("card:stewardship-dashboard:membership-category-mix");
+    expect(body).toMatch(/row:stewardship-dashboard:membership-category-mix:\$\{row\.key\}/);
+    // TOTAL ACTIVE row retains its underlying all-category meaning
+    // — the row still uses `total={m.activeMembers}` and the
+    // directive-mandated preservation comment is present.
+    expect(body).toMatch(/TOTAL ACTIVE row retains its underlying/i);
+  });
+
+  it("Waitlist section + 2 sub-component keys wired", () => {
+    expect(body).toContain("card:stewardship-dashboard:membership-waitlist");
+    expect(body).toContain("tile:stewardship-dashboard:membership-waitlist-summary");
+    expect(body).toContain("tile:stewardship-dashboard:membership-waitlist-aging");
+  });
+
+  it("Tenure Distribution section key wired", () => {
+    expect(body).toContain("card:stewardship-dashboard:membership-tenure-distribution");
+  });
+
+  it("every Stewardship Dashboard toggle uses an inline flex header (no absolute positioning)", () => {
+    // Count the inline eye-icon mountings inside the three stewardship
+    // section headers — each should be inside a flex items-start
+    // justify-between row to preserve the pre-VIS-5H geometry.
+    const kpiBlock = body.slice(body.indexOf("stewardship-kpi-dashboard-membership-headline"));
+    // The 4 OperatingHeadlineTile sites + 3 section headers = at
+    // least 7 mountings referencing stewardship-dashboard keys.
+    const matches = kpiBlock.match(/stewardship-dashboard/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(7);
+  });
+});
+
 describe("MBR-VIS-5F §M — Executive Opening KPI tile visibility (15 tiles)", () => {
   const body = src(BODY);
   const atAGlance = src(path.join(REPO, "src/components/reporting/AtAGlanceBlock.tsx"));

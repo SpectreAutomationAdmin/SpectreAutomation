@@ -4795,6 +4795,8 @@ function StewardshipKpiDashboard({
       >
         <OperatingHeadlineTile
           testId="membership-active"
+          componentKey="tile:stewardship-dashboard:active-members"
+          cardLabel="Active members"
           label="Active members"
           value={m.activeMembers.toLocaleString()}
           context="Dues-paying members in good standing at period close."
@@ -4803,6 +4805,8 @@ function StewardshipKpiDashboard({
         />
         <OperatingHeadlineTile
           testId="membership-attrition"
+          componentKey="tile:stewardship-dashboard:attrition-ttm"
+          cardLabel="Attrition (TTM)"
           label="Attrition (TTM)"
           value={m.attritionRateTTM}
           context="Rolling-12-month resignations as a share of average active membership."
@@ -4811,6 +4815,8 @@ function StewardshipKpiDashboard({
         />
         <OperatingHeadlineTile
           testId="membership-entrance-fee"
+          componentKey="tile:stewardship-dashboard:entrance-fees-ytd"
+          cardLabel="Entrance fees YTD"
           label="Entrance fees YTD"
           value={m.entranceFee.ytd}
           context="Initiation fee income collected from new members YTD."
@@ -4819,6 +4825,8 @@ function StewardshipKpiDashboard({
         />
         <OperatingHeadlineTile
           testId="membership-tenure"
+          componentKey="tile:stewardship-dashboard:average-tenure"
+          cardLabel="Average tenure"
           label="Average tenure"
           value={m.tenure.averageYears}
           context="Mean years of continuous membership across the active roster."
@@ -8305,16 +8313,23 @@ function InventoryAnalysisPanel({
 
 
 function OperatingHeadlineTile({
-  testId, label, value, sub, tone, context,
-}: { testId: string; label: string; value: string; sub: string; tone: KpiTone; context?: string }) {
-  // Four-pillar KPI card:
-  //   1. Number       — text-4xl serif tabular-nums (hero, dominant)
-  //   2. Interpretation — text-[13px] /85 prose under the number
-  //   3. Benchmark    — `sub` line (e.g. "+6.0 % vs plan") promoted
-  //                     to text-sm tone-coloured under a hairline
-  //   4. Status       — encoded by tone (dot in corner + tone-coloured
-  //                     benchmark text + data-tone attribute)
-  return (
+  testId, label, value, sub, tone, context, componentKey, cardLabel,
+}: {
+  testId: string;
+  label: string;
+  value: string;
+  sub: string;
+  tone: KpiTone;
+  context?: string;
+  /** MBR-VIS-5H — opt-in per-tile visibility.  When both props are
+   *  provided, the tile mounts an inline eye-icon beside its label
+   *  and wraps its article in CardVisibilityWrapper so hidden tiles
+   *  are omitted from Draft Preview + PDF.  Omitting the props
+   *  preserves the pre-VIS-5H rendering exactly. */
+  componentKey?: string;
+  cardLabel?: string;
+}) {
+  const body = (
     <article
       data-testid={testId}
       data-tone={tone}
@@ -8322,10 +8337,15 @@ function OperatingHeadlineTile({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="text-[10px] uppercase tracking-[0.22em] text-club-green-800/75">{label}</div>
-        <span
-          className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotForTone(tone)}`}
-          aria-hidden="true"
-        />
+        <div className="flex items-start gap-1.5">
+          {componentKey && cardLabel && (
+            <InlineCardToggle componentKey={componentKey} cardLabel={cardLabel} />
+          )}
+          <span
+            className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dotForTone(tone)}`}
+            aria-hidden="true"
+          />
+        </div>
       </div>
 
       {/* Pillar 1 — Number (hero, dominant). */}
@@ -8352,6 +8372,14 @@ function OperatingHeadlineTile({
       </div>
     </article>
   );
+  if (componentKey && cardLabel) {
+    return (
+      <CardVisibilityWrapper componentKey={componentKey} cardLabel={cardLabel}>
+        {body}
+      </CardVisibilityWrapper>
+    );
+  }
+  return body;
 }
 
 
@@ -8361,11 +8389,14 @@ function MembershipCategoryMix({
   mix: ReadonlyArray<{ key: string; name: string; count: number; duesRate: string; netYTD: number; sharePct: string }>;
   total: number;
 }) {
+  const sectionKey = "card:stewardship-dashboard:membership-category-mix";
   return (
+    <CardVisibilityWrapper componentKey={sectionKey} cardLabel="Membership category mix">
     <div data-testid="membership-category-mix" className="mt-10">
       <div className="border-b border-club-sand pb-2">
-        <h3 className="font-serif text-2xl tracking-tight text-club-green-900">
-          Membership category mix
+        <h3 className="flex items-start justify-between gap-2 font-serif text-2xl tracking-tight text-club-green-900">
+          <span>Membership category mix</span>
+          <InlineCardToggle componentKey={sectionKey} cardLabel="Membership category mix" />
         </h3>
         <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-club-green-800/65">
           Counts at period close · share of active · YTD net change per category
@@ -8385,16 +8416,33 @@ function MembershipCategoryMix({
           {mix.map((row) => {
             const netTone: KpiTone = row.netYTD > 0 ? "green" : row.netYTD < 0 ? "amber" : "neutral";
             const netLabel = row.netYTD > 0 ? `+${row.netYTD}` : String(row.netYTD);
+            // MBR-VIS-5H — per-row visibility.  The CardVisibilityWrapper
+            // uses the VIS-5C cloneElement pattern, so the <tr>
+            // remains the direct child of <tbody> and the table
+            // layout is preserved.
+            const rowKey = `row:stewardship-dashboard:membership-category-mix:${row.key}`;
             return (
-              <tr key={row.key} className="border-t border-club-sand/60" data-testid={`membership-category-${row.key}`}>
-                <td className="py-2.5 text-club-green-900">{row.name}</td>
+              <CardVisibilityWrapper key={row.key} componentKey={rowKey} cardLabel={row.name}>
+              <tr className="border-t border-club-sand/60" data-testid={`membership-category-${row.key}`}>
+                <td className="py-2.5 text-club-green-900">
+                  <span className="inline-flex items-center gap-2">
+                    <span>{row.name}</span>
+                    <InlineCardToggle componentKey={rowKey} cardLabel={row.name} />
+                  </span>
+                </td>
                 <td className="py-2.5 text-right font-mono tabular-nums text-club-green-900">{row.count.toLocaleString()}</td>
                 <td className="py-2.5 text-right font-mono tabular-nums text-club-green-800/75">{row.sharePct}</td>
                 <td className="py-2.5 text-right font-mono tabular-nums text-club-green-800/75">{row.duesRate}</td>
                 <td className={`py-2.5 text-right font-mono tabular-nums font-medium ${toneHeadlineClass(netTone)}`}>{netLabel}</td>
               </tr>
+              </CardVisibilityWrapper>
             );
           })}
+          {/* MBR-VIS-5H — TOTAL ACTIVE row retains its underlying
+              all-category meaning per the directive.  Visibility
+              controls hide the presentation of individual rows but
+              do not recalculate the total; `m.activeMembers`
+              remains the authoritative source. */}
           <tr className="border-t border-club-sand">
             <td className="py-2.5 text-[11px] uppercase tracking-[0.14em] text-club-green-800/75">Total active</td>
             <td className="py-2.5 text-right font-mono tabular-nums font-medium text-club-green-900">{total.toLocaleString()}</td>
@@ -8405,6 +8453,7 @@ function MembershipCategoryMix({
         </tbody>
       </table>
     </div>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -8419,11 +8468,16 @@ function MembershipWaitlist({
   };
 }) {
   const shortfall = waitlist.depth - waitlist.targetDepth;
+  const sectionKey = "card:stewardship-dashboard:membership-waitlist";
+  const summaryKey = "tile:stewardship-dashboard:membership-waitlist-summary";
+  const agingKey = "tile:stewardship-dashboard:membership-waitlist-aging";
   return (
+    <CardVisibilityWrapper componentKey={sectionKey} cardLabel="Waitlist depth & aging">
     <div data-testid="membership-waitlist" className="mt-10">
       <div className="border-b border-club-sand pb-2">
-        <h3 className="font-serif text-2xl tracking-tight text-club-green-900">
-          Waitlist depth &amp; aging
+        <h3 className="flex items-start justify-between gap-2 font-serif text-2xl tracking-tight text-club-green-900">
+          <span>Waitlist depth &amp; aging</span>
+          <InlineCardToggle componentKey={sectionKey} cardLabel="Waitlist depth & aging" />
         </h3>
         <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-club-green-800/65">
           Approved applicants holding waitlist positions · time since application
@@ -8431,8 +8485,12 @@ function MembershipWaitlist({
       </div>
       <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
         {/* Headline tile + LRP target read */}
+        <CardVisibilityWrapper componentKey={summaryKey} cardLabel="Waitlist depth">
         <div className="rounded-lg bg-white p-6" data-testid="membership-waitlist-summary">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-club-green-800/75">Waitlist depth</div>
+          <div className="flex items-start justify-between gap-2 text-[10px] uppercase tracking-[0.22em] text-club-green-800/75">
+            <span>Waitlist depth</span>
+            <InlineCardToggle componentKey={summaryKey} cardLabel="Waitlist depth" />
+          </div>
           <div className="mt-3 font-serif text-4xl leading-none tracking-tight tabular-nums text-club-green-900">
             {waitlist.depth.toLocaleString()}
           </div>
@@ -8445,10 +8503,13 @@ function MembershipWaitlist({
             </div>
           </div>
         </div>
+        </CardVisibilityWrapper>
         {/* Aging table */}
+        <CardVisibilityWrapper componentKey={agingKey} cardLabel="Waitlist aging">
         <div className="rounded-lg bg-white p-6" data-testid="membership-waitlist-aging">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-club-green-800/75">
-            Waitlist aging
+          <div className="flex items-start justify-between gap-2 text-[10px] uppercase tracking-[0.22em] text-club-green-800/75">
+            <span>Waitlist aging</span>
+            <InlineCardToggle componentKey={agingKey} cardLabel="Waitlist aging" />
           </div>
           <table className="mt-3 w-full text-[13px]">
             <tbody>
@@ -8462,8 +8523,10 @@ function MembershipWaitlist({
             </tbody>
           </table>
         </div>
+        </CardVisibilityWrapper>
       </div>
     </div>
+    </CardVisibilityWrapper>
   );
 }
 
@@ -8473,11 +8536,14 @@ function MembershipTenureDistribution({
   distribution: ReadonlyArray<{ band: string; count: number; sharePct: string }>;
   averageYears: string;
 }) {
+  const sectionKey = "card:stewardship-dashboard:membership-tenure-distribution";
   return (
+    <CardVisibilityWrapper componentKey={sectionKey} cardLabel="Tenure distribution">
     <div data-testid="membership-tenure-distribution" className="mt-10">
       <div className="border-b border-club-sand pb-2">
-        <h3 className="font-serif text-2xl tracking-tight text-club-green-900">
-          Tenure distribution
+        <h3 className="flex items-start justify-between gap-2 font-serif text-2xl tracking-tight text-club-green-900">
+          <span>Tenure distribution</span>
+          <InlineCardToggle componentKey={sectionKey} cardLabel="Tenure distribution" />
         </h3>
         <p className="mt-1 text-[11px] uppercase tracking-[0.22em] text-club-green-800/65">
           Years of continuous membership · average {averageYears} · long-tenure share anchors governance stability
@@ -8503,6 +8569,7 @@ function MembershipTenureDistribution({
         ))}
       </div>
     </div>
+    </CardVisibilityWrapper>
   );
 }
 
