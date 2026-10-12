@@ -56,12 +56,24 @@ type Props = {
   testIdPrefix?: string;
   /** Optional aria-label override — defaults to "At a glance". */
   ariaLabel?: string;
+  /** MBR-VIS-5F — when provided, each KPI tile gets its own
+   *  independent eye-icon visibility toggle.  The componentKey is
+   *  `<tilePrefix>-<metric.key>` (e.g.
+   *  `tile:executive-opening:at-a-glance-ytd-revenue`).  Omitting
+   *  the prop preserves the pre-VIS-5F rendering exactly — the
+   *  Board widget uses this component without a prefix so it
+   *  never shows the editing chrome. */
+  tilePrefix?: string;
 };
+
+import { CardVisibilityWrapper } from "./CardVisibilityWrapper";
+import { InlineCardToggle } from "./InlineCardToggle";
 
 export function AtAGlanceBlock({
   metrics,
   testIdPrefix = "monthly-cover-at-a-glance",
   ariaLabel = "At a glance",
+  tilePrefix,
 }: Props) {
   return (
     <div
@@ -79,34 +91,59 @@ export function AtAGlanceBlock({
         data-testid={`${testIdPrefix}-grid`}
         className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 [@media(min-height:880px)]:mt-3 [@media(min-height:880px)]:gap-y-3"
       >
-        {metrics.map((m) => (
-          <div key={m.key} data-testid={`${testIdPrefix}-${m.key}`}>
-            <dt
-              data-testid={`${testIdPrefix}-${m.key}-label`}
-              className="text-[11px] uppercase tracking-[0.22em] font-medium text-club-green-900"
-            >
-              {m.label}
-            </dt>
-            <dd
-              data-testid={`${testIdPrefix}-${m.key}-value`}
-              className="mt-0.5 font-serif text-2xl leading-none tracking-tight tabular-nums text-club-green-900 [@media(min-height:880px)]:mt-1 [@media(min-height:880px)]:text-3xl"
-            >
-              {m.value}
-            </dd>
-            {/* Variance row is always rendered when the field is
-                supplied (even as an empty string) so vertical
-                rhythm matches the original cover block byte-for-
-                byte. Pass `variance: null` to skip explicitly. */}
-            {m.variance !== null && m.variance !== undefined && (
-              <dd
-                data-testid={`${testIdPrefix}-${m.key}-variance`}
-                className="mt-0.5 text-[12px] uppercase tracking-[0.18em] text-club-green-800/70 [@media(min-height:880px)]:mt-1.5"
+        {metrics.map((m) => {
+          const tileBody = (
+            <div key={m.key} data-testid={`${testIdPrefix}-${m.key}`}>
+              <dt
+                data-testid={`${testIdPrefix}-${m.key}-label`}
+                className={
+                  tilePrefix
+                    ? "flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.22em] font-medium text-club-green-900"
+                    : "text-[11px] uppercase tracking-[0.22em] font-medium text-club-green-900"
+                }
               >
-                {m.variance}
+                <span>{m.label}</span>
+                {tilePrefix && (
+                  <InlineCardToggle
+                    componentKey={`${tilePrefix}-${m.key}`}
+                    cardLabel={m.label}
+                  />
+                )}
+              </dt>
+              <dd
+                data-testid={`${testIdPrefix}-${m.key}-value`}
+                className="mt-0.5 font-serif text-2xl leading-none tracking-tight tabular-nums text-club-green-900 [@media(min-height:880px)]:mt-1 [@media(min-height:880px)]:text-3xl"
+              >
+                {m.value}
               </dd>
-            )}
-          </div>
-        ))}
+              {/* Variance row is always rendered when the field is
+                  supplied (even as an empty string) so vertical
+                  rhythm matches the original cover block byte-for-
+                  byte. Pass `variance: null` to skip explicitly. */}
+              {m.variance !== null && m.variance !== undefined && (
+                <dd
+                  data-testid={`${testIdPrefix}-${m.key}-variance`}
+                  className="mt-0.5 text-[12px] uppercase tracking-[0.18em] text-club-green-800/70 [@media(min-height:880px)]:mt-1.5"
+                >
+                  {m.variance}
+                </dd>
+              )}
+            </div>
+          );
+          // MBR-VIS-5F — opt-in per-tile visibility.  cloneElement
+          // wrapper preserves grid placement (zero DOM node).
+          return tilePrefix ? (
+            <CardVisibilityWrapper
+              key={m.key}
+              componentKey={`${tilePrefix}-${m.key}`}
+              cardLabel={m.label}
+            >
+              {tileBody}
+            </CardVisibilityWrapper>
+          ) : (
+            tileBody
+          );
+        })}
       </dl>
     </div>
   );

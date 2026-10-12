@@ -994,7 +994,10 @@ function PackageHeader({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyRepor
                 Implementation lives in `<AtAGlanceBlock>` so the
                 Board dashboard widget can render exactly the same
                 visual block (testid namespace + styling are 1:1). */}
-            <AtAGlanceBlock metrics={ataGlance} />
+            <AtAGlanceBlock
+              metrics={ataGlance}
+              tilePrefix="tile:executive-opening:at-a-glance"
+            />
           </div>
 
           {/* ----- RIGHT COLUMN — Executive Briefing -----------------
@@ -1269,10 +1272,18 @@ function OperationsBriefingCard({
         data-testid="cover-briefing-operations-kpis"
         className="mt-3 grid grid-cols-3 gap-x-4 gap-y-1 border-t border-club-sand/40 pt-2"
       >
-        {b.coverMetrics.map((m) => (
-          <div key={m.key} data-testid={`cover-briefing-operations-kpi-${m.key}`} className="flex flex-col">
-            <dt className="text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
-              {m.label}
+        {b.coverMetrics.map((m) => {
+          const componentKey = `tile:executive-opening:operations-${m.key}`;
+          return (
+          <CardVisibilityWrapper
+            key={m.key}
+            componentKey={componentKey}
+            cardLabel={m.label}
+          >
+          <div data-testid={`cover-briefing-operations-kpi-${m.key}`} className="flex flex-col">
+            <dt className="flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
+              <span>{m.label}</span>
+              <InlineCardToggle componentKey={componentKey} cardLabel={m.label} />
             </dt>
             <dd className="mt-0.5 font-serif text-base leading-tight tabular-nums text-club-green-900">
               {m.value}
@@ -1281,7 +1292,9 @@ function OperationsBriefingCard({
               {m.sub}
             </dd>
           </div>
-        ))}
+          </CardVisibilityWrapper>
+          );
+        })}
       </dl>
     </article>
   );
@@ -1359,14 +1372,21 @@ function FinancialHealthBriefingCard({
         data-testid="cover-briefing-financial-health-kpis"
         className="mt-3 grid grid-cols-4 gap-x-3 gap-y-1 border-t border-club-sand/40 pt-2"
       >
-        {b.coverMetrics.map((m) => (
-          <div
+        {b.coverMetrics.map((m) => {
+          const componentKey = `tile:executive-opening:financial-health-${m.key}`;
+          return (
+          <CardVisibilityWrapper
             key={m.key}
+            componentKey={componentKey}
+            cardLabel={m.label}
+          >
+          <div
             data-testid={`cover-briefing-financial-health-kpi-${m.key}`}
             className="flex flex-col"
           >
-            <dt className="text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
-              {m.label}
+            <dt className="flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
+              <span>{m.label}</span>
+              <InlineCardToggle componentKey={componentKey} cardLabel={m.label} />
             </dt>
             <dd className="mt-0.5 font-serif text-base leading-tight tabular-nums text-club-green-900">
               {m.value}
@@ -1375,7 +1395,9 @@ function FinancialHealthBriefingCard({
               {m.sub}
             </dd>
           </div>
-        ))}
+          </CardVisibilityWrapper>
+          );
+        })}
       </dl>
     </article>
   );
@@ -1455,14 +1477,21 @@ function CapitalProgramBriefingCard({
         data-testid="cover-briefing-capital-program-kpis"
         className="mt-3 grid grid-cols-4 gap-x-3 gap-y-1 border-t border-club-sand/40 pt-2"
       >
-        {b.coverMetrics.map((m) => (
-          <div
+        {b.coverMetrics.map((m) => {
+          const componentKey = `tile:executive-opening:capital-program-${m.key}`;
+          return (
+          <CardVisibilityWrapper
             key={m.key}
+            componentKey={componentKey}
+            cardLabel={m.label}
+          >
+          <div
             data-testid={`cover-briefing-capital-program-kpi-${m.key}`}
             className="flex flex-col"
           >
-            <dt className="text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
-              {m.label}
+            <dt className="flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.18em] text-club-green-800/70">
+              <span>{m.label}</span>
+              <InlineCardToggle componentKey={componentKey} cardLabel={m.label} />
             </dt>
             <dd className="mt-0.5 font-serif text-base leading-tight tabular-nums text-club-green-900">
               {m.value}
@@ -1471,7 +1500,9 @@ function CapitalProgramBriefingCard({
               {m.sub}
             </dd>
           </div>
-        ))}
+          </CardVisibilityWrapper>
+          );
+        })}
       </dl>
     </article>
   );

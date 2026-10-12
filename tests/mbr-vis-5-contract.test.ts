@@ -230,6 +230,46 @@ describe("MBR-VIS-5 §F — shared visibility-types module", () => {
   });
 });
 
+describe("MBR-VIS-5F §M — Executive Opening KPI tile visibility (15 tiles)", () => {
+  const body = src(BODY);
+  const atAGlance = src(path.join(REPO, "src/components/reporting/AtAGlanceBlock.tsx"));
+
+  it("AtAGlanceBlock accepts a tilePrefix prop + mounts per-tile wrapper when provided", () => {
+    expect(atAGlance).toMatch(/tilePrefix\?:\s*string/);
+    expect(atAGlance).toMatch(/<CardVisibilityWrapper/);
+    expect(atAGlance).toMatch(/<InlineCardToggle/);
+  });
+
+  it("cover renders AtAGlanceBlock with the executive-opening at-a-glance prefix", () => {
+    expect(body).toMatch(/tilePrefix="tile:executive-opening:at-a-glance"/);
+  });
+
+  it("each of the 3 briefing cards wires per-KPI componentKeys under tile:executive-opening", () => {
+    expect(body).toContain("tile:executive-opening:operations-");
+    expect(body).toContain("tile:executive-opening:financial-health-");
+    expect(body).toContain("tile:executive-opening:capital-program-");
+  });
+
+  it("each KPI dt row is flex items-start justify-between so the inline eye lands next to the label without layout shift", () => {
+    const section = body.slice(body.indexOf("cover-briefing-operations-kpis"));
+    const close = section.indexOf("CapitalProgramBriefingCard");
+    const scope = close > -1 ? section.slice(0, close) : section.slice(0, 10_000);
+    // All three briefing cards share the dt pattern.
+    expect(scope.match(/flex items-start justify-between gap-2 text-\[11px\] uppercase tracking-\[0\.18em\]/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("tile cascade works for Executive Opening via chapter:executive-opening (no card parent required)", () => {
+    const vis = src(path.join(REPO, "src/lib/reporting/monthly-package-visibility.ts"));
+    const resolver = vis.slice(vis.indexOf("function isAncestorHidden"));
+    // The existing VIS-5D tile branch already handles chapter cascade:
+    //   if (entries[`chapter:${anchor}`] === true) return true;
+    // That line governs Executive Opening tiles too — no further
+    // resolver change needed for VIS-5F.
+    expect(resolver).toMatch(/tier\s*===\s*"tile"/);
+    expect(resolver).toMatch(/entries\[`chapter:\$\{anchor\}`\]/);
+  });
+});
+
 describe("MBR-VIS-5E §L — Provider mounts on EVERY surface + editing flag drives omit-vs-mute", () => {
   const vstate = src(path.join(REPO, "src/components/reporting/VisibilityState.tsx"));
   const wrapper = src(path.join(REPO, "src/components/reporting/CardVisibilityWrapper.tsx"));
