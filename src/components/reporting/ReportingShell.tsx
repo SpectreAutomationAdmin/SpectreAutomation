@@ -445,7 +445,18 @@ export function ReportingShell({
                 extra white header band. The slot stays empty (zero
                 width via the empty span) when no portaled action
                 exists. */}
-            <div className="inline-flex shrink-0 items-center gap-3">
+            <div className="inline-flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 justify-end">
+              {/* MBR-VIS-4A — status slot, left of the action slot.
+                  Portaled client component (PublicationStatusChip)
+                  renders DRAFT · Not yet published / UNPUBLISHED
+                  CHANGES / PUBLISHED here, plus the Review Draft
+                  Preview link.  Replaces the pale-yellow full-width
+                  banner from MBR-VIS-4. */}
+              <span
+                id="reporting-shell-header-status-slot"
+                data-testid="reporting-shell-header-status-slot"
+                className="inline-flex items-center gap-2"
+              />
               <span
                 id="reporting-shell-header-action-slot"
                 data-testid="reporting-shell-header-action-slot"
@@ -771,11 +782,18 @@ function DownloadPdfButton() {
           ? "Download the frozen Board-ready PDF of this Monthly Reporting Package"
           : "Download a DRAFT PDF reflecting the current draft visibility and today's reporting data"
       }
+      // MBR-VIS-4A — matches PublishHeaderButton's BASE_CHIP +
+      // STYLE_ACTION_PRIMARY exactly: same px-3.5 / py-0.5 / font-mono
+      // / letter-spacing + optical-center fix (justify-center +
+      // [text-indent:0.18em] compensates the trailing letter-spacing
+      // push so the label sits visually centred inside the pill).
+      // Gold accent is identical to Publish — no amber/gold divergence.
       className={
-        `inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-0.5 text-[10px] uppercase tracking-[0.18em] focus:outline-none focus:ring-2 focus:ring-club-gold/50 ` +
-        (mode === "draft"
-          ? "border-amber-500/50 bg-amber-900/30 text-amber-200 hover:text-amber-100 "
-          : "border-club-gold/45 bg-club-green-900/40 text-club-gold hover:text-club-cream ") +
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
+        "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
+        "tracking-[0.18em] [text-indent:0.18em] transition " +
+        "focus:outline-none focus:ring-2 focus:ring-club-gold/50 " +
+        "border-club-gold/70 bg-club-gold/15 text-club-gold hover:bg-club-gold/25 " +
         "disabled:opacity-60 disabled:cursor-wait"
       }
     >

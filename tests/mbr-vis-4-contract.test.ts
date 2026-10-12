@@ -221,8 +221,11 @@ describe("MBR-VIS-4 §G — publication-state banners carry the matching downloa
   });
 
   it("admin page emits a publication-status-chip for Editing mode", () => {
-    expect(admin).toMatch(/data-testid="publication-status-chip"/);
-    // Three tones map to the three states.
+    // MBR-VIS-4A — the chip is now rendered via the client-side
+    // PublicationStatusChip component (portaled into the masthead),
+    // but the admin page still constructs the chip's tone+label+detail
+    // props in exactly the three tones.
+    expect(admin).toMatch(/<PublicationStatusChip/);
     expect(admin).toMatch(/tone:\s*"draft"/);
     expect(admin).toMatch(/tone:\s*"pending"/);
     expect(admin).toMatch(/tone:\s*"published"/);
@@ -230,6 +233,57 @@ describe("MBR-VIS-4 §G — publication-state banners carry the matching downloa
 
   it("Editing-mode chip surfaces an unpublished-changes label when the draft diverges", () => {
     expect(admin).toMatch(/Unpublished changes/);
+  });
+});
+
+describe("MBR-VIS-4A §I — publication chrome lives inside the masthead (no yellow banner)", () => {
+  const admin = src(ADMIN_PAGE);
+  const shell = src(path.join(REPO, "src/components/reporting/ReportingShell.tsx"));
+  const chip = src(path.join(REPO, "src/components/reporting/PublicationStatusChip.tsx"));
+  const publish = src(path.join(REPO, "src/app/app/admin/reporting/monthly/PublishHeaderButton.tsx"));
+
+  it("admin page no longer renders the pale-yellow full-width publication banner", () => {
+    // The old banner used amber-100 / amber-50 bg + full-width border.
+    // The chip is now portaled by PublicationStatusChip — no
+    // bg-amber-{100,50} should remain on the admin page itself.
+    expect(admin).not.toMatch(/bg-amber-100|bg-amber-50/);
+  });
+
+  it("ReportingShell exposes a header status slot left of the action slot", () => {
+    const statusIx = shell.indexOf("reporting-shell-header-status-slot");
+    const actionIx = shell.indexOf("reporting-shell-header-action-slot");
+    expect(statusIx).toBeGreaterThan(-1);
+    expect(actionIx).toBeGreaterThan(statusIx);
+  });
+
+  it("PublicationStatusChip portals into the status slot", () => {
+    expect(chip).toMatch(/const\s+SLOT_ID\s*=\s*"reporting-shell-header-status-slot"/);
+    expect(chip).toMatch(/createPortal/);
+  });
+
+  it("chip exposes a Review Draft Preview link in the masthead", () => {
+    expect(chip).toMatch(/Review Draft Preview/);
+    expect(chip).toMatch(/publication-status-review-draft-link/);
+  });
+
+  it("Publish button + Download Draft PDF both apply the optical-center fix", () => {
+    // Both tokens must include justify-center + [text-indent:0.18em]
+    // so the letter-spaced labels sit visually centred inside the pill.
+    expect(publish).toMatch(/justify-center/);
+    expect(publish).toMatch(/\[text-indent:0\.18em\]/);
+    expect(shell).toMatch(/justify-center/);
+    expect(shell).toMatch(/\[text-indent:0\.18em\]/);
+  });
+
+  it("Download Draft PDF styling is identical to Publish (gold tokens, no amber)", () => {
+    // The DownloadPdfButton must now use the SAME gold tokens as
+    // PublishHeaderButton's STYLE_ACTION_PRIMARY — no amber-500 /
+    // amber-900 / amber-200 anywhere in the Shell.
+    expect(shell).not.toMatch(/amber-500|amber-900|amber-200/);
+    expect(shell).toMatch(/border-club-gold\/70/);
+    expect(shell).toMatch(/bg-club-gold\/15/);
+    expect(shell).toMatch(/text-club-gold/);
+    expect(shell).toMatch(/hover:bg-club-gold\/25/);
   });
 });
 

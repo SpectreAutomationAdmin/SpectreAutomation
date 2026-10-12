@@ -50,6 +50,7 @@ import {
 import { PublishHeaderButton } from "./PublishHeaderButton";
 import { MonthlyReportingPackageBody } from "./MonthlyReportingPackageBody";
 import { PublicationStateBanner } from "@/components/reporting/PublicationStateBanner";
+import { PublicationStatusChip } from "@/components/reporting/PublicationStatusChip";
 
 // Step / board-package shell — the page no longer owns its own
 // sidebar / chapter rail. The dedicated reporting layout
@@ -406,49 +407,19 @@ export default async function MonthlyReportingPage({
           downloadPdfHref={publishedPdfHref}
         />
       )}
+      {/* MBR-VIS-4A (2026-10-11) — publication status chip now
+          portals into the dark-green masthead via the Shell's
+          header status slot (next to Publish / Download Draft PDF).
+          Replaces the previous pale-yellow full-width banner so
+          every control lives inside the single masthead. */}
       {editing && publicationChip && (
-        <div
-          data-testid="publication-status-chip"
-          data-tone={publicationChip.tone}
-          role="status"
-          className={
-            "border-b " +
-            (publicationChip.tone === "draft"
-              ? "border-amber-700/40 bg-amber-100 text-amber-900"
-              : publicationChip.tone === "pending"
-                ? "border-amber-700/40 bg-amber-50 text-amber-900"
-                : "border-club-sand bg-club-cream text-club-green-900")
-          }
-          style={{ padding: "8px 18px" }}
-        >
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <div>
-              <strong className="font-semibold uppercase tracking-wider">
-                {publicationChip.label}
-              </strong>
-              <span className="mx-2 opacity-70">·</span>
-              <span>{publicationChip.detail}</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <a
-                href={draftPreviewHref}
-                className="underline hover:no-underline"
-                data-testid="publication-status-draft-preview-link"
-              >
-                Review Draft Preview
-              </a>
-              {publishedPdfHref && (
-                <a
-                  href={publishedPreviewHref}
-                  className="underline hover:no-underline"
-                  data-testid="publication-status-published-state-link"
-                >
-                  View Published State
-                </a>
-              )}
-            </div>
-          </div>
-        </div>
+        <PublicationStatusChip
+          label={publicationChip.label}
+          detail={publicationChip.detail}
+          tone={publicationChip.tone}
+          reviewDraftHref={draftPreviewHref}
+          publishedStateHref={publishedPdfHref ? publishedPreviewHref : undefined}
+        />
       )}
       {/* MBR-VIS-4 (2026-10-11) — the MBR-VIS-3 pending-visibility
           notice has been subsumed by the publication-status chip

@@ -66,8 +66,20 @@ const SLOT_ID = "reporting-shell-header-action-slot";
 
 // Shared header-chip baseline (matches the period chip / Print Mode
 // toggle visually). Mode-specific colour tweaks are layered on top.
+//
+// MBR-VIS-4A (2026-10-11) — added `justify-center` + `[text-indent:0.18em]`
+// so the label is OPTICALLY centred inside the pill.  CSS
+// `letter-spacing: 0.18em` adds trailing space after every character
+// (including the last one), which visually pushes the string to the
+// LEFT of a symmetric-padding container.  A matching `text-indent`
+// adds equivalent space BEFORE the first character so the final
+// visual rendering is balanced.  Shared verbatim with
+// DownloadPdfButton so Publish + Download Draft PDF look identical.
 const BASE_CHIP =
-  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] transition focus:outline-none focus:ring-2 focus:ring-club-gold/50";
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
+  "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
+  "tracking-[0.18em] [text-indent:0.18em] transition " +
+  "focus:outline-none focus:ring-2 focus:ring-club-gold/50";
 
 const STYLE_ACTION_PRIMARY =
   // Solid call-to-action — used by DRAFT "Publish" and
