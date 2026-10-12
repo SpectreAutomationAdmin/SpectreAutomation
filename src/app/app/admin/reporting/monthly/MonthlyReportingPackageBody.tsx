@@ -3923,22 +3923,13 @@ function ChairsDashboard({
           the field is null (demo tenants / fresh live tenants),
           the pill is omitted — the chapter-meta line already
           declares the reporting period. */}
-      {pkg.reportingDataAsOfIso ? (
-        <p
-          className="mt-3 inline-flex items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-700"
-          data-testid="board-package-data-through"
-          role="note"
-        >
-          <span className="font-medium">Financial data through</span>
-          <time dateTime={pkg.reportingDataAsOfIso} className="font-mono">
-            {pkg.reportingDataAsOfIso}
-          </time>
-          <span className="text-stone-400">·</span>
-          <span className="text-stone-500">
-            Latest committed close for this club.
-          </span>
-        </p>
-      ) : null}
+      {/* MBR-VIS-5G (2026-10-12) — Removed the "Financial data
+          through <date>" system-facing banner.  The reporting period
+          is already communicated by the chapter heading + subtitle;
+          Board members do not need an accounting-system data-source
+          status chip in this location.  `pkg.reportingDataAsOfIso`
+          remains available in the payload for future surfaces that
+          want to consume it, but no longer renders here. */}
 
       {/* TB-HIST-12B §4-5 — tile-level Stewardship Dashboard driven
           by the ratio registry. Only renders on live tenants with a
@@ -3948,157 +3939,35 @@ function ChairsDashboard({
           their own line and are not required for the metric to
           display. */}
 
-      {/* REPORT-LIVE-1 §9-19 (2026-10-03) — Section II (Financial
-          Performance) authoritative source panel. Renders only on
-          live tenants with a committed Jan TB. Cites Revenue /
-          COGS / OpEx / Net Income directly from the January source
-          with explicit per-series availability (Actual AVAILABLE,
-          Budget SOURCE_NOT_CONNECTED, Prior Year SOURCE_NOT_LOADED).
-          No fabricated time series. */}
-      {pkg.financialPerformanceAuthoritative ? (
-        <section
-          data-testid="financial-performance-source-panel"
-          className="mt-6 border-t border-club-green-800/25 pt-5"
-        >
-          <h3 className="text-[13px] uppercase tracking-[0.18em] font-semibold text-club-green-900">
-            Financial Performance — Authoritative Source
-          </h3>
-          <p className="mt-1 font-serif italic text-[13px] text-club-green-800/85">
-            {pkg.financialPerformanceAuthoritative.sourceLabel} · as of{" "}
-            <time dateTime={pkg.financialPerformanceAuthoritative.sourceEffectiveDateIso} className="font-mono">
-              {pkg.financialPerformanceAuthoritative.sourceEffectiveDateIso}
-            </time>
-          </p>
-          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 border-t border-club-sand/40 pt-3">
-            <div data-testid="fp-source-revenue" className="flex flex-col">
-              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Revenue</dt>
-              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
-                {pkg.financialPerformanceAuthoritative.revenueDisplay}
-              </dd>
-            </div>
-            <div data-testid="fp-source-cogs" className="flex flex-col">
-              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Cost of Sales</dt>
-              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
-                {pkg.financialPerformanceAuthoritative.cogsDisplay}
-              </dd>
-            </div>
-            <div data-testid="fp-source-opex" className="flex flex-col">
-              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Operating Expenses</dt>
-              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
-                {pkg.financialPerformanceAuthoritative.opexDisplay}
-              </dd>
-            </div>
-            <div data-testid="fp-source-net-income" className="flex flex-col">
-              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Net Income</dt>
-              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
-                {pkg.financialPerformanceAuthoritative.netIncomeDisplay}
-              </dd>
-            </div>
-          </dl>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-1 text-[11px] text-stone-600">
-            <div data-testid="fp-source-actual">
-              <span className="uppercase tracking-[0.15em] text-stone-400">Actual</span>{" "}
-              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.actual}</span>
-            </div>
-            <div data-testid="fp-source-budget">
-              <span className="uppercase tracking-[0.15em] text-stone-400">Budget</span>{" "}
-              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.budget}</span>
-            </div>
-            <div data-testid="fp-source-prior-year">
-              <span className="uppercase tracking-[0.15em] text-stone-400">Prior Year</span>{" "}
-              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.priorYear}</span>
-            </div>
-          </div>
-          <p data-testid="fp-source-note" className="mt-3 font-serif italic text-[13px] leading-snug text-club-green-800/80">
-            {pkg.financialPerformanceAuthoritative.note}
-          </p>
-          <p data-testid="fp-source-dept-count" className="mt-1 text-[11px] text-stone-500">
-            Departmental P&L reconciled: {pkg.financialPerformanceAuthoritative.departmentCount} / 8 departments.
-          </p>
-        </section>
-      ) : null}
+      {/* MBR-VIS-5G (2026-10-12) — Removed two unrequested
+          presentation sections:
 
-      {pkg.stewardshipTiles && pkg.stewardshipTiles.tiles.length > 0 ? (
-        <CardVisibilityWrapper
-          componentKey="card:financial-performance:tile-availability"
-          cardLabel="Stewardship — Tile-Level Availability"
-        >
-        <section
-          data-testid="stewardship-tiles"
-          className="mt-6 border-t border-club-green-800/25 pt-5"
-        >
-          <h3 className="text-[13px] uppercase tracking-[0.18em] font-semibold text-club-green-900">
-            Stewardship — Tile-Level Availability
-            <InlineCardToggle
-              componentKey="card:financial-performance:tile-availability"
-              cardLabel="Stewardship — Tile-Level Availability"
-            />
-          </h3>
-          <p className="mt-2 max-w-[760px] font-serif italic text-[14px] leading-snug text-club-green-800/85">
-            {pkg.stewardshipTiles.footerNote}
-          </p>
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {pkg.stewardshipTiles.tiles.map((t) => {
-              // MBR-VIS-5D — per-tile visibility.  The wrapper uses
-              // the VIS-5C cloneElement pattern (zero DOM nodes), so
-              // the article remains the direct grid child and the
-              // existing 3-column layout is preserved exactly.
-              const tileKey = `tile:financial-performance:${t.key}`;
-              return (
-              <CardVisibilityWrapper
-                key={t.key}
-                componentKey={tileKey}
-                cardLabel={t.name}
-              >
-              <article
-                data-testid={`stewardship-tile-${t.key}`}
-                data-availability={t.metricAvailability}
-                className="rounded border border-stone-200 bg-white px-3 py-2.5"
-              >
-                {/* MBR-VIS-5D — label row carries the inline eye at
-                    top-right via flex-justify-between.  No absolute
-                    positioning, no change to tile height or padding. */}
-                <div className="flex items-start justify-between gap-2 text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">
-                  <span>{t.name}</span>
-                  <InlineCardToggle
-                    componentKey={tileKey}
-                    cardLabel={t.name}
-                  />
-                </div>
-                <div
-                  data-testid={`stewardship-tile-${t.key}-metric`}
-                  className="mt-1 font-serif text-[20px] leading-none tabular-nums text-club-green-900"
-                >
-                  {t.metricDisplay}
-                </div>
-                <div className="mt-1 text-[11px] text-stone-500">
-                  {t.formula}
-                </div>
-                {t.metricAvailability !== "AVAILABLE" ? (
-                  <div
-                    data-testid={`stewardship-tile-${t.key}-reason`}
-                    className="mt-1 text-[11px] italic text-stone-500"
-                  >
-                    {t.metricReason}
-                  </div>
-                ) : null}
-                <div className="mt-2 flex items-baseline gap-2 border-t border-stone-100 pt-1.5 text-[11px]">
-                  <span className="uppercase tracking-[0.15em] text-stone-400">Target</span>
-                  <span
-                    data-testid={`stewardship-tile-${t.key}-target`}
-                    className="tabular-nums text-stone-600"
-                  >
-                    {t.targetDisplay}
-                  </span>
-                </div>
-              </article>
-              </CardVisibilityWrapper>
-              );
-            })}
-          </div>
-        </section>
-        </CardVisibilityWrapper>
-      ) : null}
+            1. "Financial Performance — Authoritative Source" panel
+               (REPORT-LIVE-1 §9-19) that cited Revenue / COGS /
+               OpEx / Net Income directly from the Jan TB source
+               with explicit per-series availability indicators.
+               The founder confirmed this diagnostic was not part
+               of the approved chapter presentation.
+
+            2. "Stewardship — Tile-Level Availability" grid
+               (TB-HIST-12B §4-5) with 11 diagnostic tiles driven
+               by the ratio registry.  Introduced without founder
+               approval and removed from the Board package.
+
+          Underlying financial data remains intact:
+            * `pkg.financialPerformanceAuthoritative` — still
+              resolved and available in the payload for callers
+              that need it, just not rendered here.
+            * `pkg.stewardshipTiles` — the ratio registry still
+              computes every tile; the data flows into the
+              Operating + Capital Stewardship Scorecards and the
+              legitimate chart cards below.
+
+          The 11 `tile:financial-performance:<key>` visibility
+          records (from MBR-VIS-5D) are preserved in
+          `MonthlyPackageVisibility` for auditability but no longer
+          control any rendered component.  Any pending draft edits
+          to these keys are inert. */}
 
       {/* Chapter description — single editorial sentence mirroring
           Saguaro p03's `.sec-note` one-liner. Italicized per the

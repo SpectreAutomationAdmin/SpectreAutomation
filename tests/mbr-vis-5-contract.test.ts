@@ -327,18 +327,27 @@ describe("MBR-VIS-5D §K — individual Stewardship KPI tile toggles", () => {
     expect(wrapper).toMatch(/tier\s*===\s*"tile"/);
   });
 
-  it("body wires every tile with componentKey tile:financial-performance:${t.key}", () => {
-    expect(body).toMatch(/tile:financial-performance:\$\{t\.key\}/);
-    // Each tile wrapped by the shared cloneElement-based wrapper
-    // so the 3-column grid stays untouched.
-    const tileBlock = body.slice(body.indexOf("stewardshipTiles.tiles.map"));
-    const end = tileBlock.indexOf("</CardVisibilityWrapper>");
-    expect(end).toBeGreaterThan(-1);
-    const scope = tileBlock.slice(0, end + 100);
-    expect(scope).toMatch(/<CardVisibilityWrapper/);
-    expect(scope).toMatch(/<InlineCardToggle/);
-    // No absolute-positioned eye on the tile — the toggle rides a
-    // flex row to preserve the pre-VIS-5D geometry.
-    expect(scope).toMatch(/flex items-start justify-between/);
+  it("Stewardship — Tile-Level Availability grid has been REMOVED from the body (VIS-5G)", () => {
+    // MBR-VIS-5G retired the entire 11-tile diagnostic grid from
+    // the Financial Performance chapter.  The visibility
+    // infrastructure (the `tile:` tier + its cascade) is still
+    // intact — the records are preserved for auditability.  But
+    // the DOM render no longer exists.
+    //
+    // The retired title/comment strings may still appear inside
+    // the VIS-5G removal comment that documents the change.  Narrow
+    // each assertion to code tokens that only exist in live JSX,
+    // not in free-text comments.
+    expect(body).not.toMatch(/stewardshipTiles\.tiles\.map/);
+    expect(body).not.toMatch(/data-testid="stewardship-tiles"/);
+    expect(body).not.toMatch(/tile:financial-performance:\$\{t\.key\}/);
+    // The authoritative-source panel's data-testid + its mapped
+    // service fields are the sure code-only tokens.
+    expect(body).not.toMatch(/data-testid="financial-performance-source-panel"/);
+    expect(body).not.toMatch(/financialPerformanceAuthoritative\.revenueDisplay/);
+    expect(body).not.toMatch(/financialPerformanceAuthoritative\.cogsDisplay/);
+    // The reportingDataAsOfIso banner is gone — the data-testid is
+    // the code-only token.
+    expect(body).not.toMatch(/data-testid="board-package-data-through"/);
   });
 });
