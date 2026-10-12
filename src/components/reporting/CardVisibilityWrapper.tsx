@@ -40,12 +40,10 @@ export type CardVisibilityWrapperProps = {
   period?: { reportingYear: number; reportingMonth: number };
   visibility?: MonthlyBodyVisibilityConfig;
   publishedVisibility?: MonthlyBodyVisibilityConfig;
-  /** When true (default), the wrapper renders a floating toggle
-   *  overlay in the top-right of the card.  When false, the
-   *  wrapper only applies the hidden/opacity/render-decision logic
-   *  and the caller is responsible for mounting its own toggle in
-   *  the card header (e.g. the Stewardship Scorecard renders its
-   *  toggle inline in the dark-green header band). */
+  /** MBR-VIS-5A — defaults to FALSE.  The chip overlay was retired;
+   *  component toggles now live inside each sub-card's own title
+   *  via <InlineCardToggle>.  Set to true only if a caller needs
+   *  the legacy icon overlay (used nowhere in-tree today). */
   renderInlineToggle?: boolean;
   /** Optional class name applied to the wrapper div. */
   className?: string;
@@ -87,7 +85,7 @@ export function CardVisibilityWrapper({
   period,
   visibility,
   publishedVisibility,
-  renderInlineToggle = true,
+  renderInlineToggle = false,
   className,
   children,
 }: CardVisibilityWrapperProps) {
@@ -124,18 +122,22 @@ export function CardVisibilityWrapper({
         transition: "opacity 150ms linear",
       }}
     >
+      {/* MBR-VIS-5A — visible chrome retired.  Component visibility
+          toggles are now rendered INLINE inside each sub-card's own
+          title via <InlineCardToggle> (icon only, no chip).  The
+          wrapper still owns the cascade/opacity/hidden-state render
+          decision, so the frozen snapshot + draft/published parity
+          continue to resolve through the single `MonthlyPackageVisibility`
+          source.  `renderInlineToggle` is retained for callers that
+          need it; defaults to false (no visible overlay).
+          Suppresses the redundant control on single-component
+          chapters per the directive — the chapter toggle on the
+          panel's h2 is the only visible control. */}
       {editing && period && renderInlineToggle && (
-        <div
+        <span
           data-testid={`card-visibility-overlay-${componentKey}`}
-          className="mb-2 inline-flex max-w-full flex-wrap items-center gap-1.5 rounded border border-club-sand bg-club-cream/90 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-club-green-900"
+          className="ml-2 inline-flex items-center align-middle"
         >
-          <span className="font-mono text-club-gold">Card</span>
-          <span className="opacity-60" aria-hidden="true">·</span>
-          <span className="truncate">{cardLabel}</span>
-          <span className="opacity-60" aria-hidden="true">·</span>
-          <span className="font-semibold">
-            {explicitHidden ? "Hidden" : "Visible"}
-          </span>
           <VisibilityToggle
             reportingYear={period.reportingYear}
             reportingMonth={period.reportingMonth}
@@ -145,7 +147,7 @@ export function CardVisibilityWrapper({
             size="sm"
             label={`${explicitHidden ? "Show" : "Hide"} ${cardLabel} in published report`}
           />
-        </div>
+        </span>
       )}
       {children}
     </div>

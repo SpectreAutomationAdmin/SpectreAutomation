@@ -68,6 +68,11 @@ type VisibilityStateContextValue = {
   /** Last toggle error, cleared on next successful write.  Rendered
    *  by the toggle button's title / aria-label on hover. */
   lastError: string | null;
+  /** MBR-VIS-5A — reporting period exposed via context so leaf
+   *  toggles can self-identify the (year, month) without threading
+   *  props through 11 panel components.  Null when the Provider
+   *  wasn't given a period. */
+  period: { reportingYear: number; reportingMonth: number } | null;
 };
 
 const VisibilityStateContext = createContext<VisibilityStateContextValue | null>(null);
@@ -92,10 +97,14 @@ function isAncestorHiddenIn(
 export function VisibilityStateProvider({
   initialDraft,
   initialPublished,
+  period,
   children,
 }: {
   initialDraft: VisibilityEntries | undefined;
   initialPublished: VisibilityEntries | undefined;
+  /** MBR-VIS-5A — reporting period exposed via context so inline
+   *  toggles embedded in panel h2s self-identify without threading. */
+  period?: { reportingYear: number; reportingMonth: number };
   children: ReactNode;
 }) {
   const [entries, setEntries] = useState<VisibilityEntries>(() => ({
@@ -166,8 +175,9 @@ export function VisibilityStateProvider({
       isPendingPublish,
       setHidden,
       lastError,
+      period: period ?? null,
     }),
-    [entries, publishedEntries, explicitHidden, effectiveHidden, isPendingPublish, setHidden, lastError],
+    [entries, publishedEntries, explicitHidden, effectiveHidden, isPendingPublish, setHidden, lastError, period],
   );
 
   return (

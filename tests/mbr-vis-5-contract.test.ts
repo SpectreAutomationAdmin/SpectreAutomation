@@ -30,30 +30,51 @@ function src(p: string): string {
   return readFileSync(p, "utf8");
 }
 
-describe("MBR-VIS-5 §A — ChapterTitleToggle shared component", () => {
+describe("MBR-VIS-5A §A — ChapterTitleToggle is a retired no-op shell", () => {
+  // The founder's VIS-5A review retired the "CHAPTER X · TITLE ·
+  // VISIBLE" chip entirely.  Chapter visibility toggles now render
+  // inline inside each panel's own h2 via <InlineChapterToggle>.
+  // The old component is kept as a no-op for API stability so the
+  // body import does not break.
   const code = src(CHAPTER_TOGGLE);
+
+  it("exports a function that returns null", () => {
+    expect(code).toMatch(/export function ChapterTitleToggle/);
+    expect(code).toMatch(/return null/);
+  });
+
+  it("does not render the retired CHAPTER · TITLE · VISIBLE chip", () => {
+    expect(code).not.toMatch(/data-testid={`chapter-title-toggle-/);
+    expect(code).not.toMatch(/Chapter \$\{chapterNumber\}/);
+    expect(code).not.toMatch(/VisibilityToggle/);
+  });
+});
+
+describe("MBR-VIS-5A §A1 — InlineChapterToggle is the active chapter toggle", () => {
+  const INLINE_CHAPTER = path.join(REPO, "src/components/reporting/InlineChapterToggle.tsx");
+  const code = src(INLINE_CHAPTER);
 
   it("exists and is a client component", () => {
     expect(code).toMatch(/"use client"/);
   });
 
-  it("imports MonthlyBodyVisibilityConfig from the shared types module", () => {
-    expect(code).toMatch(/visibility-types/);
-  });
-
-  it("uses the client-side VisibilityState context", () => {
+  it("uses the client-side VisibilityState context + reads period from it", () => {
     expect(code).toMatch(/useVisibilityState/);
+    expect(code).toMatch(/ctx\.period/);
   });
 
-  it("renders a chip with the chapter number + title + toggle (no absolute positioning)", () => {
-    expect(code).toMatch(/data-testid={`chapter-title-toggle-\$\{anchorId\}`}/);
-    expect(code).not.toMatch(/position:\s*["']absolute["']/);
-    expect(code).not.toMatch(/position:\s*"absolute"/);
-    expect(code).toMatch(/<VisibilityToggle/);
+  it("renders an inline eye + Visible/Hidden text with no chip background", () => {
+    expect(code).toMatch(/inline-chapter-toggle-\$\{anchorId\}/);
+    expect(code).toMatch(/Hidden/);
+    expect(code).toMatch(/Visible/);
+    // No chip background, no border — the toggle inherits from the
+    // surrounding typography.
+    expect(code).not.toMatch(/bg-club-cream/);
+    expect(code).not.toMatch(/\brounded\b/);
   });
 
-  it("gates on editing + period being present", () => {
-    expect(code).toMatch(/if\s*\(!editing\s*\|\|\s*!period\)\s*return\s*null/);
+  it("gates on context + period being present (returns null outside Provider)", () => {
+    expect(code).toMatch(/if\s*\(!ctx\s*\|\|\s*!ctx\.period\)\s*return\s*null/);
   });
 });
 
@@ -83,49 +104,70 @@ describe("MBR-VIS-5 §B — CardVisibilityWrapper shared component", () => {
     expect(code).toMatch(/opacity:\s*editing\s*&&\s*effectiveHidden\s*\?\s*0\.55\s*:\s*1/);
   });
 
-  it("renders an inline toggle overlay by default, and skips it when renderInlineToggle=false", () => {
-    expect(code).toMatch(/renderInlineToggle\s*=\s*true/);
+  it("defaults renderInlineToggle to FALSE (VIS-5A — chip is retired; icons live inline in panel titles)", () => {
+    expect(code).toMatch(/renderInlineToggle\s*=\s*false/);
     expect(code).toMatch(/renderInlineToggle\s*&&/);
   });
 });
 
-describe("MBR-VIS-5 §C — ChapterSection no longer uses absolute toggle positioning", () => {
+describe("MBR-VIS-5A §C — chapter toggle integration", () => {
   const code = src(BODY);
 
-  it("imports ChapterTitleToggle from the shared module", () => {
-    expect(code).toMatch(/import\s*\{\s*ChapterTitleToggle\s*\}\s*from\s*"@\/components\/reporting\/ChapterTitleToggle"/);
+  it("imports InlineChapterToggle from the shared module", () => {
+    expect(code).toMatch(/import\s*\{\s*InlineChapterToggle\s*\}\s*from\s*"@\/components\/reporting\/InlineChapterToggle"/);
   });
 
-  it("ChapterSectionInner mounts <ChapterTitleToggle> as its first child", () => {
-    const sect = code.slice(code.indexOf("function ChapterSectionInner"));
-    const close = sect.indexOf("export function MonthlyReportingPackageBody");
-    const body = sect.slice(0, close);
-    expect(body).toMatch(/<ChapterTitleToggle/);
-  });
-
-  it("the chapter-toggle-wrap absolute div has been removed", () => {
+  it("ChapterSection no longer uses absolute positioning anywhere", () => {
     const sect = code.slice(code.indexOf("function ChapterSectionInner"));
     const close = sect.indexOf("export function MonthlyReportingPackageBody");
     const body = sect.slice(0, close);
     expect(body).not.toMatch(/data-testid={`chapter-toggle-wrap/);
-    // The ChapterSection body must not use position: absolute at all
-    // (the inner toggle might inherit from parent via the chip).
     expect(body).not.toMatch(/position:\s*"absolute"/);
+  });
+
+  it("each of the 11 single-component panels mounts <InlineChapterToggle> in its h2", () => {
+    const panels: Array<{ title: string; anchorId: string }> = [
+      { title: "soa", anchorId: "statement-of-activities" },
+      { title: "cf", anchorId: "capital-fund" },
+      { title: "cpt", anchorId: "capital-projects" },
+      { title: "sofp", anchorId: "financial-position" },
+      { title: "ara", anchorId: "ar-aging" },
+      { title: "os", anchorId: "operating-statistics" },
+      { title: "dpl", anchorId: "departmental-p-and-l" },
+      { title: "mws", anchorId: "weather-and-utilization" },
+      { title: "dpa", anchorId: "payroll-analysis" },
+      { title: "fbs", anchorId: "f-and-b-statistics" },
+      { title: "inv", anchorId: "inventory-analysis" },
+    ];
+    for (const p of panels) {
+      // Each panel's h2 must contain <InlineChapterToggle anchorId="…">
+      expect(code).toContain(`anchorId="${p.anchorId}"`);
+    }
+  });
+
+  it("the multi-component chapters II + III mount the toggle via SectionHeading props", () => {
+    expect(code).toContain(`chapterAnchorId="financial-performance"`);
+    expect(code).toContain(`chapterAnchorId="stewardship-dashboard"`);
   });
 });
 
-describe("MBR-VIS-5 §D — StewardshipScorecardCard card toggle is inline (no absolute)", () => {
+describe("MBR-VIS-5A §D — StewardshipScorecardCard uses icon-only InlineCardToggle beside title", () => {
   const code = src(BODY);
 
-  it("the card-toggle-wrap is now a flex child, not absolute-positioned", () => {
+  it("the retired card-toggle-wrap chip has been removed from the dark-green header", () => {
     const card = code.slice(code.indexOf("function StewardshipScorecardCard"));
     const close = card.indexOf("\n// ============================================================================");
-    const body = close > -1 ? card.slice(0, close) : card.slice(0, 3000);
-    // No absolute positioning on the card toggle wrap.
-    const toggleBlock = body.slice(body.indexOf("card-toggle-wrap"), body.indexOf("card-toggle-wrap") + 800);
-    expect(toggleBlock).not.toMatch(/position:\s*["']absolute["']/);
-    // Lives inside an inline-flex cluster with the legend.
-    expect(toggleBlock).toMatch(/inline-flex/);
+    const body = close > -1 ? card.slice(0, close) : card.slice(0, 5000);
+    expect(body).not.toMatch(/card-toggle-wrap/);
+    expect(body).not.toMatch(/cardExplicitHidden\s*\?\s*"Hidden"\s*:\s*"Visible"/);
+  });
+
+  it("mounts <InlineCardToggle> next to the scorecard title with tone='cream'", () => {
+    const card = code.slice(code.indexOf("function StewardshipScorecardCard"));
+    const close = card.indexOf("\n// ============================================================================");
+    const body = close > -1 ? card.slice(0, close) : card.slice(0, 5000);
+    expect(body).toMatch(/<InlineCardToggle/);
+    expect(body).toMatch(/tone="cream"/);
   });
 });
 

@@ -50,6 +50,8 @@ import {
 } from "@/components/reporting/VisibilityState";
 import { ChapterTitleToggle } from "@/components/reporting/ChapterTitleToggle";
 import { CardVisibilityWrapper } from "@/components/reporting/CardVisibilityWrapper";
+import { InlineChapterToggle } from "@/components/reporting/InlineChapterToggle";
+import { InlineCardToggle } from "@/components/reporting/InlineCardToggle";
 
 // ============================================================================
 // MonthlyReportingPackageBody — the shared report body component
@@ -250,22 +252,19 @@ function ChapterSectionInner({
           transition: "opacity 150ms linear",
         }}
       >
-        {/* MBR-VIS-5 — chapter visibility chip renders INLINE at the
-            top of the section, LEFT-aligned to sit immediately
-            above the chapter heading.  Replaces the previous
-            absolute-positioned `top: 4, right: 4` chip that
-            collided with chapter header elements (e.g. the
-            Statement of Activities "Statement No. IV" + document
-            chip in the right column).  No absolute positioning; the
-            chip wraps gracefully on narrow viewports. */}
+        {/* MBR-VIS-5A — the ChapterTitleToggle chip is a retired
+            no-op (returns null).  Chapter visibility toggles now
+            render INLINE inside each panel's own h2 via
+            <InlineChapterToggle>.  The call is retained for API
+            stability + regression-test parity; the section wrapper
+            keeps its hidden-state cascade (opacity dimming,
+            non-editing full-collapse) via the state above. */}
         <ChapterTitleToggle
           anchorId={anchorId}
           chapterNumber={chapterNumber}
           chapterLabel={chapterLabel}
           editing={editing}
           period={period}
-          visibility={visibility}
-          publishedVisibility={publishedVisibility}
         />
         {children}
       </section>
@@ -659,6 +658,7 @@ export function MonthlyReportingPackageBody({
       <VisibilityStateProvider
         initialDraft={vis?.entries}
         initialPublished={pub?.entries}
+        period={period}
       >
         {bodyInner}
       </VisibilityStateProvider>
@@ -2781,6 +2781,17 @@ function StewardshipScorecardCard({
             style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.2 }}
           >
             {data.title}
+            {/* MBR-VIS-5A — icon-only card toggle, inline beside the
+                title.  No chip, no border, no "VISIBLE/HIDDEN" text.
+                Only mounts when the card declares a cardKey and the
+                caller passes editing/period. */}
+            {cardKey && (
+              <InlineCardToggle
+                componentKey={cardComponentKey}
+                cardLabel={data.title}
+                tone="cream"
+              />
+            )}
           </h3>
           <p
             data-testid={`${testid}-subtitle`}
@@ -2790,11 +2801,9 @@ function StewardshipScorecardCard({
             {data.subtitle}
           </p>
         </div>
-        {/* Right cluster — Saguaro-style status legend + MBR-VIS-5
-            card visibility toggle.  Both inline, no absolute
-            positioning.  Legend keeps its exact pre-VIS-5 look;
-            toggle appears only in editing mode and only when the
-            card has a declared cardKey. */}
+        {/* Right cluster — Saguaro-style status legend only.  The
+            card-level visibility toggle was moved beside the title
+            per MBR-VIS-5A (eye icon only, no chip). */}
         <div className="flex shrink-0 flex-wrap items-center gap-3 pl-3">
           <div
             data-testid={`${testid}-legend`}
@@ -2822,23 +2831,6 @@ function StewardshipScorecardCard({
               </span>
             ))}
           </div>
-          {editing && period && cardKey && (
-            <div
-              data-testid={`${testid}-card-toggle-wrap`}
-              className="inline-flex items-center gap-1.5 rounded border border-club-cream/30 bg-club-green-800/60 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-club-cream"
-            >
-              <span>{cardExplicitHidden ? "Hidden" : "Visible"}</span>
-              <VisibilityToggle
-                reportingYear={period.reportingYear}
-                reportingMonth={period.reportingMonth}
-                componentKey={cardComponentKey}
-                hidden={cardExplicitHidden}
-                publishedHidden={cardPublishedHidden}
-                size="sm"
-                label={`${cardExplicitHidden ? "Show" : "Hide"} ${data.title} card in published report`}
-              />
-            </div>
-          )}
         </div>
       </header>
 
@@ -3782,6 +3774,8 @@ function ChairsDashboard({
         eyebrow={`${pkg.club.name} · Visual Summary`}
         title="Financial Performance, Illustrated"
         rightChip={<VisualSummaryChip />}
+        chapterAnchorId="financial-performance"
+        chapterLabel="Financial Performance"
       />
 
       {/* Chapter metadata — single editorial reference line mirroring
@@ -4757,6 +4751,8 @@ function StewardshipKpiDashboard({
       <SectionHeading
         eyebrow={`${pkg.club.name} · KPI Dashboard`}
         title="Stewardship KPI Dashboard"
+        chapterAnchorId="stewardship-dashboard"
+        chapterLabel="Stewardship Dashboard"
       />
 
       <div
@@ -5329,6 +5325,7 @@ function StatementOfActivitiesPanel({
             className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900"
           >
             {soa.title}
+            <InlineChapterToggle anchorId="statement-of-activities" chapterLabel="Statement of Activities" />
           </h2>
           <p
             data-testid="soa-period"
@@ -5612,6 +5609,7 @@ function CapitalFundPanel({
             className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900"
           >
             {cf.title}
+            <InlineChapterToggle anchorId="capital-fund" chapterLabel="Capital Fund" />
           </h2>
           <p
             data-testid="cf-period"
@@ -5996,6 +5994,7 @@ function CapitalProjectTrackerPanel({
             className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900"
           >
             {cpt.title}
+            <InlineChapterToggle anchorId="capital-projects" chapterLabel="Capital Projects" />
           </h2>
           <p
             data-testid="cpt-period"
@@ -6370,6 +6369,7 @@ function StatementOfFinancialPositionPanel({
           </p>
           <h2 data-testid="sofp-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {sofp.title}
+            <InlineChapterToggle anchorId="financial-position" chapterLabel="Statement of Financial Position" />
           </h2>
           <p data-testid="sofp-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {sofp.periodLabel}
@@ -6744,6 +6744,7 @@ function AccountsReceivableAgingPanel({
           </p>
           <h2 data-testid="ara-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {ara.title}
+            <InlineChapterToggle anchorId="ar-aging" chapterLabel="AR Aging" />
           </h2>
           <p data-testid="ara-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {ara.periodLabel}
@@ -7008,6 +7009,7 @@ function OperatingStatisticsPanel({
           </p>
           <h2 data-testid="os-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {os.title}
+            <InlineChapterToggle anchorId="operating-statistics" chapterLabel="Operating Statistics" />
           </h2>
           <p data-testid="os-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {os.periodLabel}
@@ -7169,6 +7171,7 @@ function DepartmentalPLSummaryPanel({
           </p>
           <h2 data-testid="dpl-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {dpl.title}
+            <InlineChapterToggle anchorId="departmental-p-and-l" chapterLabel="Departmental P&L" />
           </h2>
           <p data-testid="dpl-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {dpl.periodLabel}
@@ -7529,6 +7532,7 @@ function MonthlyWeatherSummaryPanel({
           </p>
           <h2 data-testid="mws-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {mws.title}
+            <InlineChapterToggle anchorId="weather-and-utilization" chapterLabel="Weather & Utilization" />
           </h2>
           <p data-testid="mws-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {mws.periodLabel}
@@ -7844,6 +7848,7 @@ function DepartmentalPayrollAnalysisPanel({
           </p>
           <h2 data-testid="dpa-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {dpa.title}
+            <InlineChapterToggle anchorId="payroll-analysis" chapterLabel="Payroll Analysis" />
           </h2>
           <p data-testid="dpa-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {dpa.periodLabel}
@@ -8011,6 +8016,7 @@ function FoodBeverageStatisticsPanel({
           </p>
           <h2 data-testid="fbs-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {fbs.title}
+            <InlineChapterToggle anchorId="f-and-b-statistics" chapterLabel="F&B Statistics" />
           </h2>
           <p data-testid="fbs-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {fbs.periodLabel}
@@ -8202,6 +8208,7 @@ function InventoryAnalysisPanel({
           </p>
           <h2 data-testid="inv-title" className="font-serif text-[34px] leading-[1.05] tracking-tight text-club-green-900">
             {inv.title}
+            <InlineChapterToggle anchorId="inventory-analysis" chapterLabel="Inventory Analysis" />
           </h2>
           <p data-testid="inv-period" className="uppercase tracking-[0.22em] text-[10.5px] text-club-green-800/65">
             {inv.periodLabel}
@@ -8494,8 +8501,18 @@ function MembershipTenureDistribution({
 // position seals the hierarchy: Club Name (cover) → Executive
 // Headline (this) → KPI Values (below).
 function SectionHeading({
-  eyebrow, title, rightChip, pillarLabel,
-}: { eyebrow: string; title: string; rightChip?: React.ReactNode; pillarLabel?: string }) {
+  eyebrow, title, rightChip, pillarLabel, chapterAnchorId, chapterLabel,
+}: {
+  eyebrow: string;
+  title: string;
+  rightChip?: React.ReactNode;
+  pillarLabel?: string;
+  /** MBR-VIS-5A — anchor + label for the inline chapter visibility
+   *  toggle rendered beside the h2 title.  Only mounts the toggle
+   *  when both are present; non-editing surfaces render null. */
+  chapterAnchorId?: string;
+  chapterLabel?: string;
+}) {
   // Right-side metadata stack — print-TOC convention adapted from the
   // Saguaro reference (test-results/cmp-saguaro-p11.png). When a
   // chapter declares its pillar via `pillarLabel`, we render a quiet
@@ -8512,6 +8529,12 @@ function SectionHeading({
         </div>
         <h2 className="mt-3 font-serif text-5xl leading-[1.05] tracking-tight text-club-green-900">
           {title}
+          {chapterAnchorId && chapterLabel && (
+            <InlineChapterToggle
+              anchorId={chapterAnchorId}
+              chapterLabel={chapterLabel}
+            />
+          )}
         </h2>
       </div>
       {hasRightStack && (
