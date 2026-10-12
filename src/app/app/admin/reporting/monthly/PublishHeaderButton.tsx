@@ -214,7 +214,12 @@ export function PublishHeaderButton({
         aria-busy={isPending || undefined}
         title="Publish this Monthly Reporting Package"
       >
-        {isPending ? "Publishing…" : "Publish"}
+        {/* MBR-VIS-4B — label wrapped in a <span> so the pill's
+            shared `[&>*]:translate-y-[0.5px]` selector catches it.
+            CSS `> *` targets element children only; a bare text
+            node is skipped and the optical-centering fix would
+            otherwise never land on this button. */}
+        <span>{isPending ? "Publishing…" : "Publish"}</span>
       </button>
     );
   } else if (status === "PUBLISHED" || status === "SENT") {
@@ -231,7 +236,7 @@ export function PublishHeaderButton({
           aria-busy={isPending || undefined}
           title="Overwrite the snapshot for this reporting period"
         >
-          {isPending ? "Overwriting…" : "Overwrite Package"}
+          <span>{isPending ? "Overwriting…" : "Overwrite Package"}</span>
         </button>
       );
     } else {
@@ -244,7 +249,7 @@ export function PublishHeaderButton({
           aria-label="This is the version currently live to the Board"
           title="This is the version currently live to the Board"
         >
-          Published
+          <span>Published</span>
         </span>
       );
     }
@@ -264,7 +269,7 @@ export function PublishHeaderButton({
         aria-busy={isPending || undefined}
         title="Overwrite this historical reporting period (the live Board package will not change)"
       >
-        {isPending ? "Overwriting…" : "Overwrite Package"}
+        <span>{isPending ? "Overwriting…" : "Overwrite Package"}</span>
       </button>
     );
   }
