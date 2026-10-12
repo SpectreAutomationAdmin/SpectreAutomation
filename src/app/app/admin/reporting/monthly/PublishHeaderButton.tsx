@@ -75,10 +75,22 @@ const SLOT_ID = "reporting-shell-header-action-slot";
 // adds equivalent space BEFORE the first character so the final
 // visual rendering is balanced.  Shared verbatim with
 // DownloadPdfButton so Publish + Download Draft PDF look identical.
+//
+// MBR-VIS-4B (2026-10-11) — added `[&>*]:translate-y-[0.5px]` to
+// correct an optical VERTICAL skew.  The bounding-box centre of
+// the label span was mathematically centred (dy=0), but
+// Range.getBoundingClientRect() on the glyph ink showed the actual
+// visible letters centred 0.5px ABOVE the pill's true vertical
+// midpoint (staging measurement: pill cy=28.0 vs glyph cy=27.5).
+// Shifting every direct child DOWN by 0.5px via `transform`
+// honours sub-pixel precision and leaves the pill's padding,
+// border, and dimensions untouched.  Shared verbatim across every
+// masthead pill.
 const BASE_CHIP =
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
   "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
   "tracking-[0.18em] [text-indent:0.18em] transition " +
+  "[&>*]:translate-y-[0.5px] " +
   "focus:outline-none focus:ring-2 focus:ring-club-gold/50";
 
 const STYLE_ACTION_PRIMARY =

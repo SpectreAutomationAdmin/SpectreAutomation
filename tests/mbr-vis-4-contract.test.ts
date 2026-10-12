@@ -287,6 +287,38 @@ describe("MBR-VIS-4A §I — publication chrome lives inside the masthead (no ye
   });
 });
 
+describe("MBR-VIS-4B §J — optical vertical centering of visible glyphs", () => {
+  const chip = src(path.join(REPO, "src/components/reporting/PublicationStatusChip.tsx"));
+  const shell = src(path.join(REPO, "src/components/reporting/ReportingShell.tsx"));
+  const publish = src(path.join(REPO, "src/app/app/admin/reporting/monthly/PublishHeaderButton.tsx"));
+
+  it("all three pills apply a shared 0.5px downward translate on direct children", () => {
+    // Compensates the font-mono upper-ascender gap that put the
+    // visible glyphs 0.5px above the pill's true vertical centre
+    // (measured on staging: pill cy=28.0 vs glyph cy=27.5).
+    const token = "[&>*]:translate-y-[0.5px]";
+    expect(chip).toContain(token);
+    expect(shell).toContain(token);
+    expect(publish).toContain(token);
+  });
+
+  it("pill padding is unchanged — no asymmetric pt/pb hacks that would change outer height", () => {
+    // The fix is a sub-pixel transform on children, NOT a padding
+    // shift.  Pill height stays at exactly the pre-VIS-4B value.
+    // (pt-[3px] / pb-[1px] attempts would have overshot by shifting
+    // 1px when only 0.5px was needed.)
+    expect(chip).not.toMatch(/pt-\[3px\]/);
+    expect(chip).not.toMatch(/pb-\[1px\]/);
+    expect(publish).not.toMatch(/pt-\[3px\]/);
+    expect(publish).not.toMatch(/pb-\[1px\]/);
+    // Shell contains unrelated pt-/pb- utilities elsewhere, so
+    // narrow this check to the DownloadPdfButton function body.
+    const dlFn = shell.slice(shell.indexOf("function DownloadPdfButton"));
+    expect(dlFn).not.toMatch(/pt-\[3px\]/);
+    expect(dlFn).not.toMatch(/pb-\[1px\]/);
+  });
+});
+
 describe("MBR-VIS-4 §H — publish lifecycle freezes BOTH financials and visibility", () => {
   const code = src(LIFECYCLE);
 

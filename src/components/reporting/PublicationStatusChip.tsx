@@ -44,10 +44,17 @@ const SLOT_ID = "reporting-shell-header-status-slot";
 // Shared with PublishHeaderButton — exact same pill dimensions +
 // letter-spacing.  The optical-centering fix (`justify-center` +
 // `[text-indent:0.18em]`) applies to every pill in the masthead.
+//
+// MBR-VIS-4B — `[&>*]:translate-y-[0.5px]` corrects a 0.5px optical
+// UPWARD skew of the visible glyphs that the span's bounding-box
+// centring could not fix.  Shifts every direct child down 0.5px
+// via sub-pixel transform; pill padding + border + outer height
+// are unchanged.  See PublishHeaderButton for the full rationale.
 const CHIP_BASE =
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
   "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
-  "tracking-[0.18em] [text-indent:0.18em] transition";
+  "tracking-[0.18em] [text-indent:0.18em] transition " +
+  "[&>*]:translate-y-[0.5px]";
 
 const CHIP_STYLE_BY_TONE: Record<PublicationStatusChipTone, string> = {
   // All three tones share the quiet gold informational treatment

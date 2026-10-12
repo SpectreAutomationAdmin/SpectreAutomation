@@ -783,15 +783,22 @@ function DownloadPdfButton() {
           : "Download a DRAFT PDF reflecting the current draft visibility and today's reporting data"
       }
       // MBR-VIS-4A — matches PublishHeaderButton's BASE_CHIP +
-      // STYLE_ACTION_PRIMARY exactly: same px-3.5 / py-0.5 / font-mono
-      // / letter-spacing + optical-center fix (justify-center +
+      // STYLE_ACTION_PRIMARY exactly: same pill dimensions, font-mono,
+      // letter-spacing, optical-center fix (justify-center +
       // [text-indent:0.18em] compensates the trailing letter-spacing
       // push so the label sits visually centred inside the pill).
       // Gold accent is identical to Publish — no amber/gold divergence.
+      //
+      // MBR-VIS-4B — `[&>*]:translate-y-[0.5px]` shifts the icon
+      // and the label span down 0.5px via sub-pixel transform.
+      // Both children ride the transform together so icon ↔ label
+      // vertical alignment is preserved.  Pill padding + border +
+      // outer height are unchanged.
       className={
         "inline-flex items-center justify-center gap-1.5 whitespace-nowrap " +
         "rounded-full border px-3.5 py-0.5 font-mono text-[10px] uppercase " +
         "tracking-[0.18em] [text-indent:0.18em] transition " +
+        "[&>*]:translate-y-[0.5px] " +
         "focus:outline-none focus:ring-2 focus:ring-club-gold/50 " +
         "border-club-gold/70 bg-club-gold/15 text-club-gold hover:bg-club-gold/25 " +
         "disabled:opacity-60 disabled:cursor-wait"
