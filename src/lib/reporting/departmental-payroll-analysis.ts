@@ -491,7 +491,9 @@ export function buildSilverSpringsDepartmentalPayrollAnalysis(opts: {
       titles: {
         byDeptActualVsBudget: {
           title: "YTD Payroll by Department",
-          subtitle: `Actual vs. Budget — ${period.periodLabel}`,
+          // MBR-PY-2 (2026-10-13) — subtitle explicitly says YTD so
+          // the Silver Springs demo matches the Coulee live card.
+          subtitle: `YTD Actual · Budget — ${period.periodLabel}`,
           chipLabel: "Payroll · Budget",
         },
         ytdVariance: {
@@ -949,7 +951,15 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
       titles: {
         byDeptActualVsBudget: {
           title: "YTD Payroll by Department",
-          subtitle: `Actual vs. Budget — ${period.periodLabel}`,
+          // MBR-PY-2 (2026-10-13) — subtitle explicitly says YTD so
+          // the three bars (Actual / Budget / Prior Year) are clearly
+          // cumulative year-to-date totals, not single-month MTD.
+          // Appends "vs. Prior Year" only when a comparable 2025 TB
+          // produced a non-null consolidated attribution so the
+          // legend never claims a series that isn't rendered.
+          subtitle: priorYearPayrollYtd != null
+            ? `YTD Actual · Budget · Prior Year — ${period.periodLabel}`
+            : `YTD Actual · Budget — ${period.periodLabel}`,
           chipLabel: "Payroll · Budget",
         },
         ytdVariance: {
