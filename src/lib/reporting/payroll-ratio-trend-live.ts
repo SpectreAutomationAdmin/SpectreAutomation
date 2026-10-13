@@ -198,15 +198,52 @@ export async function buildPayrollRatioTrendLive(
   }
 
   // ------------------------------------------------------------------
-  // Prior-Year series — on tenants without 2025 committed TBs
-  // (Coulee), every value is 0.  The React chart's prior-year legend
-  // tile reads "0.0 %" rather than being hidden; a future TB-HIST
-  // slice that loads 2025 TBs will replace this with real data.
+  // Prior-Year series — MBR-PY-1 (2026-10-13).  Query each prior-year
+  // month via `resolveFsGroupProjection` with the matching 2025
+  // period.  A snapshot that doesn't exist (Jan + Feb 2025 on Coulee
+  // today) returns a projection where IS_PAYROLL ytdActual = 0 AND
+  // operatingRevenue ytdActual = 0 — those months emit `ratio: null`,
+  // never a fabricated 0 %.  The founder-uploaded Mar 2025 TB
+  // populates a real ratio at the Mar slot.
+  //
+  // Account filter and sign normalisation are IDENTICAL to the
+  // current-year loop above (IS_PAYROLL / Math.abs on revenue), so
+  // the two series are directly comparable.
   // ------------------------------------------------------------------
-  const monthlyPriorYear: PayrollRatioMonthlyInput[] = MONTH_LABELS.map((label) => ({
-    label,
-    ratio: 0,
-  }));
+  const priorYear = reportingYear - 1;
+  const priorFyStart = new Date(Date.UTC(priorYear, 0, 1));
+  const priorMonthEnds: Date[] = [];
+  for (let m = 1; m <= 12; m++) {
+    priorMonthEnds.push(
+      new Date(Date.UTC(priorYear, m, 0, 23, 59, 59, 999)),
+    );
+  }
+  const priorProjections = await Promise.all(
+    priorMonthEnds.map((mEnd) =>
+      resolveFsGroupProjection({
+        clubId,
+        period: buildReportingPeriod(mEnd, { periodStart: priorFyStart }),
+      }).catch(() => null),
+    ),
+  );
+  const monthlyPriorYear: PayrollRatioMonthlyInput[] = MONTH_LABELS.map(
+    (label, i) => {
+      const proj = priorProjections[i];
+      if (!proj) return { label, ratio: null };
+      const payrollYtd = Math.abs(
+        proj.operatingExpense.find((r) => r.fsGroupKey === "IS_PAYROLL")
+          ?.ytdActual ?? 0,
+      );
+      const revenueYtd = Math.abs(proj.totals.operatingRevenue.ytdActual);
+      // A month with no committed TB resolves to a projection whose
+      // IS_PAYROLL + operatingRevenue are both zero — emit null so
+      // the chart doesn't draw a misleading 0 % segment and the KPI
+      // tile isn't dragged down by phantom zero months.
+      if (payrollYtd === 0 && revenueYtd === 0) return { label, ratio: null };
+      const ratio = revenueYtd > 0 ? (payrollYtd / revenueYtd) * 100 : null;
+      return { label, ratio };
+    },
+  );
 
   // ------------------------------------------------------------------
   // Commentary ancillaries: Dues ratio and golf-rounds YoY.  These

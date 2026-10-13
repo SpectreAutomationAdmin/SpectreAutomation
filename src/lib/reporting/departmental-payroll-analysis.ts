@@ -92,6 +92,12 @@ export type DepartmentChartDatum = {
   ytdBudget: number;
   ytdVariance: number;
   ytdVarianceTone: PayrollVarianceTone;
+  /** MBR-PY-1 (2026-10-13) — YTD IS_PAYROLL for this department in
+   *  the comparable prior-year period.  Null when the comparable
+   *  prior-year TB wasn't committed or this department has no prior-
+   *  year payroll row.  The grouped-bar chart renders a 3rd bar per
+   *  department when non-null; the slot is skipped when null. */
+  ytdPriorYear: number | null;
   /** Wages portion of YTD total compensation. */
   wages: number;
   /** Taxes & benefits portion of YTD total compensation. */
@@ -315,6 +321,10 @@ export function buildSilverSpringsDepartmentalPayrollAnalysis(opts: {
       ytdBudget: seed.ytdBudget,
       ytdVariance,
       ytdVarianceTone: toneForVariance(ytdVariance),
+      // Silver Springs demo seeds do not carry prior-year — null is
+      // the honest shape for the demo tenant.  MBR-PY-1 populates the
+      // live Coulee path below.
+      ytdPriorYear: null,
       wages,
       taxesBenefits,
       fillHex: seed.fillHex,
@@ -666,6 +676,11 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
     ytdActual: number;
     ytdBudget: number;
     annualBudget: number;
+    /** MBR-PY-1 (2026-10-13) — prior-year comparable YTD payroll
+     *  Actual for this department.  Null when no committed prior-year
+     *  TB covers the matched period or this department has no prior-
+     *  year row. */
+    ytdPriorYear: number | null;
     fillHex: string;
   };
   const enriched: EnrichedRow[] = [];
@@ -692,6 +707,10 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
       ytdActual,
       ytdBudget,
       annualBudget,
+      // MBR-PY-1 — pull the prior-year payroll field the historical
+      // resolver computed; null is the honest shape when no committed
+      // comparable TB exists.
+      ytdPriorYear: hist?.priorYearActual ?? null,
       fillHex: CANONICAL_FILL_HEXES[enriched.length % CANONICAL_FILL_HEXES.length] ?? FILL_SLATE_BLUE,
     });
   }
@@ -739,6 +758,8 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
       ytdBudget: e.ytdBudget,
       ytdVariance,
       ytdVarianceTone: toneForVariance(ytdVariance),
+      // MBR-PY-1 — prior-year comparable Actual per department.
+      ytdPriorYear: e.ytdPriorYear,
       // Wages / taxes & benefits split NOT CONFIGURED for live tenants —
       // the TB IS_PAYROLL fsGroup aggregates both. Setting both to 0
       // keeps the stacked-bar chart renderable but shows nothing; the
@@ -793,12 +814,24 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
     ? (ytdActualTotal / operatingRevenueYtd) * 100
     : null;
 
+  // MBR-PY-1 (2026-10-13) — surface prior-year YoY delta on the
+  // headline KPI's subLabel when the comparable 2025 TB is loaded.
+  // Uses the resolver's `consolidatedPriorYearActualAll` — same
+  // IS_PAYROLL definition the current-year `ytdActualTotal` uses, so
+  // the two numbers reconcile to the identical account filter.
+  // Honest handling: null (SOURCE_NOT_LOADED) → the subLabel keeps
+  // the pre-VIS source description, never a fabricated $0 delta.
+  const priorYearPayrollYtd = historical.consolidatedPriorYearActualAll;
+  const ytdTotalSubLabel = priorYearPayrollYtd != null
+    ? `vs. prior year ${formatMillions(priorYearPayrollYtd)} · ${formatThousandsOneDecimal(ytdActualTotal - priorYearPayrollYtd)} ${ytdActualTotal - priorYearPayrollYtd >= 0 ? "higher" : "lower"} YoY`
+    : "All departments · IS_PAYROLL × Dept (TB)";
+
   const kpiCards: ReadonlyArray<PayrollKpiCard> = [
     {
       key: "ytd-total-payroll",
       valueLabel: ytdActualTotal === 0 ? "—" : formatMillions(ytdActualTotal),
       label: "YTD Total Payroll",
-      subLabel: "All departments · IS_PAYROLL × Dept (TB)",
+      subLabel: ytdTotalSubLabel,
       treatment: "primary",
     },
     {

@@ -36,6 +36,13 @@ export type HistoricalPayrollDepartmentRow = {
   /** YTD Budget IS_PAYROLL for this department (null when the Budget
    *  resolver has no Budget row for this dept — never fabricated $0). */
   budget: number | null;
+  /** MBR-PY-1 (2026-10-13) — YTD IS_PAYROLL for this department in
+   *  the comparable prior-year period (same fiscal YTD window shifted
+   *  back one year).  Null when no committed prior-year TB exists for
+   *  the matched period, or when this department has no prior-year
+   *  payroll row — never fabricated $0 so the chart's 3rd series
+   *  can honestly omit missing bars. */
+  priorYearActual: number | null;
   /** Current Employee count on this department — DIAGNOSTIC ONLY.
    *  Zero does NOT suppress inclusion. */
   currentEmployeeCount: number;
@@ -49,6 +56,11 @@ export type HistoricalPayrollResult = {
   consolidatedActualAll: number;
   /** Same for Budget. Null when Budget resolver returned nothing. */
   consolidatedBudgetAll: number | null;
+  /** MBR-PY-1 (2026-10-13) — consolidated prior-year YTD IS_PAYROLL
+   *  Actual across every operating department (same scope as
+   *  `consolidatedActualAll` but one fiscal year earlier).  Null when
+   *  no committed prior-year TB covers the matched period. */
+  consolidatedPriorYearActualAll: number | null;
   /** Rows the chart renders — only departments with Actual > 0 OR
    *  Budget > 0 (never nondepartmental; never zero-row). */
   rows: HistoricalPayrollDepartmentRow[];
@@ -84,8 +96,27 @@ export async function resolveHistoricalPayrollByDepartment(
   const fiscalYtdStart = new Date(Date.UTC(fiscalYear, 0, 1));
   void periodStart;
 
-  const [actualDept, budgetMap, rosterStatus] = await Promise.all([
+  // MBR-PY-1 (2026-10-13) — prior-year comparable window.  Same
+  // calendar-month end-of-period shifted back one year; same fiscal
+  // YTD start.  `incomeStatementByDepartmentFromSnapshot` matches the
+  // committed Mar 2025 TB when periodStart = 2025-01-01 and periodEnd
+  // = 2025-03-31 (via `reportingAccountBalances` YTD-slice shape).
+  // When no 2025 TB covers that window, the resolver's internal
+  // `allowCarryForward` returns an operational-ledger result with
+  // empty department rows — we filter that case out so the chart's
+  // prior-year series stays honestly null.
+  const priorYear = fiscalYear - 1;
+  const priorFiscalYtdStart = new Date(Date.UTC(priorYear, 0, 1));
+  const priorPeriodEnd = new Date(Date.UTC(
+    priorYear,
+    periodEnd.getUTCMonth(),
+    periodEnd.getUTCDate(),
+    23, 59, 59, 999,
+  ));
+
+  const [actualDept, priorYearDept, budgetMap, rosterStatus] = await Promise.all([
     incomeStatementByDepartmentFromSnapshot(clubId, fiscalYtdStart, periodEnd),
+    incomeStatementByDepartmentFromSnapshot(clubId, priorFiscalYtdStart, priorPeriodEnd).catch(() => null),
     resolveBudgetPayrollByDepartment({
       clubId,
       fiscalYear,
@@ -102,12 +133,17 @@ export async function resolveHistoricalPayrollByDepartment(
   // Union of departments: Actual payroll > 0 OR Budget payroll > 0.
   // Nondepartmental (code === null) rolls into the roster residual
   // because the chart has no x-slot for it.
+  // MBR-PY-1 (2026-10-13) — prior-year amounts overlay onto existing
+  // Entry rows by department code.  Prior-year-only departments are
+  // NOT added to `byCode` (the chart's x-axis is driven by current-
+  // year + budget; prior-year is a comparative overlay, not a seed).
   // ------------------------------------------------------------------
   type Entry = {
     code: string;
     name: string;
     actual: number;
     budget: number | null;
+    priorYearActual: number | null;
   };
   const byCode = new Map<string, Entry>();
   const nameByCode = new Map<string, string>();
@@ -129,6 +165,7 @@ export async function resolveHistoricalPayrollByDepartment(
         name: r.departmentName,
         actual: payroll,
         budget: null,
+        priorYearActual: null,
       });
     }
   }
@@ -153,7 +190,40 @@ export async function resolveHistoricalPayrollByDepartment(
           name: nameByCode.get(code) ?? code,
           actual: 0,
           budget: amount,
+          priorYearActual: null,
         });
+      }
+    }
+  }
+
+  // MBR-PY-1 — overlay Prior-Year departmental payroll Actual onto
+  // existing entries.  Only departments already present in `byCode`
+  // (current-year or budget-visible) receive a prior-year value;
+  // prior-year-only departments are intentionally NOT added so the
+  // chart's x-axis stays stable with the current-year scope.
+  //
+  // Null tracking: `consolidatedPriorYearActualAll` stays null when
+  // the prior-year TB wasn't resolved (no `priorYearDept`) or when
+  // the resolver returned no payroll rows — the chart's prior-year
+  // series is then entirely absent.
+  let consolidatedPriorYearActualAll: number | null = null;
+  if (priorYearDept != null && priorYearDept.rows.length > 0) {
+    const priorByDept = new Map<string, number>();
+    let anyPriorPayroll = false;
+    for (const r of priorYearDept.rows) {
+      const payroll = Number(r.payroll.toString());
+      if (payroll !== 0) anyPriorPayroll = true;
+      if (r.departmentCode == null) continue;
+      priorByDept.set(r.departmentCode, payroll);
+    }
+    if (anyPriorPayroll) {
+      consolidatedPriorYearActualAll = 0;
+      for (const r of priorYearDept.rows) {
+        consolidatedPriorYearActualAll += Number(r.payroll.toString());
+      }
+      for (const entry of byCode.values()) {
+        const prior = priorByDept.get(entry.code);
+        if (prior != null && prior !== 0) entry.priorYearActual = prior;
       }
     }
   }
@@ -165,6 +235,7 @@ export async function resolveHistoricalPayrollByDepartment(
       departmentName: e.name,
       actual: e.actual,
       budget: e.budget,
+      priorYearActual: e.priorYearActual,
       currentEmployeeCount: rosterStatus.employeeCountByDepartment.get(e.code) ?? 0,
     }));
 
@@ -181,6 +252,7 @@ export async function resolveHistoricalPayrollByDepartment(
   return {
     consolidatedActualAll,
     consolidatedBudgetAll,
+    consolidatedPriorYearActualAll,
     rows,
     rosterResidualActual,
     rosterResidualBudget,

@@ -108,7 +108,11 @@ export type PayrollDepartmentInputs = {
 
 // -- Card 2 types -------------------------------------------------------------
 
-export type PayrollRatioMonthlyInput = { label: string; ratio: number; };
+// MBR-PY-1 (2026-10-13) — `ratio` is nullable so a month with no
+// authoritative source emits an honest "no data" gap rather than a
+// fabricated 0 % that would silently drag down the YTD average and
+// render as a misleading "0.0%" KPI label.
+export type PayrollRatioMonthlyInput = { label: string; ratio: number | null; };
 
 export type PayrollRatioTrendData = {
   title: string;
@@ -138,15 +142,19 @@ export type PayrollRatioTrendData = {
    *  CRITICAL: futures are null, NEVER zero, NEVER carried-forward,
    *  NEVER interpolated. */
   actualSeries:    { label: string; value: number | null }[];
-  /** Budget series — 12 months, always populated end-to-end. The
-   *  budget is forecast data and is known for the full fiscal year. */
-  budgetSeries:    { label: string; value: number }[];
+  /** Budget series — 12 months.  MBR-PY-1: value type widened to
+   *  `number | null` to share the nullable ratio shape; the live
+   *  builder keeps the budget series fully populated. */
+  budgetSeries:    { label: string; value: number | null }[];
   /** Benchmark series — 12 months, always populated end-to-end at
    *  the configured benchmark value. */
   benchmarkSeries: { label: string; value: number }[];
-  /** Prior-year series — 12 months, always populated end-to-end
-   *  (prior-year accounting records are closed and known). */
-  priorYearSeries: { label: string; value: number }[];
+  /** Prior-year series — 12 months.  MBR-PY-1 (2026-10-13): values
+   *  are `number | null` so a month with no authoritative source
+   *  (e.g. tenant uploaded only March 2025 YTD, not Jan/Feb) emits
+   *  an honest gap rather than a fabricated 0 %.  The chart
+   *  renderer draws no segment for null slots. */
+  priorYearSeries: { label: string; value: number | null }[];
   /** Commentary paragraph (with the second sentence pre-emphasised by
    *  wrapping in `__…__` so the React renderer can italicise it). */
   commentary: string;
@@ -417,19 +425,28 @@ export function buildPayrollRatioTrendData(
   // Budget/Prior YTD KPIs also use through-N so the legend labels
   // ("Budget (58.2%)") are fair YTD comparisons, not full-year
   // forecasts.
-  const ytdRatioPct    = average(actualThrough.map((m) => m.ratio));
-  const budgetRatioPct = average(budgetThroughN.map((m) => m.ratio));
-  const priorRatioPct  = average(priorThroughN.map((m) => m.ratio));
+  //
+  // MBR-PY-1 (2026-10-13) — the prior-year ratio is `number | null`
+  // (a month without a committed 2025 TB emits null, never a
+  // fabricated 0 %).  `averageNullable` skips nulls so the KPI
+  // average is honest, and returns null when every month is null
+  // so the KPI tile honestly renders "—".
+  const ytdRatioPct    = averageNullable(actualThrough.map((m) => m.ratio));
+  const budgetRatioPct = averageNullable(budgetThroughN.map((m) => m.ratio));
+  const priorRatioPct  = averageNullable(priorThroughN.map((m) => m.ratio));
 
   // Y-axis domain — span EVERY plotted value (full-year budget +
   // benchmark + prior + through-N actuals) so the line chart
   // accommodates the widest visible range.
+  // MBR-PY-1 — null ratios are elided from the domain so the chart
+  // doesn't collapse to [0, benchmarkPct] because of unpopulated
+  // prior-year slots.
   const allYs = [
     ...actualThrough.map((m) => m.ratio),
     ...inputs.monthlyBudget.map((m) => m.ratio),
     ...inputs.monthlyPriorYear.map((m) => m.ratio),
     inputs.benchmarkPct,
-  ];
+  ].filter((v): v is number => v != null);
   const minY = allYs.length > 0 ? Math.min(...allYs) : inputs.benchmarkPct;
   const maxY = allYs.length > 0 ? Math.max(...allYs) : inputs.benchmarkPct;
   const INC = 5;
@@ -437,7 +454,13 @@ export function buildPayrollRatioTrendData(
   const yHi = Math.ceil(maxY / INC) * INC;
   const yTicks = Math.max(2, Math.round((yHi - yLo) / INC));
 
-  const ratioDeltaVsPrior = ytdRatioPct - priorRatioPct;
+  // MBR-PY-1 — delta is null-safe.  When prior-year is unavailable
+  // the commentary suppresses the vs-prior-year lead sentence (see
+  // branching below) rather than emit "+NaN pts".
+  const ratioDeltaVsPrior =
+    ytdRatioPct != null && priorRatioPct != null
+      ? ytdRatioPct - priorRatioPct
+      : null;
 
   // Member-utilisation delta — computed from the golf-rounds inputs
   // so the displayed "+X.X%" reconciles to the same count the
@@ -451,13 +474,24 @@ export function buildPayrollRatioTrendData(
   // Commentary — with the second sentence wrapped in `__…__` so the
   // page can render it italicised. Every number is wrapped in
   // `**…**` AND comes from a typed input or a computed value above.
-  const commentary =
-    `The payroll ratio has risen vs. prior year (**+${ratioDeltaVsPrior.toFixed(1)} pts**). This reflects ` +
-    `the hiring required to support increased member activity — golf rounds up ` +
-    `**${golfRoundsDeltaPct.toFixed(1)}%** vs. prior year. __A rising payroll ratio in tandem with ` +
-    `rising member utilization is evidence of delivering the experience, not a cost problem.__ ` +
-    `The dues ratio (**${inputs.duesRatioPct.toFixed(1)}%**) continues to exceed the payroll ratio ` +
-    `(**${ytdRatioPct.toFixed(1)}%**), confirming the model is properly funded.`;
+  //
+  // MBR-PY-1 (2026-10-13) — when prior-year is unavailable the vs-
+  // prior-year lead sentence is suppressed instead of emitting
+  // "+NaN pts".
+  const ratioDisplay = (v: number | null): string =>
+    v == null ? "—" : `${v.toFixed(1)}%`;
+  const ytdRatioForCopy = ytdRatioPct ?? 0;
+  const commentary = ratioDeltaVsPrior != null
+    ? `The payroll ratio has risen vs. prior year (**${ratioDeltaVsPrior >= 0 ? "+" : ""}${ratioDeltaVsPrior.toFixed(1)} pts**). This reflects ` +
+      `the hiring required to support increased member activity — golf rounds up ` +
+      `**${golfRoundsDeltaPct.toFixed(1)}%** vs. prior year. __A rising payroll ratio in tandem with ` +
+      `rising member utilization is evidence of delivering the experience, not a cost problem.__ ` +
+      `The dues ratio (**${inputs.duesRatioPct.toFixed(1)}%**) continues to exceed the payroll ratio ` +
+      `(**${ytdRatioForCopy.toFixed(1)}%**), confirming the model is properly funded.`
+    : `The payroll ratio currently stands at **${ytdRatioForCopy.toFixed(1)}%**. ` +
+      `__A prior-year comparison is not available for this period — only a partial 2025 trial balance has been loaded.__ ` +
+      `The dues ratio (**${inputs.duesRatioPct.toFixed(1)}%**) continues to exceed the payroll ratio, ` +
+      `confirming the model is properly funded.`;
 
   return {
     title: "Payroll Ratio — Monthly Trend",
@@ -466,9 +500,9 @@ export function buildPayrollRatioTrendData(
     actualSeriesLabel: `${inputs.reportingYear} Actual`,
     monthsPlotted: N,
     kpis: {
-      ytdRatioLabel:    `${ytdRatioPct.toFixed(1)}%`,
-      budgetRatioLabel: `${budgetRatioPct.toFixed(1)}%`,
-      priorYearLabel:   `${priorRatioPct.toFixed(1)}%`,
+      ytdRatioLabel:    ratioDisplay(ytdRatioPct),
+      budgetRatioLabel: ratioDisplay(budgetRatioPct),
+      priorYearLabel:   ratioDisplay(priorRatioPct),
       benchmarkLabel:   `${inputs.benchmarkPct}%+`,
     },
     yDomain: [yLo, yHi],
@@ -493,6 +527,16 @@ export function buildPayrollRatioTrendData(
 function average(xs: number[]): number {
   if (xs.length === 0) return 0;
   return xs.reduce((s, v) => s + v, 0) / xs.length;
+}
+
+/** MBR-PY-1 (2026-10-13) — nullable average: skips null entries and
+ *  returns null when every entry is null.  Keeps the YTD KPI tile
+ *  honest when a month has no committed source (never silently
+ *  averages nulls as zeros). */
+function averageNullable(xs: (number | null)[]): number | null {
+  const defined = xs.filter((v): v is number => v != null);
+  if (defined.length === 0) return null;
+  return defined.reduce((s, v) => s + v, 0) / defined.length;
 }
 
 // ---------------------------------------------------------------------------

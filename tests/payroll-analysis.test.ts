@@ -174,7 +174,9 @@ describe("Payroll Ratio — Monthly Trend service", () => {
     const bumped = buildPayrollRatioTrendData({
       monthlyActual: SILVER_SPRINGS_PAYROLL_ACTUAL_MONTHLY.map((m) => ({
         ...m,
-        ratio: m.ratio + 5,
+        // MBR-PY-1 — ratio is now `number | null`; Silver Springs
+        // demo seed values are all numeric so a null guard is safe.
+        ratio: (m.ratio ?? 0) + 5,
       })),
       monthlyBudget: SILVER_SPRINGS_PAYROLL_BUDGET_MONTHLY,
       monthlyPriorYear: SILVER_SPRINGS_PAYROLL_PRIOR_MONTHLY,

@@ -235,20 +235,46 @@ export async function getOperatingResults(
         .slice(0, throughMonth)
         .map((m) => m.budgetNoi)
         .reduce<number>((s, v) => s + (v ?? 0), 0);
+      // MBR-PY-1 (2026-10-13) — resolve the prior-year YTD comparative
+      // from a committed `trial-balance` snapshot shifted back one
+      // year, applying the IDENTICAL filter/sign logic the current-
+      // year ytdFor() path uses.  Honest handling: when no Mar 2025
+      // TB is committed → null (KPI renders "—").  Does NOT fabricate
+      // monthly values from a single YTD snapshot — the overlay's
+      // single visible point is the YTD comparative at the matched
+      // period-end slot, not an invented monthly activity curve.
+      const priorYtd = await getPriorYearYtdFromSnapshot(clubId, asOf);
+      const priorYearMonthsPy: OperatingMonth[] = priorYtd
+        ? [{
+            endDate: priorYtd.endDate,
+            monthLabel: monthLabelFromDate(priorYtd.endDate),
+            sequence: priorYtd.endDate.getUTCMonth() + 1,
+            // Carries the YTD cumulative value — the formatter's
+            // priorYearYtd running-sum treats this slot as the
+            // "YTD comparative at the matched month".  Not a
+            // monthly delta.
+            noi: priorYtd.ytdNoi,
+            revenue: priorYtd.ytdRevenue,
+            budgetNoi: null,
+          }]
+        : [];
+
       return {
         months: enriched,
-        // §11 — Prior-Year series is SOURCE_NOT_LOADED on live tenant;
-        // emit an empty array (not zero-filled).
-        priorYearMonths: [],
+        // MBR-PY-1 — single-slot prior-year comparative (YTD) when a
+        // committed 2025 TB is available; empty when SOURCE_NOT_LOADED.
+        // The formatter's cumulative-sum semantics turn this into a
+        // single dotted-overlay point at the matched month slot.
+        priorYearMonths: priorYearMonthsPy,
         ytdNoi: sYtdNoi,
         ytdRevenue: sYtdRevenue,
         // SCORECARD-PARTIAL-1 §2 — Budget may be null when the Budget
         // resolver returned nothing (tenant without a Budget import yet).
         ytdBudgetNoi: monthlyBudgetNoi ? sYtdBudgetNoi : null,
-        // SCORECARD-PARTIAL-1 §2 — Prior Year source NOT loaded on
-        // live tenant → null (never fabricated $0 so the KPI tile can
-        // honestly render "—" instead of a fake zero).
-        priorYearNoi: null,
+        // MBR-PY-1 — Prior-year YTD NOI from the committed 2025 TB
+        // when available; null when SOURCE_NOT_LOADED so the KPI tile
+        // honestly renders "—" instead of a fabricated $0.
+        priorYearNoi: priorYtd ? priorYtd.ytdNoi : null,
         breakEven: 0,
         breakEvenCorridor: { ...DEFAULT_BREAK_EVEN_CORRIDOR_K },
       };
@@ -472,4 +498,81 @@ async function getOperatingMonthsFromCommittedSnapshots(
 function monthLabelFromDate(d: Date): string {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** MBR-PY-1 (2026-10-13) — resolve prior-year YTD NOI + revenue from
+ *  a committed trial-balance snapshot at the comparable period-end
+ *  shifted back one year.
+ *
+ *  Uses the SAME filter rules the current-year ytdFor() path applies:
+ *    - Operating-fund only (via isOperatingFundTag)
+ *    - REVENUE accounts contribute positively (naturalBalance already
+ *      credit-flipped by the balance normaliser)
+ *    - EXPENSE accounts: IS_COGS* subtract as COGS; IS_DEPRECIATION
+ *      and IS_INTEREST_EXPENSE excluded (above-the-line NOI);
+ *      everything else subtracts as OpEx
+ *
+ *  Returns null when:
+ *    - No committed TB exists at the prior-year period end
+ *    - The returned snapshot has no non-zero REVENUE or EXPENSE rows
+ *      (balance-sheet-only import)
+ *    - reportingAccountBalances throws
+ *
+ *  Null surfaces as "—" in the KPI tile; it is NEVER fabricated $0. */
+async function getPriorYearYtdFromSnapshot(
+  clubId: string,
+  asOf: Date,
+): Promise<{ endDate: Date; ytdNoi: number; ytdRevenue: number } | null> {
+  const { reportingAccountBalances } = await import("@/lib/accounting/reporting-balances");
+  const { consolidateAccountBalances } = await import("@/lib/accounting/balance");
+  const { isOperatingFundTag } = await import("@/lib/reporting/budget-resolver");
+
+  const priorYear = asOf.getUTCFullYear() - 1;
+  const priorAsOf = new Date(Date.UTC(
+    priorYear,
+    asOf.getUTCMonth(),
+    asOf.getUTCDate(),
+    23, 59, 59, 999,
+  ));
+  const priorFyStart = new Date(Date.UTC(priorYear, 0, 1));
+
+  try {
+    const result = await reportingAccountBalances(
+      clubId,
+      { from: priorFyStart, to: priorAsOf },
+    );
+    if (result.source !== "AUTHORITATIVE_SNAPSHOT") return null;
+    if (result.balances.length === 0) return null;
+    const consolidated = consolidateAccountBalances(result.balances);
+    let revenue = 0;
+    let cogs = 0;
+    let opex = 0;
+    let hasRevenueAccount = false;
+    let hasExpenseAccount = false;
+    for (const b of consolidated) {
+      if (!isOperatingFundTag(b.fundApplicability)) continue;
+      if (b.accountType === "REVENUE") {
+        const v = Number(b.naturalBalance.toString());
+        revenue += v;
+        if (v !== 0) hasRevenueAccount = true;
+      } else if (b.accountType === "EXPENSE") {
+        const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+        const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
+        const isFinancing = b.fsGroupKey === "IS_INTEREST_EXPENSE";
+        if (isDepreciation || isFinancing) continue;
+        const v = Number(b.naturalBalance.toString());
+        if (isCogs) cogs += v;
+        else opex += v;
+        if (v !== 0) hasExpenseAccount = true;
+      }
+    }
+    if (!hasRevenueAccount && !hasExpenseAccount) return null;
+    return {
+      endDate: priorAsOf,
+      ytdNoi: revenue - cogs - opex,
+      ytdRevenue: revenue,
+    };
+  } catch {
+    return null;
+  }
 }

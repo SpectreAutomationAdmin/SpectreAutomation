@@ -133,23 +133,43 @@ function GroupedActualBudgetChart({ data }: { data: ChartData["byDepartment"] })
   const xLabels = data.map((d) => d.shortLabel);
   const actualValues = data.map((d) => d.ytdActual);
   const budgetValues = data.map((d) => d.ytdBudget);
-  const rawMax = Math.max(...actualValues, ...budgetValues);
+  // MBR-PY-1 (2026-10-13) — prior-year comparable Actual.  Null-safe
+  // scalar per department; if NO department has a prior-year value
+  // (SOURCE_NOT_LOADED), the entire series is suppressed from the
+  // chart.  When at least one department has it, every department's
+  // null is coerced to 0 for the chart primitive — the renderer then
+  // omits a 0 bar visually (preserves honest intent: "this
+  // department has no comparable prior-year payroll").
+  const priorYearRaw = data.map((d) => d.ytdPriorYear);
+  const anyPriorYear = priorYearRaw.some((v) => v != null && v !== 0);
+  const priorYearValues = anyPriorYear
+    ? priorYearRaw.map((v) => (v == null ? 0 : v))
+    : null;
+  const seriesMaxCandidates = [...actualValues, ...budgetValues];
+  if (priorYearValues) seriesMaxCandidates.push(...priorYearValues);
+  const rawMax = Math.max(...seriesMaxCandidates);
   const yHi = Math.ceil(rawMax / 100_000) * 100_000;
   const yTicks = Math.max(2, yHi / 100_000);
+  const series = anyPriorYear && priorYearValues
+    ? [
+        { name: "YTD Actual", values: actualValues, color: "fill-club-green-500" },
+        { name: "YTD Budget", values: budgetValues, color: "fill-club-gold" },
+        // MBR-PY-1 — prior-year bars in a brand slate complement to
+        // the green/gold pair.  Deliberately NOT club-green-700
+        // (reserved for current-year dark variant) and NOT a stoplight
+        // tone — this is a reference/overlay comparable, not a status.
+        { name: "YTD Prior Year", values: priorYearValues, color: "fill-[#7d96b0]" },
+      ]
+    : [
+        { name: "YTD Actual", values: actualValues, color: "fill-club-green-500" },
+        { name: "YTD Budget", values: budgetValues, color: "fill-club-gold" },
+      ];
   return (
-    <div data-testid="payroll-grouped-bar-chart">
+    <div data-testid="payroll-grouped-bar-chart" data-prior-year-plotted={anyPriorYear ? "true" : "false"}>
       <EditorialChartReveal testid="payroll-grouped-bar-chart-reveal">
         <EditorialGroupedBarChart
           xLabels={xLabels}
-          // v15.8 — canonical Tailwind palette. `fill-club-green-500`
-          // (Actual) + `fill-club-gold` (Budget) match the Operating
-          // Results primary/secondary bar pair byte-for-byte. Prior
-          // interpolated `fill-[${hex}]` strings were unreachable by
-          // Tailwind's JIT scanner and rendered as black bars.
-          series={[
-            { name: "YTD Actual", values: actualValues, color: "fill-club-green-500" },
-            { name: "YTD Budget", values: budgetValues, color: "fill-club-gold" },
-          ]}
+          series={series}
           height={245}
           formatY="dollars-compact"
           yDomain={[0, yHi]}
