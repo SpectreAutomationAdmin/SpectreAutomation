@@ -104,6 +104,12 @@ export type PayrollDepartmentInputs = {
    *  consolidated payroll, not just the visible bars). */
   consolidatedActualOverride?: number | null;
   consolidatedBudgetOverride?: number | null;
+  /** MBR-PY-3 (2026-10-13) — optional override for the Prior-Year
+   *  consolidated-payroll KPI tile.  Resolved by the historical
+   *  resolver (same source Chapter XII uses).  Null when no
+   *  comparable prior-year TB is committed — KPI then renders "—"
+   *  honestly. */
+  consolidatedPriorYearOverride?: number | null;
 };
 
 // -- Card 2 types -------------------------------------------------------------
@@ -227,9 +233,17 @@ export function buildPayrollDepartmentData(
   const budgetDollars: number | null = inputs.consolidatedBudgetOverride !== undefined
     ? inputs.consolidatedBudgetOverride
     : chartBudgetDollars;
+  // MBR-PY-3 — Prior-Year KPI reconciles to the canonical consolidated
+  // prior-year payroll (same scope `consolidatedActualOverride` uses),
+  // never to the sum of just the five charted departments.  Falls back
+  // to the chart sum for demo tenants without an override.
+  const priorYearKpiDollars: number | null =
+    inputs.consolidatedPriorYearOverride !== undefined
+      ? inputs.consolidatedPriorYearOverride
+      : priorYearDollars;
 
   const vsBudget = budgetDollars != null ? actualDollars - budgetDollars : null;
-  const vsPriorYear = priorYearDollars != null ? actualDollars - priorYearDollars : null;
+  const vsPriorYear = priorYearKpiDollars != null ? actualDollars - priorYearKpiDollars : null;
   const payrollRatioPct = inputs.revenueDollars > 0
     ? (actualDollars / inputs.revenueDollars) * 100
     : 0;
@@ -354,9 +368,15 @@ export async function buildPayrollDepartmentLive(
     name: r.departmentName,
     actual: r.actual,
     budget: r.budget,
-    // §18 — only Jan 2026 Actual exists; no 2025 monthly history
-    // is currently loaded. Prior Year stays null.
-    priorYear: null as number | null,
+    // MBR-PY-3 (2026-10-13) — Chapter II now reads the prior-year
+    // comparable from the SAME shared `resolveHistoricalPayrollByDepartment`
+    // resolver Chapter XII consumes.  `r.priorYearActual` is null when
+    // the comparable 2025 TB has no committed row covering the matched
+    // period; otherwise it carries the dept-attributed Mar YTD payroll
+    // read from the snapshot payload's `line.department` field.  Zero
+    // duplication of the historical path — Chapter II and Chapter XII
+    // use one authoritative dataset.
+    priorYear: r.priorYearActual,
   }));
 
   // PAYROLL-HIST-1 §14-15 — canonical consolidated payroll Actual +
@@ -382,6 +402,26 @@ export async function buildPayrollDepartmentLive(
   const duesRow = actualDept.rows.find((r) => r.departmentCode === "DUES_AND_CHARGES");
   const duesDollars = duesRow ? -Number(duesRow.revenue.toString()) : canonicalRevenue;
 
+  // MBR-PY-3 (2026-10-13) — subtitle now reflects the actual
+  // reporting period + the real availability of Budget and Prior
+  // Year columns.  Previously hardcoded "JANUARY ACTUAL VS BUDGET …
+  // (prior-year not loaded)" even when the Mar 2026 package was
+  // being rendered against a committed Mar 2025 TB.
+  const monthLabels = [
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+  ];
+  const periodMonthLabel = `${monthLabels[periodEnd.getUTCMonth()]} ${periodEnd.getUTCFullYear()}`;
+  const anyBudget = historical.consolidatedBudgetAll != null;
+  const anyPriorYearLive = historical.consolidatedPriorYearActualAll != null;
+  const liveSubtitle = anyBudget && anyPriorYearLive
+    ? `YTD ACTUAL · BUDGET · PRIOR YEAR — ${periodMonthLabel}`
+    : anyBudget
+      ? `YTD ACTUAL · BUDGET — ${periodMonthLabel} (prior-year not loaded)`
+      : anyPriorYearLive
+        ? `YTD ACTUAL · PRIOR YEAR — ${periodMonthLabel} (budget not loaded)`
+        : `YTD ACTUAL — ${periodMonthLabel} (budget + prior-year not loaded)`;
+
   return buildPayrollDepartmentData(
     {
       departments: deptRows,
@@ -393,12 +433,18 @@ export async function buildPayrollDepartmentLive(
       // chart rows, which still omits any nondepartmental payroll).
       consolidatedActualOverride: canonicalPayrollActual,
       consolidatedBudgetOverride: canonicalPayrollBudget,
+      // MBR-PY-3 — override the headline Prior-Year scalar so the
+      // KPI reconciles to the SAME canonical consolidated prior-year
+      // payroll Chapter XII's YoY tile uses — never the sum of just
+      // the five charted departments (which happens to also be
+      // $511,440 for Coulee today, but a future tenant with
+      // nondepartmental prior-year payroll should still roll into
+      // the headline KPI the same way current-year does).
+      consolidatedPriorYearOverride: historical.consolidatedPriorYearActualAll,
     },
     {
       dataSource: "live",
-      subtitleOverride: historical.consolidatedBudgetAll != null
-        ? "JANUARY ACTUAL VS BUDGET · HISTORICAL PAYROLL BY DEPARTMENT (prior-year not loaded)"
-        : "JANUARY ACTUAL · HISTORICAL PAYROLL BY DEPARTMENT (budget + prior-year not loaded)",
+      subtitleOverride: liveSubtitle,
     },
   );
 }
