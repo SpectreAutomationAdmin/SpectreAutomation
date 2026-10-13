@@ -52,11 +52,20 @@ const CHART_KEYS = [
   "card:payroll-analysis:wages-taxes-benefits-split",
 ];
 const TABLE_KEY = "card:payroll-analysis:detailed-summary-table";
-const CHAPTER_KEY = "chapter:payroll-analysis";
+const CHAPTER_ANCHOR_ID = "payroll-analysis";
+const CHAPTER_KEY = `chapter:${CHAPTER_ANCHOR_ID}`;
 
 async function clickToggle(page: import("@playwright/test").Page, componentKey: string) {
   await page
     .locator(`[data-testid="inline-card-toggle-${componentKey}"] button`)
+    .first()
+    .click();
+  await page.waitForTimeout(1000);
+}
+
+async function clickChapterToggle(page: import("@playwright/test").Page, anchorId: string) {
+  await page
+    .locator(`[data-testid="inline-chapter-toggle-${anchorId}"] button`)
     .first()
     .click();
   await page.waitForTimeout(1000);
@@ -221,9 +230,12 @@ runAt(
     // ─── §F — chapter-level hide should cascade.  Hide the whole
     //           chapter + verify the headline KPI tile is omitted
     //           from Draft Preview; restore it and confirm the
-    //           previous individual selections persist. ────────────
+    //           previous individual selections persist.
+    //   Chapters use `InlineChapterToggle` (anchorId-based testid),
+    //   NOT the `InlineCardToggle` component-key convention — hence
+    //   the separate helper. ─────────────────────────────────────
     const chapterInitial = await cardHidden(page, CHAPTER_KEY);
-    if (!chapterInitial) await clickToggle(page, CHAPTER_KEY);
+    if (!chapterInitial) await clickChapterToggle(page, CHAPTER_ANCHOR_ID);
     await page.goto(`${BASE}/app/admin/reporting/monthly?period=2026-03&preview=draft`, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
@@ -241,7 +253,7 @@ runAt(
       timeout: 60_000,
     });
     await page.waitForTimeout(4000);
-    if (!chapterInitial) await clickToggle(page, CHAPTER_KEY);
+    if (!chapterInitial) await clickChapterToggle(page, CHAPTER_ANCHOR_ID);
 
     // If the Controller originally had the YTD tile hidden, restore
     // that state; otherwise it's already visible.
