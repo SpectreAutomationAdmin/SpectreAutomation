@@ -21,6 +21,7 @@ import type { ReportingPeriod } from "@/lib/reporting/reporting-period";
 import { resolveHistoricalPayrollByDepartment } from "@/lib/reporting/historical-payroll-by-department";
 import { resolveBudgetPayrollByDepartment } from "@/lib/reporting/budget-resolver";
 import type { FsGroupProjection } from "@/lib/reporting/fs-group-projection";
+import { comparePayrollDeptForChart } from "@/lib/reporting/payroll-dept-chart-config";
 
 // =============================================================================
 // Public types
@@ -118,6 +119,12 @@ export type DepartmentalPayrollAnalysis = {
   eyebrow: string;
   title: string;
   periodLabel: string;
+  /** MBR-PY-4 (2026-10-13) — Calendar year of the reporting period.
+   *  Drives the client chart's three-series legend labels
+   *  ("2026 Actual" / "Budget" / "2025 Prior Year") without the
+   *  client having to call `new Date()`.  Zero financial impact —
+   *  presentation only. */
+  reportingYear: number;
   introNote: string;
   statementNumber: string;
   documentChip: string;
@@ -479,6 +486,7 @@ export function buildSilverSpringsDepartmentalPayrollAnalysis(opts: {
     eyebrow: `${opts.clubName} · Payroll & Compensation`,
     title: "Departmental Payroll Analysis",
     periodLabel: period.statementHeaderLabel,
+    reportingYear: period.year,
     introNote:
       "Wages and taxes & benefits by department — MTD and YTD actual vs. budget with variance analysis.",
     statementNumber: "Statement 12 of 14",
@@ -716,9 +724,20 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
       fillHex: CANONICAL_FILL_HEXES[enriched.length % CANONICAL_FILL_HEXES.length] ?? FILL_SLATE_BLUE,
     });
   }
-  // Sort by YTD actual descending so the Board scans the biggest cost
-  // centres first.
-  enriched.sort((a, b) => b.ytdActual - a.ytdActual);
+  // MBR-PY-4 (2026-10-13) — sort by current-year YTD actual DESC
+  // with alphabetical tie-break via the shared comparator, so
+  // Chapter II and Chapter XII present identical department order.
+  // The comparator reads `.name` or `.fullLabel` for the alpha
+  // tie-break — EnrichedRow carries `.label` (not `.name`), so
+  // adapt by sorting on a mapped projection that exposes the
+  // expected field names.
+  const sortIndex = enriched
+    .map((e, i) => ({ i, ytdActual: e.ytdActual, name: e.label }))
+    .sort(comparePayrollDeptForChart)
+    .map((s) => s.i);
+  const resorted = sortIndex.map((i) => enriched[i]);
+  enriched.length = 0;
+  enriched.push(...resorted);
 
   // -- Dept-level rows + chart data --
   const rows: PayrollDepartmentRow[] = [];
@@ -939,6 +958,7 @@ export async function buildCouleeDepartmentalPayrollAnalysis(opts: {
     eyebrow: `${clubName} · Payroll & Compensation`,
     title: "Departmental Payroll Analysis",
     periodLabel: period.statementHeaderLabel,
+    reportingYear: period.year,
     introNote:
       "Payroll Actual + Budget by department — sourced from IS_PAYROLL × Department in the committed Trial Balance and Budget. Wages / taxes & benefits split awaits a separate GL classification; total compensation is shown.",
     statementNumber: "Statement 12 of 14",

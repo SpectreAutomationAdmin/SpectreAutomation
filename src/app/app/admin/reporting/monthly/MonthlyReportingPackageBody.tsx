@@ -8130,7 +8130,7 @@ function DepartmentalPayrollAnalysisPanel({
           MBR-VIS-5J — each of the four chart cards accepts its own
           `card:payroll-analysis:*` visibility key.  The client island
           wires the inline eye-icon beside each ChartHeader title. */}
-      <PayrollChartCards charts={dpa.charts} />
+      <PayrollChartCards charts={dpa.charts} reportingYear={dpa.reportingYear} />
 
       {/* Detailed summary table.
           MBR-VIS-5J — the detailed MTD/YTD summary table is a

@@ -35,6 +35,15 @@ import { EditorialChartReveal } from "@/components/reporting/EditorialChartRevea
 // client components themselves).
 import { CardVisibilityWrapper } from "@/components/reporting/CardVisibilityWrapper";
 import { InlineCardToggle } from "@/components/reporting/InlineCardToggle";
+// MBR-PY-4 (2026-10-13) — shared series palette.  Chapter II's
+// `seriesColors` object and Chapter XII's chart fills now resolve
+// through the same `payroll-dept-chart-config` module.  Replaces
+// the slate-blue Prior-Year fill with Chapter II's muted-sage
+// (#7a9466) so both charts legibly use the same comparison palette.
+import {
+  PAYROLL_DEPT_SERIES_TW,
+  payrollDeptSeriesLabels,
+} from "@/lib/reporting/payroll-dept-chart-config";
 
 type ChartData = DepartmentalPayrollAnalysis["charts"];
 
@@ -129,7 +138,13 @@ function ChartHeader({
 // Grouped bars — YTD Actual vs Budget by Department
 // ---------------------------------------------------------------------------
 
-function GroupedActualBudgetChart({ data }: { data: ChartData["byDepartment"] }) {
+function GroupedActualBudgetChart({
+  data,
+  reportingYear,
+}: {
+  data: ChartData["byDepartment"];
+  reportingYear: number;
+}) {
   const xLabels = data.map((d) => d.shortLabel);
   const actualValues = data.map((d) => d.ytdActual);
   const budgetValues = data.map((d) => d.ytdBudget);
@@ -150,19 +165,24 @@ function GroupedActualBudgetChart({ data }: { data: ChartData["byDepartment"] })
   const rawMax = Math.max(...seriesMaxCandidates);
   const yHi = Math.ceil(rawMax / 100_000) * 100_000;
   const yTicks = Math.max(2, yHi / 100_000);
+  // MBR-PY-4 (2026-10-13) — all three series read their fill class
+  // and legend label from the shared payroll-dept-chart-config
+  // module.  Chapter II is the authoritative palette; this chart
+  // now matches it byte-for-byte (muted-sage prior-year replaces
+  // the pre-MBR-PY-4 slate-blue #7d96b0).  Labels derive from the
+  // package's `reportingYear` so a 2027 build auto-renames; never
+  // falls back to `new Date()` (which would drift from financial
+  // period after year-end and desync server/client hydration).
+  const seriesLabels = payrollDeptSeriesLabels(reportingYear);
   const series = anyPriorYear && priorYearValues
     ? [
-        { name: "YTD Actual", values: actualValues, color: "fill-club-green-500" },
-        { name: "YTD Budget", values: budgetValues, color: "fill-club-gold" },
-        // MBR-PY-1 — prior-year bars in a brand slate complement to
-        // the green/gold pair.  Deliberately NOT club-green-700
-        // (reserved for current-year dark variant) and NOT a stoplight
-        // tone — this is a reference/overlay comparable, not a status.
-        { name: "YTD Prior Year", values: priorYearValues, color: "fill-[#7d96b0]" },
+        { name: seriesLabels.actual,    values: actualValues,    color: PAYROLL_DEPT_SERIES_TW.actual },
+        { name: seriesLabels.budget,    values: budgetValues,    color: PAYROLL_DEPT_SERIES_TW.budget },
+        { name: seriesLabels.priorYear, values: priorYearValues, color: PAYROLL_DEPT_SERIES_TW.priorYear },
       ]
     : [
-        { name: "YTD Actual", values: actualValues, color: "fill-club-green-500" },
-        { name: "YTD Budget", values: budgetValues, color: "fill-club-gold" },
+        { name: seriesLabels.actual, values: actualValues, color: PAYROLL_DEPT_SERIES_TW.actual },
+        { name: seriesLabels.budget, values: budgetValues, color: PAYROLL_DEPT_SERIES_TW.budget },
       ];
   return (
     <div data-testid="payroll-grouped-bar-chart" data-prior-year-plotted={anyPriorYear ? "true" : "false"}>
@@ -309,8 +329,13 @@ function WagesVsTaxesChart({ data }: { data: ChartData["byDepartment"] }) {
 
 export function PayrollChartCards({
   charts,
+  reportingYear,
 }: {
   charts: ChartData;
+  /** MBR-PY-4 (2026-10-13) — drives the legend labels on the
+   *  three-series bar chart ("2026 Actual" / "Budget" / "2025
+   *  Prior Year"). */
+  reportingYear: number;
 }) {
   return (
     <div
@@ -332,7 +357,7 @@ export function PayrollChartCards({
           cardLabel="YTD Payroll by Department"
         />
         <div className="px-6 py-5">
-          <GroupedActualBudgetChart data={charts.byDepartment} />
+          <GroupedActualBudgetChart data={charts.byDepartment} reportingYear={reportingYear} />
           <p
             data-testid="payroll-grouped-callout"
             className="mt-4 font-sans italic text-club-green-900"

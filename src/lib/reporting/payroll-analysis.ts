@@ -18,6 +18,10 @@
 
 import type { ReportingDataSource } from "./monthly-package";
 import { SILVER_SPRINGS_OPERATING_DUES as CANONICAL_OPERATING_DUES } from "./dues-subsidy";
+import {
+  PAYROLL_DEPT_SERIES_HEX,
+  comparePayrollDeptForChart,
+} from "./payroll-dept-chart-config";
 
 // -- Card 1 types -------------------------------------------------------------
 
@@ -303,10 +307,13 @@ export function buildPayrollDepartmentData(
       priorYearK: d.priorYear != null ? d.priorYear / 1000 : null,
     })),
     xLabels: inputs.departments.map((d) => d.name),
+    // MBR-PY-4 (2026-10-13) — colours read from the shared payroll-
+    // dept-chart-config.  Chapter II is the authoritative palette;
+    // Chapter XII imports from the same module to stay in lockstep.
     seriesColors: {
-      actual:    "#3f7042", // muted green
-      budget:    "#b08a4a", // muted gold
-      priorYear: "#7a9466", // muted sage
+      actual:    PAYROLL_DEPT_SERIES_HEX.actual,
+      budget:    PAYROLL_DEPT_SERIES_HEX.budget,
+      priorYear: PAYROLL_DEPT_SERIES_HEX.priorYear,
     },
     check: {
       headerPhrase: "Dues Revenue Covers Payroll Check:",
@@ -363,21 +370,31 @@ export async function buildPayrollDepartmentLive(
     incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
   ]);
 
-  const deptRows = historical.rows.map((r) => ({
-    key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    name: r.departmentName,
-    actual: r.actual,
-    budget: r.budget,
-    // MBR-PY-3 (2026-10-13) — Chapter II now reads the prior-year
-    // comparable from the SAME shared `resolveHistoricalPayrollByDepartment`
-    // resolver Chapter XII consumes.  `r.priorYearActual` is null when
-    // the comparable 2025 TB has no committed row covering the matched
-    // period; otherwise it carries the dept-attributed Mar YTD payroll
-    // read from the snapshot payload's `line.department` field.  Zero
-    // duplication of the historical path — Chapter II and Chapter XII
-    // use one authoritative dataset.
-    priorYear: r.priorYearActual,
-  }));
+  const deptRows = historical.rows
+    .map((r) => ({
+      key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      name: r.departmentName,
+      actual: r.actual,
+      budget: r.budget,
+      // MBR-PY-3 (2026-10-13) — Chapter II now reads the prior-year
+      // comparable from the SAME shared `resolveHistoricalPayrollByDepartment`
+      // resolver Chapter XII consumes.  `r.priorYearActual` is null when
+      // the comparable 2025 TB has no committed row covering the matched
+      // period; otherwise it carries the dept-attributed Mar YTD payroll
+      // read from the snapshot payload's `line.department` field.  Zero
+      // duplication of the historical path — Chapter II and Chapter XII
+      // use one authoritative dataset.
+      priorYear: r.priorYearActual,
+    }))
+    // MBR-PY-4 (2026-10-13) — sort by current-year YTD actual DESC
+    // with alphabetical tie-break, so Chapter II's chart presents
+    // the same department order Chapter XII does.  The underlying
+    // resolver sorts alphabetically for the table; the chart has a
+    // different ordering need.  `ytdActual: r.actual` adapts the row
+    // shape for the shared comparator without a second mapping pass.
+    .map((d) => ({ ...d, ytdActual: d.actual }))
+    .sort(comparePayrollDeptForChart)
+    .map(({ ytdActual: _unused, ...rest }) => rest);
 
   // PAYROLL-HIST-1 §14-15 — canonical consolidated payroll Actual +
   // Budget for the headline KPI ribbon. These are the GL totals
