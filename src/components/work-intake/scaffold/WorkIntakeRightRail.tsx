@@ -55,15 +55,17 @@ export default function WorkIntakeRightRail({ data }: { data: WiRailData }) {
         </div>
       </section>
 
-      {/* WI-CAL-1 — reuse the approved Mission Control component.
-          The right-rail wrapper remains a Work-Intake-styled
-          .wi-rail-card so the sidebar positioning + width stay
-          exactly as the WI-1 §11 reference specifies; the inner
-          card renders Mission Control's full appointment list
-          (time + title + source + optional location/consent hint). */}
-      <section className="wi-rail-card wi-rail-commitments-slot">
-        <TodaysCommitments data={data.commitments.snapshot} />
-      </section>
+      {/* WI-CAL-1B (2026-10-13) — mount the shared Mission Control
+          component with ZERO outer wrapper, matching the admin
+          page's JSX byte-for-byte.  The component already owns its
+          own <section className="spectre-mc-rail-card
+          spectre-mc-commitments"> — wrapping it in a sibling
+          `wi-rail-card` nested the two cards (double border,
+          doubled padding, mismatched height).  Work Intake's
+          sidebar <aside> provides the outer positioning + width;
+          the shared component's own section is now the sole card
+          boundary, identical to Mission Control. */}
+      <TodaysCommitments data={data.commitments.snapshot} />
     </>
   );
 }

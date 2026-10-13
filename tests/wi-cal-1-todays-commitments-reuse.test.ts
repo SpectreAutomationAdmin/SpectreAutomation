@@ -40,16 +40,34 @@ describe("WI-CAL-1 §A — Work Intake imports the shared Mission Control Todays
     expect(RAIL_RENDERER).toContain("import TodaysCommitments");
   });
 
-  it("mounts <TodaysCommitments data={…}/> inside the WI rail slot", () => {
+  it("mounts <TodaysCommitments data={…}/> directly — ZERO wrapper (matches Mission Control)", () => {
+    // WI-CAL-1B — the shared component already owns its own
+    // <section className="spectre-mc-rail-card spectre-mc-commitments">.
+    // Any outer wrapper would nest two cards (double border,
+    // double padding, mismatched height from Mission Control).
     expect(RAIL_RENDERER).toMatch(/<TodaysCommitments data=\{data\.commitments\.snapshot\}\s*\/>/);
+    // WI-CAL-1B regression guard: the retired outer wrapper is gone.
+    expect(RAIL_RENDERER).not.toMatch(/wi-rail-commitments-slot/);
+    expect(RAIL_RENDERER).not.toMatch(
+      /<(section|div)[^>]*className=["'][^"']*wi-rail-card[^"']*["'][^>]*>\s*<TodaysCommitments/,
+    );
   });
 
-  it("retains the Work-Intake rail wrapper (preserves sidebar positioning + width per directive §3-7)", () => {
-    // The outer <section className="wi-rail-card wi-rail-commitments-slot">
-    // keeps the same width/positioning as the pre-fix card so the
-    // approved Mission Control card lives inside the WI sidebar
-    // chrome without touching the WI-1 §11 reference geometry.
-    expect(RAIL_RENDERER).toContain("wi-rail-card wi-rail-commitments-slot");
+  it("the admin page (Mission Control) renders the same ZERO-wrapper pattern — proves parity", () => {
+    const adminPage = fs.readFileSync(
+      path.join(REPO, "src/app/app/admin/page.tsx"),
+      "utf-8",
+    );
+    // The directive requires exact JSX parity.  Admin page mounts
+    // <TodaysCommitments> as a direct child of its <aside>; neither
+    // page wraps it in another card.
+    expect(adminPage).toMatch(/<TodaysCommitments data=\{snapshot\.todaysCommitments\}\s*\/>/);
+    expect(adminPage).not.toMatch(
+      /<(section|div)[^>]*className=["'][^"']*wi-rail-card[^"']*["'][^>]*>\s*<TodaysCommitments/,
+    );
+    expect(adminPage).not.toMatch(
+      /<section[^>]*className=["'][^"']*spectre-mc-rail-card[^"']*["'][^>]*>\s*<TodaysCommitments/,
+    );
   });
 });
 
