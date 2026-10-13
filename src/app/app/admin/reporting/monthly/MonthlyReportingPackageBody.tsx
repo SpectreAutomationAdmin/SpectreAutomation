@@ -2732,6 +2732,27 @@ function OperatingResultsCard({ data }: {
 //      name + italic description, three values, status glyph on right.
 // ---------------------------------------------------------------------------
 
+/**
+ * MBR-FP-5 (2026-10-13) — shared minimum height for the Column
+ * Header row (Band 3) across every StewardshipScorecardCard instance.
+ *
+ * Why: Operating Stewardship's benchmark column reads "Variance /
+ * Target" (two words with a slash, wraps to two lines at the chart's
+ * 5.2rem column + 9.5 px font); Capital Stewardship's reads "Target"
+ * (single line).  Without a minimum height the two scorecards'
+ * Band-3 rows diverge by ~14 px when sitting side-by-side, breaking
+ * horizontal alignment of their first KPI rows.
+ *
+ * Value: 44 px fits the Operating card's 2-line wrap at the current
+ * font + letter-spacing (9.5 px font × 1.4 line-height × 2 lines
+ * + 8 px top + 8 px bottom padding ≈ 42.6 px; rounded up with a
+ * 1-px alignment buffer).  Keep this constant as the single knob —
+ * if the column text or font-size changes, remeasure and update
+ * here, not in two places.
+ */
+const SCORECARD_COLUMN_HEADER_MIN_HEIGHT = 44;
+
+
 type ScorecardData = Awaited<ReturnType<typeof getMonthlyReportingPackage>>["stewardshipDashboard"]["scorecards"]["operating"];
 
 /** Colour for the row's status dot. Uses Tailwind arbitrary-hex
@@ -2928,14 +2949,27 @@ function StewardshipScorecardCard({
       {/* Band 3 — Column headers. Narrow, smallcaps, centered values.
           Layout: [metric column] [actual] [budget] [benchmark] [glyph]
           The trailing glyph column has no header label (just the
-          status arrow). */}
+          status arrow).
+
+          MBR-FP-5 (2026-10-13) — pinned `minHeight` so the Operating
+          and Capital scorecard header rows render at identical
+          heights regardless of column-header text wrap.  Operating
+          uses "Variance / Target" (two words that wrap to two lines
+          at this font-size/column width); Capital uses "Target" (one
+          line).  Without a minHeight, the two cards' header rows
+          diverge by ~14 px vertically when sitting side-by-side.
+          The shared `SCORECARD_COLUMN_HEADER_MIN_HEIGHT` is the
+          directive-called-for shared primitive — one knob drives
+          both scorecards' header geometry. */}
       <div
+        data-testid={`${testid}-column-headers`}
         className="grid items-center border-b border-club-sand bg-club-cream/40 px-4 py-2 uppercase text-club-green-800/65"
         style={{
           fontSize: "9.5px",
           letterSpacing: "1.1px",
           gridTemplateColumns: "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem",
           columnGap: "0.75rem",
+          minHeight: `${SCORECARD_COLUMN_HEADER_MIN_HEIGHT}px`,
         }}
       >
         <span>Metric</span>

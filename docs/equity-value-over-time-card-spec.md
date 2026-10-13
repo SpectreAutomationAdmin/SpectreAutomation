@@ -181,3 +181,26 @@ A change is complete only when ALL of the following hold:
 ## 12. Change log
 
 - **2026-06-13** — Card LOCKED as approved baseline. Founder sign-off after right-edge alignment + commentary inset/hugging + subtitle readability bumps. All thirteen rules above codified into source-contract + Playwright-assertion tests.
+
+- **2026-10-13 (MBR-FP-5)** — Founder-authorized revision to the historical observation set + CAGR semantics. Visual geometry, typography, palette, chart primitive, header styling, and the four locked numbers (padLeft=44, padRight=14, chartHeight=245, commentaryHeight=100) remain unchanged.
+
+  Service-side revisions (`src/lib/reporting/equity-history.ts`):
+
+  1. **Fiscal year-end filter** — `getEquityPointsFromCommittedSnapshots` now admits a snapshot into the series only when its `asOf` month + day match the tenant-configured `ClubProfile.fiscalYearEndMonth / fiscalYearEndDay` (default Dec 31). Monthly balances (Jan/Feb/Mar/Apr…) are excluded by design — they are not annual observations. For the January 2026 Coulee package the chart renders exactly one point (`"2025" → Dec 31 2025 equity`); the Jan/Feb/Mar/Apr/Dec 2024 monthly snapshots and the Jan 2026 current-period snapshot never enter the series.
+
+  2. **Reporting-cutoff enforced** — the pre-existing `asOf: { lte: asOfEod }` filter stays. A future Dec 31 2026 balance uploaded after the Jan 2026 package was built MUST NOT appear in that package's chart; the filter already prevents it.
+
+  3. **Dedupe by fiscal year** — the resolver now dedupes by fiscal-year label so an inadvertent same-FY re-upload does not produce two points at the same x-coordinate.
+
+  4. **Current Equity decoupled from the series' last point** — `EquityHistory.currentEquityCents` is now sourced from a live `balanceSheet(clubId, asOf)` call, independent of the year-end observations. For a Jan 2026 package the KPI shows Jan 31 2026 equity while the chart plots only Dec 31 2025. The two measures are intentionally different and must not be conflated.
+
+  5. **CAGR `null` when < 2 observations** — `EquityHistory.actualCagrBps` is `number | null`. The formatter emits `"—"` (not `"0.0%"`) when the series carries fewer than two annual observations. Compound annual growth cannot be computed from a single point.
+
+  Component-side (`src/app/app/admin/reporting/monthly/MonthlyReportingPackageBody.tsx` `EquityValueCard`):
+
+  No visual changes authorized by this slice. The card still renders every pre-MBR-FP-5 primitive at the same dimensions, colours, and typography. The chart draws a single dot (no segment) when the series has one point — the chart primitive's existing null-tolerance covers this case without any component change.
+
+  Regression gates added:
+
+  - Service contract tests verify (a) monthly snapshots never populate the series; (b) `actualCagrBps` is null when the series has fewer than two points; (c) `currentEquityCents` reflects the live BS at `asOf`, not the series tail; (d) non-December fiscal-year tenants use their own calendar; (e) future year-end balances uploaded past the reporting cutoff are excluded.
+  - Playwright staging acceptance verifies the Jan 2026 package renders exactly one data point at `"2025"` and the CAGR KPI reads `"—"`.

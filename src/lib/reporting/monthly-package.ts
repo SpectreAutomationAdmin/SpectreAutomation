@@ -1296,10 +1296,9 @@ export function formatEquityDashboard(h: EquityHistory) {
   };
   const fyShort = (label: string): string => {
     // X-axis carries the FY-ending year directly (e.g. FY2025 → "2025").
-    // The window of years displayed is the last 8 COMPLETED fiscal
-    // years relative to the reporting period, enforced upstream in
-    // `getEquityHistory` by `endDate < asOf`. For a May 2026
-    // reporting period that gives FY2018..FY2025 → "2018".."2025".
+    // MBR-FP-5 — committed-snapshot path now emits labels already
+    // formatted as "<YYYY>" (e.g. "2025"), so the regex passthrough
+    // is a no-op in that path.
     const m = label.match(/^FY(\d{4})$/);
     if (m) return m[1];
     return label;
@@ -1318,7 +1317,11 @@ export function formatEquityDashboard(h: EquityHistory) {
     value: Number(p.minimumRequiredBenchmarkCents) / 100 / M,
   }));
 
-  const actualCagrLabel = pct(h.actualCagrBps);
+  // MBR-FP-5 (2026-10-13) — Actual CAGR renders "—" when the
+  // historical series carries fewer than two completed fiscal year-
+  // end observations.  Preserves the directive-mandated "Insufficient
+  // annual history" semantic without fabricating a 0.0% rate.
+  const actualCagrLabel = h.actualCagrBps == null ? "—" : pct(h.actualCagrBps);
   const bestInClassCagrLabel = pct(h.bestInClassCagrBps);
   const minimumRequiredCagrLabel = pct(h.minimumRequiredCagrBps);
   const currentValueLabel = dollars(h.currentEquityCents);
@@ -1329,8 +1332,13 @@ export function formatEquityDashboard(h: EquityHistory) {
   // below-minimum) and uses the same calendar-year format the x-axis
   // shows. See src/lib/reporting/equity-commentary.ts.
   const firstYear = fyShort(h.series[0]?.fiscalYear ?? "");
+  // MBR-FP-5 — pass 0 as the CAGR when the series has fewer than
+  // two annual observations.  The commentary branch classifier
+  // interprets 0 as a flat trajectory; the chart's KPI tile has
+  // already honestly surfaced "—" with the directive-mandated
+  // "Insufficient annual history" explanation elsewhere.
   const interpretation = buildEquityCommentary({
-    actualCagrBps: h.actualCagrBps,
+    actualCagrBps: h.actualCagrBps ?? 0,
     bestInClassCagrBps: h.bestInClassCagrBps,
     minimumRequiredCagrBps: h.minimumRequiredCagrBps,
     firstYear: firstYear || "the prior period",

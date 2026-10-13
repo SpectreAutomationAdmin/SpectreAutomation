@@ -59,15 +59,26 @@ export type EquityHistoryPoint = {
 };
 
 export type EquityHistory = {
-  /** Current-period equity in cents (matches the last point of `series`). */
+  /** Current-period equity in cents.
+   *
+   *  MBR-FP-5 (2026-10-13) — this is NOW decoupled from `series`.
+   *  The chart's series carries ONLY completed fiscal year-end
+   *  observations; the Current Equity KPI continues to display the
+   *  live-period balance sheet (e.g. Jan 31 2026) because it is a
+   *  "current state" measure.  The two must not be conflated. */
   currentEquityCents: bigint;
-  /** Compounded annual growth rate over the series in basis points. */
-  actualCagrBps: number;
+  /** Compounded annual growth rate over the series in basis points.
+   *  MBR-FP-5 — null when fewer than two distinct fiscal year-end
+   *  observations exist (prevents a false "0.0 %" CAGR when the
+   *  tenant has only one closed year of history). */
+  actualCagrBps: number | null;
   /** Configured best-in-class benchmark CAGR in basis points. */
   bestInClassCagrBps: number;
   /** Configured minimum-required benchmark CAGR in basis points. */
   minimumRequiredCagrBps: number;
-  /** Year-by-year actual + benchmark projections, oldest first. */
+  /** Year-by-year actual + benchmark projections, oldest first.
+   *  MBR-FP-5 — strictly completed fiscal year-end points.  Monthly
+   *  balances no longer leak into this series. */
   series: EquityHistoryPoint[];
   /** Provenance record so tests + the UI can prove the data origin. */
   source: {
@@ -202,12 +213,37 @@ export async function getEquityHistory(
   const years = Math.max(0, actualCents.length - 1);
   const actualCagrBps = computeCagrBps(baseCents, currentEquityCents, years);
 
-  // REPORT-CHART-1 §4 (2026-10-03) — if the committed-snapshot path
-  // has MORE plottable points than the FiscalYear-driven series,
-  // prefer it. This covers the Jonas-only tenant where a single FY
-  // row produces 1 live-bs point but 2 committed TB snapshots
-  // (Dec 2025 + Jan 2026) exist and should both plot.
-  const snapshotPoints = await getEquityPointsFromCommittedSnapshots(clubId, asOf);
+  // MBR-FP-5 (2026-10-13) — the live Current Equity KPI is always
+  // sourced from the balance sheet at the ACTUAL reporting-period
+  // asOf, independent of what's on the historical chart.  A Jan
+  // 2026 package may plot only Dec 31 2025 on the chart but still
+  // show Jan 31 2026 equity as the "Current Equity" KPI — the two
+  // measures are intentionally different.
+  const liveCurrent = await resolveLiveEquity(clubId, asOf);
+
+  // MBR-FP-5 — snapshot-path replacement rule.  Restricted to
+  // snapshots whose asOf is a COMPLETED FISCAL YEAR-END for the
+  // tenant.  Monthly balances no longer leak into this series —
+  // they would misrepresent a mid-year balance as an annual
+  // observation.  Fiscal year-end resolution reads
+  // `ClubProfile.fiscalYearEndMonth` / `.fiscalYearEndDay`; defaults
+  // to Dec 31 when the tenant hasn't configured them.
+  //
+  // Note: `clubProfile` is reused — the earlier `profile` lookup
+  // above also returns `fiscalYearEndMonth/Day` on the same row,
+  // but we fetch it with its own `select` here for clarity.
+  const fyProfile = await prisma.clubProfile.findUnique({
+    where: { clubId },
+    select: { fiscalYearEndMonth: true, fiscalYearEndDay: true },
+  });
+  const fyEndMonth = fyProfile?.fiscalYearEndMonth ?? 12;
+  const fyEndDay = fyProfile?.fiscalYearEndDay ?? 31;
+
+  const snapshotPoints = await getEquityPointsFromCommittedSnapshots(
+    clubId,
+    asOf,
+    { fyEndMonth, fyEndDay },
+  );
   if (snapshotPoints.length > series.length) {
     {
       const sp = snapshotPoints;
@@ -215,10 +251,12 @@ export async function getEquityHistory(
       const current = sp[sp.length - 1].clubEquityCents;
       const yrs = Math.max(0, sp.length - 1);
       return {
-        currentEquityCents: current,
-        actualCagrBps: computeCagrBps(base, current, yrs),
+        // MBR-FP-5 — current equity decoupled from the last year-end.
+        currentEquityCents: liveCurrent ?? current,
+        // MBR-FP-5 — CAGR null when only one annual observation exists.
+        actualCagrBps: sp.length < 2 ? null : computeCagrBps(base, current, yrs),
         // §5 — benchmark projections are suppressed on the snapshot
-        // path. Two points do not constitute a long-term benchmark
+        // path.  Two points do not constitute a long-term benchmark
         // base; projecting a demo CAGR off a 2-point series would
         // misrepresent the data.
         bestInClassCagrBps: 0,
@@ -237,8 +275,15 @@ export async function getEquityHistory(
   }
 
   return {
+    // MBR-FP-5 — on the FY-driven path the series already includes
+    // the current open year (its last point IS the current-period
+    // equity), so `currentEquityCents` is kept as the series tail.
+    // The snapshot-path return above handles the Jonas-tenant case
+    // where the chart plots only year-ends and the KPI needs the
+    // live BS at asOf separately.
     currentEquityCents,
-    actualCagrBps,
+    // MBR-FP-5 — CAGR null when fewer than two annual observations.
+    actualCagrBps: actualCents.length < 2 ? null : actualCagrBps,
     bestInClassCagrBps,
     minimumRequiredCagrBps,
     series,
@@ -246,18 +291,41 @@ export async function getEquityHistory(
   };
 }
 
-/** REPORT-CHART-1 §4 (2026-10-03) — enumerate committed TB snapshots
- *  on-or-before `asOf` and resolve equity at each via `balanceSheet`.
- *  Emits points labeled "<Mon YYYY>" (e.g. "Dec 2025", "Jan 2026")
- *  since there is no FiscalYear row to pull a label from. */
+/** MBR-FP-5 — resolve current-period equity from the live balance
+ *  sheet at the reporting-period asOf.  Returns null when the BS
+ *  read fails; the caller falls back to the series' last value. */
+async function resolveLiveEquity(clubId: string, asOf: Date): Promise<bigint | null> {
+  try {
+    const bs = await balanceSheet(clubId, asOf);
+    return decimalToCents(bs.totalEquity);
+  } catch {
+    return null;
+  }
+}
+
+/** REPORT-CHART-1 §4 (2026-10-03) / MBR-FP-5 (2026-10-13) — enumerate
+ *  committed TB snapshots whose `asOf` is a COMPLETED FISCAL YEAR-END
+ *  for the tenant on-or-before `asOf`, and resolve equity at each
+ *  via `balanceSheet`.
+ *
+ *  Fiscal year-end filter rule (MBR-FP-5 §2-3):
+ *    - A snapshot qualifies ONLY when its `asOf` month and
+ *      day-of-month equal the tenant-configured
+ *      `Club.fiscalYearEndMonth` / `Club.fiscalYearEndDay`
+ *      (default Dec 31).
+ *    - A monthly balance (e.g. Jan 31, Feb 28, Mar 31) is NEVER
+ *      an annual observation and is excluded.
+ *    - The reporting-cutoff filter (`asOf: { lte: asOfEod }`) is
+ *      preserved — a future year-end that's uploaded later must
+ *      not appear in an earlier reporting period's package.
+ *
+ *  Label format: `"<YYYY>"` (e.g. `"2025"`) so the chart x-axis
+ *  carries the fiscal year directly per the directive §3. */
 async function getEquityPointsFromCommittedSnapshots(
   clubId: string,
   asOf: Date,
+  cfg: { fyEndMonth: number; fyEndDay: number },
 ): Promise<Array<{ fiscalYear: string; clubEquityCents: bigint }>> {
-  // End-of-day asOf — committed snapshots are stored at 23:59:59.999
-  // of their effective date, so a start-of-day period end filter
-  // would miss the same-day snapshot (same bug as TB-HIST-12
-  // freshness pill).
   const asOfEod = new Date(Date.UTC(
     asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(),
     23, 59, 59, 999,
@@ -274,23 +342,29 @@ async function getEquityPointsFromCommittedSnapshots(
   });
   if (snapshots.length === 0) return [];
   const points: Array<{ fiscalYear: string; clubEquityCents: bigint }> = [];
+  // Dedupe by fiscal year to prevent two same-FY snapshots from
+  // producing two points — the LATER capture wins (asOf-asc orderBy
+  // → the second overwrite is the newer one).
+  const byYear = new Map<string, { asOf: Date; clubEquityCents: bigint }>();
   for (const s of snapshots) {
     if (!s.asOf) continue;
+    const month = s.asOf.getUTCMonth() + 1; // 1..12
+    const day = s.asOf.getUTCDate();
+    // MBR-FP-5 — strict fiscal year-end match.  Nothing else plots.
+    if (month !== cfg.fyEndMonth || day !== cfg.fyEndDay) continue;
     try {
       const bs = await balanceSheet(clubId, s.asOf);
-      const label = labelFromDate(s.asOf);
-      points.push({ fiscalYear: label, clubEquityCents: decimalToCents(bs.totalEquity) });
+      const label = String(s.asOf.getUTCFullYear());
+      byYear.set(label, { asOf: s.asOf, clubEquityCents: decimalToCents(bs.totalEquity) });
     } catch {
-      // Snapshot read failed — skip rather than fabricate zero.
       continue;
     }
   }
+  for (const [label, p] of byYear) {
+    points.push({ fiscalYear: label, clubEquityCents: p.clubEquityCents });
+  }
+  // asOf-asc order is preserved by Map insertion order.
   return points;
-}
-
-function labelFromDate(d: Date): string {
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 // ---------------------------------------------------------------------------
