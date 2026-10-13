@@ -29,6 +29,12 @@ import { EditorialBarChart } from "@/components/reporting/EditorialBarChart";
 import { EditorialGroupedBarChart } from "@/components/reporting/EditorialGroupedBarChart";
 import { EditorialDonut, type DonutSlice } from "@/components/reporting/EditorialDonut";
 import { EditorialChartReveal } from "@/components/reporting/EditorialChartReveal";
+// MBR-VIS-5J — per-chart visibility.  Reuses the established
+// CardVisibilityWrapper + InlineCardToggle primitives.  Both
+// components are safe to import from a client file (they are
+// client components themselves).
+import { CardVisibilityWrapper } from "@/components/reporting/CardVisibilityWrapper";
+import { InlineCardToggle } from "@/components/reporting/InlineCardToggle";
 
 type ChartData = DepartmentalPayrollAnalysis["charts"];
 
@@ -60,11 +66,22 @@ function ChartHeader({
   subtitle,
   chipLabel,
   testidPrefix,
+  componentKey,
+  cardLabel,
 }: {
   title: string;
   subtitle: string;
   chipLabel: string;
   testidPrefix: string;
+  /** MBR-VIS-5J — opt-in per-chart visibility.  When both props are
+   *  provided, a white inline eye-icon renders between the title and
+   *  the gold classification pill.  The pill stays right-aligned
+   *  exactly where it rendered pre-VIS-5J; the toggle sits inside
+   *  the existing header row so no new DOM wrapper is introduced
+   *  and header geometry (height: 76 px, padding, pill position) is
+   *  preserved exactly. */
+  componentKey?: string;
+  cardLabel?: string;
 }) {
   return (
     <header
@@ -88,13 +105,22 @@ function ChartHeader({
           {subtitle}
         </p>
       </div>
-      <span
-        data-testid={`${testidPrefix}-chip`}
-        className="inline-flex shrink-0 items-center rounded-full border border-club-gold/30 px-2.5 py-1 uppercase text-club-gold"
-        style={{ fontSize: "9px", letterSpacing: "1px", fontWeight: 500 }}
-      >
-        {chipLabel}
-      </span>
+      <div className="flex shrink-0 items-center gap-2">
+        {componentKey && cardLabel && (
+          <InlineCardToggle
+            componentKey={componentKey}
+            cardLabel={cardLabel}
+            tone="cream"
+          />
+        )}
+        <span
+          data-testid={`${testidPrefix}-chip`}
+          className="inline-flex items-center rounded-full border border-club-gold/30 px-2.5 py-1 uppercase text-club-gold"
+          style={{ fontSize: "9px", letterSpacing: "1px", fontWeight: 500 }}
+        >
+          {chipLabel}
+        </span>
+      </div>
     </header>
   );
 }
@@ -272,12 +298,18 @@ export function PayrollChartCards({
       className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2"
     >
       {/* Chart 1 — YTD Actual vs Budget grouped */}
+      <CardVisibilityWrapper
+        componentKey="card:payroll-analysis:ytd-payroll-by-department"
+        cardLabel="YTD Payroll by Department"
+      >
       <article data-testid="payroll-grouped-card" className={cardClass}>
         <ChartHeader
           title={charts.titles.byDeptActualVsBudget.title}
           subtitle={charts.titles.byDeptActualVsBudget.subtitle}
           chipLabel={charts.titles.byDeptActualVsBudget.chipLabel}
           testidPrefix="payroll-grouped"
+          componentKey="card:payroll-analysis:ytd-payroll-by-department"
+          cardLabel="YTD Payroll by Department"
         />
         <div className="px-6 py-5">
           <GroupedActualBudgetChart data={charts.byDepartment} />
@@ -290,14 +322,21 @@ export function PayrollChartCards({
           </p>
         </div>
       </article>
+      </CardVisibilityWrapper>
 
       {/* Chart 2 — YTD Variance diverging */}
+      <CardVisibilityWrapper
+        componentKey="card:payroll-analysis:ytd-variance-by-department"
+        cardLabel="YTD Variance by Department"
+      >
       <article data-testid="payroll-variance-card" className={cardClass}>
         <ChartHeader
           title={charts.titles.ytdVariance.title}
           subtitle={charts.titles.ytdVariance.subtitle}
           chipLabel={charts.titles.ytdVariance.chipLabel}
           testidPrefix="payroll-variance"
+          componentKey="card:payroll-analysis:ytd-variance-by-department"
+          cardLabel="YTD Variance by Department"
         />
         <div className="px-6 py-5">
           <VarianceDivergingChart data={charts.byDepartment} />
@@ -310,14 +349,21 @@ export function PayrollChartCards({
           </p>
         </div>
       </article>
+      </CardVisibilityWrapper>
 
       {/* Chart 3 — Payroll Distribution donut */}
+      <CardVisibilityWrapper
+        componentKey="card:payroll-analysis:payroll-distribution"
+        cardLabel="Payroll Distribution — Where Does the Dollar Go?"
+      >
       <article data-testid="payroll-distribution-card" className={cardClass}>
         <ChartHeader
           title={charts.titles.payrollDistribution.title}
           subtitle={charts.titles.payrollDistribution.subtitle}
           chipLabel={charts.titles.payrollDistribution.chipLabel}
           testidPrefix="payroll-distribution"
+          componentKey="card:payroll-analysis:payroll-distribution"
+          cardLabel="Payroll Distribution — Where Does the Dollar Go?"
         />
         <div className="px-6 py-5">
           <div className="flex flex-row items-center justify-center gap-8">
@@ -333,14 +379,21 @@ export function PayrollChartCards({
           </p>
         </div>
       </article>
+      </CardVisibilityWrapper>
 
       {/* Chart 4 — Wages vs Taxes & Benefits grouped */}
+      <CardVisibilityWrapper
+        componentKey="card:payroll-analysis:wages-taxes-benefits-split"
+        cardLabel="Wages vs. Taxes & Benefits Split"
+      >
       <article data-testid="payroll-stacked-card" className={cardClass}>
         <ChartHeader
           title={charts.titles.wagesVsTaxes.title}
           subtitle={charts.titles.wagesVsTaxes.subtitle}
           chipLabel={charts.titles.wagesVsTaxes.chipLabel}
           testidPrefix="payroll-stacked"
+          componentKey="card:payroll-analysis:wages-taxes-benefits-split"
+          cardLabel="Wages vs. Taxes & Benefits Split"
         />
         <div className="px-6 py-5">
           <WagesVsTaxesChart data={charts.byDepartment} />
@@ -353,6 +406,7 @@ export function PayrollChartCards({
           </p>
         </div>
       </article>
+      </CardVisibilityWrapper>
     </div>
   );
 }

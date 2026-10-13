@@ -7936,12 +7936,43 @@ function payrollKpiSubClass(treatment: PayrollKpiTreatment): string {
     : "mt-2 text-[11.5px] text-club-green-900/70";
 }
 
-function PayrollKpiCardRender({ card }: { card: PayrollKpiCard }) {
-  return (
+function PayrollKpiCardRender({
+  card,
+  componentKey,
+  cardLabel,
+}: {
+  card: PayrollKpiCard;
+  /** MBR-VIS-5J — opt-in per-tile visibility.  When both props are
+   *  provided, the tile mounts an inline eye-icon in the top-right
+   *  corner and wraps its article in CardVisibilityWrapper so hidden
+   *  tiles are omitted from Draft Preview + PDF.  The icon tone
+   *  flips to "cream" on the dark-green `primary` treatment so the
+   *  eye is readable on the ivory-on-green card. */
+  componentKey?: string;
+  cardLabel?: string;
+}) {
+  const toggleTone: "default" | "cream" =
+    card.treatment === "primary" ? "cream" : "default";
+  // MBR-VIS-5J — add `relative` to the article so the opt-in inline
+  // toggle in the top-right corner anchors inside the card.  The
+  // toggle is a zero-height absolute overlay — it does not reserve
+  // space, so pre-VIS-5J geometry is preserved.
+  const body = (
     <article
       data-testid={`dpa-kpi-${card.key}`}
-      className={payrollKpiCardClass(card.treatment)}
+      className={`relative ${payrollKpiCardClass(card.treatment)}`}
     >
+      {componentKey && cardLabel && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end px-3 pt-2">
+          <div className="pointer-events-auto">
+            <InlineCardToggle
+              componentKey={componentKey}
+              cardLabel={cardLabel}
+              tone={toggleTone}
+            />
+          </div>
+        </div>
+      )}
       <p
         data-testid={`dpa-kpi-${card.key}-value`}
         className={`font-serif text-[32px] leading-none tabular-nums ${payrollKpiValueClass(card.treatment, card.valueTone)}`}
@@ -7964,6 +7995,14 @@ function PayrollKpiCardRender({ card }: { card: PayrollKpiCard }) {
       ) : null}
     </article>
   );
+  if (componentKey && cardLabel) {
+    return (
+      <CardVisibilityWrapper componentKey={componentKey} cardLabel={cardLabel}>
+        {body}
+      </CardVisibilityWrapper>
+    );
+  }
+  return body;
 }
 
 function dpaVarianceToneClass(tone: PayrollVarianceTone): string {
@@ -8065,26 +8104,53 @@ function DepartmentalPayrollAnalysisPanel({
         </div>
       </header>
 
-      {/* 4 KPI cards across the top. */}
+      {/* 4 KPI cards across the top.
+          MBR-VIS-5J — each tile carries an independent
+          `tile:payroll-analysis:${card.key}` visibility key.  The
+          service's card key is the stable identifier (ytd-total-
+          payroll / ytd-variance / current-month-payroll / payroll-
+          to-revenue); the inline eye-icon sits in the top-right
+          corner, white on the dark-green `primary` card and dark
+          green on the three light-background cards. */}
       <div
         data-testid="dpa-kpi-grid"
         className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
       >
         {dpa.kpiCards.map((c) => (
-          <PayrollKpiCardRender key={c.key} card={c} />
+          <PayrollKpiCardRender
+            key={c.key}
+            card={c}
+            componentKey={`tile:payroll-analysis:${c.key}`}
+            cardLabel={c.label}
+          />
         ))}
       </div>
 
-      {/* 2×2 chart grid (interactive client island). */}
+      {/* 2×2 chart grid (interactive client island).
+          MBR-VIS-5J — each of the four chart cards accepts its own
+          `card:payroll-analysis:*` visibility key.  The client island
+          wires the inline eye-icon beside each ChartHeader title. */}
       <PayrollChartCards charts={dpa.charts} />
 
-      {/* Detailed summary table. */}
+      {/* Detailed summary table.
+          MBR-VIS-5J — the detailed MTD/YTD summary table is a
+          substantive analysis component (department rows, Club
+          Total band) and receives its own `card:payroll-analysis:
+          detailed-summary-table` visibility toggle. */}
+      <CardVisibilityWrapper
+        componentKey="card:payroll-analysis:detailed-summary-table"
+        cardLabel="Departmental Payroll — detailed summary table"
+      >
       <div data-testid="dpa-table" className="mt-8">
         <h3
           data-testid="dpa-table-eyebrow"
-          className="uppercase tracking-[0.22em] text-[10.5px] text-[#a08850]"
+          className="flex items-center justify-between gap-2 uppercase tracking-[0.22em] text-[10.5px] text-[#a08850]"
         >
-          {dpa.table.eyebrow}
+          <span>{dpa.table.eyebrow}</span>
+          <InlineCardToggle
+            componentKey="card:payroll-analysis:detailed-summary-table"
+            cardLabel="Departmental Payroll — detailed summary table"
+          />
         </h3>
         <div className="mt-3 overflow-hidden rounded-md border border-club-sand/60">
           <div
@@ -8106,6 +8172,7 @@ function DepartmentalPayrollAnalysisPanel({
           <PayrollTableRowRender row={dpa.table.total} />
         </div>
       </div>
+      </CardVisibilityWrapper>
 
       {/* Bottom padding spacer — no reference attribution. */}
       <div aria-hidden="true" className="mt-12" />

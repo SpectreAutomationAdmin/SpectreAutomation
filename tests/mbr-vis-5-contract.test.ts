@@ -352,6 +352,90 @@ describe("MBR-VIS-5I §O — Operating vs. Capital Stewardship visibility", () =
   });
 });
 
+describe("MBR-VIS-5J §P — Departmental Payroll Analysis visibility", () => {
+  const body = src(BODY);
+  const chartCards = src(path.join(REPO, "src/app/app/admin/reporting/monthly/PayrollChartCards.tsx"));
+
+  it("PayrollKpiCardRender accepts opt-in componentKey + cardLabel + mounts the wrapper + inline toggle", () => {
+    const fn = body.slice(body.indexOf("function PayrollKpiCardRender"));
+    const scope = fn.slice(0, 3_000);
+    expect(scope).toMatch(/componentKey\?:\s*string/);
+    expect(scope).toMatch(/cardLabel\?:\s*string/);
+    expect(scope).toContain("InlineCardToggle");
+    expect(scope).toContain("CardVisibilityWrapper");
+    // The dark-green `primary` tile uses tone="cream" so the eye is
+    // readable against the deep green ground.
+    expect(scope).toMatch(/toggleTone/);
+    expect(scope).toMatch(/"cream"/);
+  });
+
+  it("4 headline KPI tiles wire tile:payroll-analysis:${card.key}", () => {
+    // The DepartmentalPayrollAnalysisPanel passes a template-literal
+    // componentKey built from the service's card.key — this covers
+    // ytd-total-payroll, ytd-variance, current-month-payroll, and
+    // payroll-to-revenue in one assertion without hard-coding each.
+    expect(body).toMatch(/componentKey=\{`tile:payroll-analysis:\$\{c\.key\}`\}/);
+  });
+
+  it("4 chart cards wire card:payroll-analysis:* keys", () => {
+    for (const key of [
+      "card:payroll-analysis:ytd-payroll-by-department",
+      "card:payroll-analysis:ytd-variance-by-department",
+      "card:payroll-analysis:payroll-distribution",
+      "card:payroll-analysis:wages-taxes-benefits-split",
+    ]) {
+      expect(chartCards).toContain(key);
+    }
+    // CardVisibilityWrapper is imported from the shared primitive
+    // module — no parallel visibility system.
+    expect(chartCards).toContain('from "@/components/reporting/CardVisibilityWrapper"');
+    expect(chartCards).toContain('from "@/components/reporting/InlineCardToggle"');
+  });
+
+  it("ChartHeader opt-in toggle sits inline next to the gold classification pill (no header geometry change)", () => {
+    const fn = chartCards.slice(chartCards.indexOf("function ChartHeader"));
+    const scope = fn.slice(0, 3_500);
+    expect(scope).toMatch(/componentKey\?:\s*string/);
+    expect(scope).toMatch(/cardLabel\?:\s*string/);
+    expect(scope).toMatch(/tone="cream"/);
+    // Pre-VIS-5J header dimensions (height: 76, padding: 12 vertical,
+    // 18 horizontal) must still be the declared style.
+    expect(scope).toMatch(/height:\s*76/);
+    expect(scope).toMatch(/paddingTop:\s*12/);
+    expect(scope).toMatch(/paddingLeft:\s*18/);
+    expect(scope).toMatch(/paddingRight:\s*18/);
+  });
+
+  it("detailed MTD/YTD summary table has an independent card:payroll-analysis:detailed-summary-table key", () => {
+    expect(body).toContain("card:payroll-analysis:detailed-summary-table");
+    // The eyebrow h3 carries the inline toggle beside the eyebrow label.
+    const tableBlock = body.slice(body.indexOf("dpa-table-eyebrow"));
+    const scope = tableBlock.slice(0, 1_500);
+    expect(scope).toContain("InlineCardToggle");
+  });
+
+  it("Chapter XII payroll keys do NOT collide with Chapter II stewardship-scorecard payroll keys", () => {
+    // Chapter II renders Operating / Capital Scorecards under
+    // `card:stewardship-scorecard:*`.  Chapter XII payroll tiles /
+    // charts / table live under `payroll-analysis:*`.  The two
+    // namespaces must stay disjoint so the Controller can hide a
+    // payroll row in Chapter II while leaving the Chapter XII panel
+    // intact.
+    expect(body).not.toMatch(/card:stewardship-scorecard:[^"`\s]*payroll[^"`\s]*/i);
+    expect(chartCards).not.toMatch(/stewardship-scorecard/);
+  });
+
+  it("DepartmentalPayrollAnalysisPanel does NOT alter chart geometry or financial calculations", () => {
+    // Guard against anyone widening/narrowing bars, moving the
+    // classification chip, or recomputing KPI values during the
+    // VIS-5J pass.  Three canonical shape constants from pre-VIS-5J
+    // must remain intact.
+    expect(chartCards).toContain("height={245}");
+    expect(chartCards).toContain("padLeft={44}");
+    expect(chartCards).toContain("padRight={14}");
+  });
+});
+
 describe("MBR-VIS-5F §M — Executive Opening KPI tile visibility (15 tiles)", () => {
   const body = src(BODY);
   const atAGlance = src(path.join(REPO, "src/components/reporting/AtAGlanceBlock.tsx"));
