@@ -156,6 +156,13 @@ export const WI_KPIS: WiKpi[] = [
 ];
 
 // Right rail scaffold — reference verbatim per §11.
+//
+// WI-CAL-1 (2026-10-13) — `commitments.snapshot` carries the FULL
+// canonical `TodayCommitmentsSnapshot` so the Work Intake rail can
+// render the same approved Mission Control `TodaysCommitments`
+// component (time + title + source eyebrow + consent hint).  The
+// pre-fix shape held only an `empty` string that collapsed every
+// day's commitments to "N appointment(s) for today."
 export interface WiRailData {
   position: {
     memberAr: string;
@@ -170,7 +177,7 @@ export interface WiRailData {
     at: string;
   };
   commitments: {
-    empty: string;
+    snapshot: import("@/lib/mission-control/commitments").TodayCommitmentsSnapshot;
   };
 }
 export const WI_RAIL: WiRailData = {
@@ -188,6 +195,13 @@ export const WI_RAIL: WiRailData = {
     at: "09:30 MDT",
   },
   commitments: {
-    empty: "No appointments or proposed follow-ups for today.",
+    snapshot: {
+      items: [],
+      outlookEventCount: 0,
+      spectreCommitmentCount: 0,
+      calendarConsent: "CONNECTED",
+      windowStart: new Date(0),
+      windowEnd: new Date(0),
+    },
   },
 };

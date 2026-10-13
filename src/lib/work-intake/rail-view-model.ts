@@ -43,26 +43,14 @@ export function toRailData({ position, insight, commitments }: Input): WiRailDat
       at: insight.sourceTimeLabel,
     },
     commitments: {
-      // The canonical snapshot returns a structured commitments list
-      // (calendar events + proposed deadlines). WI-2B renders the
-      // rail's compact "empty state" copy when the list is empty, and
-      // a short summary otherwise. Rich per-item rendering is a
-      // deliberate deferral to WI-2C where the review pane will
-      // adopt the same commitment component tree.
-      empty: composeCommitmentsSummary(commitments),
+      // WI-CAL-1 (2026-10-13) — pass the FULL canonical commitments
+      // snapshot through to the rail so the Work Intake page can
+      // render the same approved Mission Control `TodaysCommitments`
+      // component (time + title + source eyebrow + consent hint).
+      // Prior WI-2B shape (`{ empty: string }`) collapsed every
+      // day's calendar to "N appointment(s) for today." — a founder-
+      // reported defect caught during staging review.
+      snapshot: commitments,
     },
   };
-}
-
-function composeCommitmentsSummary(c: TodayCommitmentsSnapshot): string {
-  const events = c.outlookEventCount ?? 0;
-  const proposals = c.spectreCommitmentCount ?? 0;
-  const total = events + proposals;
-  if (total === 0) {
-    return "No appointments or proposed follow-ups for today.";
-  }
-  const parts: string[] = [];
-  if (events > 0) parts.push(`${events} appointment${events === 1 ? "" : "s"}`);
-  if (proposals > 0) parts.push(`${proposals} proposed follow-up${proposals === 1 ? "" : "s"}`);
-  return `${parts.join(" · ")} for today.`;
 }

@@ -1,6 +1,14 @@
 // WI-1 — right operational rail (§11). Static scaffold values.
+//
+// WI-CAL-1 (2026-10-13) — the Today's Commitments card is the
+// EXACT same Mission Control component (approved reference
+// implementation) consuming the SAME canonical TodayCommitmentsSnapshot.
+// Prior WI-2B version collapsed the entire calendar to "N
+// appointment(s) for today." without time, title, or source
+// context — directive called this out as a founder-flagged defect.
 
 import type { WiRailData } from "./scaffold-data";
+import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 
 export default function WorkIntakeRightRail({ data }: { data: WiRailData }) {
   const p = data.position;
@@ -47,11 +55,14 @@ export default function WorkIntakeRightRail({ data }: { data: WiRailData }) {
         </div>
       </section>
 
-      <section className="wi-rail-card">
-        <div className="wi-rail-head">
-          <span className="wi-rail-title">TODAY&rsquo;S COMMITMENTS</span>
-        </div>
-        <p className="wi-rail-empty">{data.commitments.empty}</p>
+      {/* WI-CAL-1 — reuse the approved Mission Control component.
+          The right-rail wrapper remains a Work-Intake-styled
+          .wi-rail-card so the sidebar positioning + width stay
+          exactly as the WI-1 §11 reference specifies; the inner
+          card renders Mission Control's full appointment list
+          (time + title + source + optional location/consent hint). */}
+      <section className="wi-rail-card wi-rail-commitments-slot">
+        <TodaysCommitments data={data.commitments.snapshot} />
       </section>
     </>
   );
