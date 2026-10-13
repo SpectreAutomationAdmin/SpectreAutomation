@@ -17,7 +17,6 @@
 import { describe, expect, it } from "vitest";
 import {
   PAYROLL_DEPT_SERIES_HEX,
-  PAYROLL_DEPT_SERIES_TW,
   payrollDeptSeriesLabels,
   comparePayrollDeptForChart,
 } from "@/lib/reporting/payroll-dept-chart-config";
@@ -37,22 +36,36 @@ describe("MBR-PY-4 §K — shared config exports the authoritative palette + com
     expect(PAYROLL_DEPT_SERIES_HEX.priorYear).toBe("#7a9466");
   });
 
-  it("Tailwind palette tokens resolve to the SAME hex values", () => {
-    // club-green-500 = #3f7042 (tailwind.config.ts)
-    expect(PAYROLL_DEPT_SERIES_TW.actual).toBe("fill-club-green-500");
-    // club-gold DEFAULT = #b08a4a
-    expect(PAYROLL_DEPT_SERIES_TW.budget).toBe("fill-club-gold");
-    // Arbitrary-value for the muted sage (same hex Chapter II uses).
-    expect(PAYROLL_DEPT_SERIES_TW.priorYear).toBe("fill-[#7a9466]");
+  it("MBR-PY-4A — Tailwind palette form retired; only hex form remains", () => {
+    // The pre-MBR-PY-4A `PAYROLL_DEPT_SERIES_TW` export must be gone.
+    // `fill-[#7a9466]` is an arbitrary-value utility that Tailwind's
+    // JIT scanner cannot generate when the string reaches the JSX
+    // only through a module import — the deployed bars rendered
+    // BLACK on staging because the class never existed in the
+    // compiled CSS.  Hex is the single source of truth now.
+    const configSrc = fs.readFileSync(
+      path.join(REPO, "src/lib/reporting/payroll-dept-chart-config.ts"),
+      "utf-8",
+    );
+    expect(configSrc).not.toMatch(/export const PAYROLL_DEPT_SERIES_TW/);
+    // Also pin the three hex values are the SAME ones the chart
+    // primitive receives — the SVG `fill` attribute is applied
+    // directly (EditorialGroupedBarChart's `color.startsWith("#")`
+    // branch).
+    expect(PAYROLL_DEPT_SERIES_HEX.actual.startsWith("#")).toBe(true);
+    expect(PAYROLL_DEPT_SERIES_HEX.budget.startsWith("#")).toBe(true);
+    expect(PAYROLL_DEPT_SERIES_HEX.priorYear.startsWith("#")).toBe(true);
   });
 
-  it("legend labels follow the reportingYear-aware scheme", () => {
+  it("legend labels: current-year is dynamic; Prior Year is STATIC (MBR-PY-4A)", () => {
     const labels2026 = payrollDeptSeriesLabels(2026);
     expect(labels2026.actual).toBe("2026 Actual");
     expect(labels2026.budget).toBe("Budget");
-    expect(labels2026.priorYear).toBe("2025 Prior Year");
+    // MBR-PY-4A — never prepend the historical year.
+    expect(labels2026.priorYear).toBe("Prior Year");
     const labels2027 = payrollDeptSeriesLabels(2027);
-    expect(labels2027.priorYear).toBe("2026 Prior Year");
+    expect(labels2027.actual).toBe("2027 Actual");
+    expect(labels2027.priorYear).toBe("Prior Year");
   });
 });
 
@@ -188,29 +201,79 @@ describe("MBR-PY-4 §N — both chapters import the shared config", () => {
     expect(src).not.toMatch(/enriched\.sort\(\(a, b\) => b\.ytdActual - a\.ytdActual\)/);
   });
 
-  it("Chapter XII chart (PayrollChartCards.tsx) imports the shared Tailwind palette", () => {
+  it("Chapter XII chart (PayrollChartCards.tsx) imports hex palette + static Prior-Year label", () => {
     const src = fs.readFileSync(
       path.join(REPO, "src/app/app/admin/reporting/monthly/PayrollChartCards.tsx"),
       "utf-8",
     );
     expect(src).toContain('"@/lib/reporting/payroll-dept-chart-config"');
-    expect(src).toContain("PAYROLL_DEPT_SERIES_TW");
+    // MBR-PY-4A — hex form, not Tailwind.  Comments may still
+    // reference the retired `PAYROLL_DEPT_SERIES_TW` name as the
+    // audit trail; actual code references (import, member access)
+    // must be gone.
+    expect(src).toContain("PAYROLL_DEPT_SERIES_HEX");
+    // No `PAYROLL_DEPT_SERIES_TW.actual` / `.budget` / `.priorYear`
+    // member access anywhere.
+    expect(src).not.toMatch(/PAYROLL_DEPT_SERIES_TW\.[a-zA-Z]/);
+    // No `PAYROLL_DEPT_SERIES_TW,` / `PAYROLL_DEPT_SERIES_TW\s*}`
+    // import-specifier either.
+    expect(src).not.toMatch(/import\s*\{[^}]*PAYROLL_DEPT_SERIES_TW/);
     expect(src).toContain("payrollDeptSeriesLabels");
-    // Pre-MBR-PY-4 slate-blue literal is gone — the series config
-    // reads from the shared `PAYROLL_DEPT_SERIES_TW.priorYear`
-    // whose value is `fill-[#7a9466]`.
+    // Pre-MBR-PY-4 slate-blue literal is gone.
     expect(src).not.toMatch(/color:\s*"fill-\[#7d96b0\]"/);
     // GroupedActualBudgetChart (the Chapter XII three-series chart)
     // reads ALL three fills from the shared config — never inline.
     const groupedStart = src.indexOf("function GroupedActualBudgetChart");
     const nextFnStart = src.indexOf("\nfunction ", groupedStart + 10);
     const scope = src.slice(groupedStart, nextFnStart > 0 ? nextFnStart : groupedStart + 5_000);
-    expect(scope).toContain("PAYROLL_DEPT_SERIES_TW.actual");
-    expect(scope).toContain("PAYROLL_DEPT_SERIES_TW.budget");
-    expect(scope).toContain("PAYROLL_DEPT_SERIES_TW.priorYear");
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.actual");
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.budget");
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.priorYear");
     // Unrelated charts (WagesVsTaxesChart, variance chart) remain
     // untouched per the directive scope guard — we deliberately do
     // NOT assert on them.
+  });
+});
+
+describe("MBR-PY-4A §P — chart series render HEX colours (SVG fill), never Tailwind arbitrary-value utilities", () => {
+  it("EditorialGroupedBarChart detects hex colors and applies them via SVG `fill` attribute", () => {
+    // The chart primitive's dual API: if `color.startsWith(\"#\")`,
+    // the color is applied as `<rect fill=\"#…\">` directly.  Any
+    // other string is treated as a Tailwind class name.  We rely on
+    // the hex branch so the shared `PAYROLL_DEPT_SERIES_HEX` values
+    // reach the DOM regardless of Tailwind's content-scanner reach.
+    const src = fs.readFileSync(
+      path.join(REPO, "src/components/reporting/EditorialGroupedBarChart.tsx"),
+      "utf-8",
+    );
+    expect(src).toMatch(/isHex\s*=\s*s\.color\.startsWith\("#"\)/);
+    expect(src).toMatch(/isHex \? \{ fill: s\.color \} : \{\}/);
+  });
+
+  it("Chapter XII series config passes HEX, never a `fill-` Tailwind utility", () => {
+    const src = fs.readFileSync(
+      path.join(REPO, "src/app/app/admin/reporting/monthly/PayrollChartCards.tsx"),
+      "utf-8",
+    );
+    const groupedStart = src.indexOf("function GroupedActualBudgetChart");
+    const nextFnStart = src.indexOf("\nfunction ", groupedStart + 10);
+    const scope = src.slice(groupedStart, nextFnStart > 0 ? nextFnStart : groupedStart + 5_000);
+    // The three series entries inside this chart must pass hex
+    // values from PAYROLL_DEPT_SERIES_HEX — not any `fill-club-*`
+    // or `fill-[#…]` string that would route through Tailwind.
+    expect(scope).not.toMatch(/color:\s*"fill-club-/);
+    expect(scope).not.toMatch(/color:\s*"fill-\[/);
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.actual");
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.budget");
+    expect(scope).toContain("PAYROLL_DEPT_SERIES_HEX.priorYear");
+  });
+
+  it("Prior-year hex is #7a9466 (muted sage) — the directive-named colour", () => {
+    expect(PAYROLL_DEPT_SERIES_HEX.priorYear).toBe("#7a9466");
+    // Not black, not slate-blue (#7d96b0 was the pre-MBR-PY-4
+    // Chapter XII literal that caused the black-bar fallback).
+    expect(PAYROLL_DEPT_SERIES_HEX.priorYear).not.toBe("#000000");
+    expect(PAYROLL_DEPT_SERIES_HEX.priorYear).not.toBe("#7d96b0");
   });
 });
 

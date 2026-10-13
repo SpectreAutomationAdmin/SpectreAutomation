@@ -16,34 +16,37 @@
 // chart typography, geometry, margins, or any other presentation
 // concern — those remain in their respective chart components.
 
-/** Hex-form palette.  Consumed by services that produce
- *  presentation objects (e.g. Chapter II's `seriesColors` object). */
+/** Hex-form palette.  Consumed by BOTH Chapter II's `seriesColors`
+ *  object and Chapter XII's `EditorialGroupedBarChart` series
+ *  config.  Hex is the sole source of truth; MBR-PY-4A retired the
+ *  pre-existing Tailwind-class form (`PAYROLL_DEPT_SERIES_TW`)
+ *  because `fill-[#7a9466]` is an arbitrary-value utility that
+ *  Tailwind's JIT scanner cannot generate when the class string
+ *  reaches the JSX only through module indirection — the deployed
+ *  bars rendered BLACK on staging because the CSS class never
+ *  existed in the compiled stylesheet.  `EditorialGroupedBarChart`
+ *  already detects `color.startsWith("#")` and applies the value
+ *  via the SVG `fill` attribute, bypassing the Tailwind pipeline
+ *  entirely. */
 export const PAYROLL_DEPT_SERIES_HEX = {
   actual:    "#3f7042", // dark green  (= Tailwind club-green-500)
   budget:    "#b08a4a", // gold        (= Tailwind club-gold DEFAULT)
   priorYear: "#7a9466", // muted sage  (Chapter II's historical hex)
 } as const;
 
-/** Tailwind-class-form palette.  Consumed by Chapter XII's
- *  `EditorialGroupedBarChart` which expects fill-* utility class
- *  strings for its SVG rects. */
-export const PAYROLL_DEPT_SERIES_TW = {
-  actual:    "fill-club-green-500",
-  budget:    "fill-club-gold",
-  // Muted sage not in the Tailwind palette — JIT compiles the
-  // arbitrary-value utility exactly once per build.  Keeping the
-  // literal here (vs. inside the chart file) guarantees both
-  // chapters stay in sync when the brand palette evolves.
-  priorYear: "fill-[#7a9466]",
-} as const;
-
-/** Series labels for legends.  The current-year label is a function
- *  because its "YYYY Actual" prefix is period-dependent. */
+/** Series labels for legends.
+ *  - current year ("2026 Actual") is period-dependent.
+ *  - "Budget" is static.
+ *  - MBR-PY-4A (2026-10-13): the Prior-Year label is now the
+ *    STATIC string "Prior Year" (no year prefix) — the chart
+ *    subtitle already carries the reporting-period year context,
+ *    and a redundant "2025 Prior Year" legend chip creates visual
+ *    noise next to the already period-labelled subtitle. */
 export function payrollDeptSeriesLabels(reportingYear: number) {
   return {
     actual:    `${reportingYear} Actual`,
     budget:    "Budget",
-    priorYear: `${reportingYear - 1} Prior Year`,
+    priorYear: "Prior Year",
   } as const;
 }
 

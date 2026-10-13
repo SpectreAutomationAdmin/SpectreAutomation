@@ -37,11 +37,18 @@ import { CardVisibilityWrapper } from "@/components/reporting/CardVisibilityWrap
 import { InlineCardToggle } from "@/components/reporting/InlineCardToggle";
 // MBR-PY-4 (2026-10-13) — shared series palette.  Chapter II's
 // `seriesColors` object and Chapter XII's chart fills now resolve
-// through the same `payroll-dept-chart-config` module.  Replaces
-// the slate-blue Prior-Year fill with Chapter II's muted-sage
-// (#7a9466) so both charts legibly use the same comparison palette.
+// through the same `payroll-dept-chart-config` module.
+//
+// MBR-PY-4A (2026-10-13) — switched from the Tailwind-class form
+// (`PAYROLL_DEPT_SERIES_TW` — retired) to the hex form.
+// `EditorialGroupedBarChart` detects a leading "#" on the series
+// color and applies it via the SVG `fill` attribute directly,
+// bypassing Tailwind's JIT.  Fixes the black-bar defect seen on
+// staging: `fill-[#7a9466]` was never generated into the compiled
+// CSS because its only reference reached the JSX through a module
+// import, which Tailwind's content scanner doesn't inspect.
 import {
-  PAYROLL_DEPT_SERIES_TW,
+  PAYROLL_DEPT_SERIES_HEX,
   payrollDeptSeriesLabels,
 } from "@/lib/reporting/payroll-dept-chart-config";
 
@@ -176,13 +183,13 @@ function GroupedActualBudgetChart({
   const seriesLabels = payrollDeptSeriesLabels(reportingYear);
   const series = anyPriorYear && priorYearValues
     ? [
-        { name: seriesLabels.actual,    values: actualValues,    color: PAYROLL_DEPT_SERIES_TW.actual },
-        { name: seriesLabels.budget,    values: budgetValues,    color: PAYROLL_DEPT_SERIES_TW.budget },
-        { name: seriesLabels.priorYear, values: priorYearValues, color: PAYROLL_DEPT_SERIES_TW.priorYear },
+        { name: seriesLabels.actual,    values: actualValues,    color: PAYROLL_DEPT_SERIES_HEX.actual },
+        { name: seriesLabels.budget,    values: budgetValues,    color: PAYROLL_DEPT_SERIES_HEX.budget },
+        { name: seriesLabels.priorYear, values: priorYearValues, color: PAYROLL_DEPT_SERIES_HEX.priorYear },
       ]
     : [
-        { name: seriesLabels.actual, values: actualValues, color: PAYROLL_DEPT_SERIES_TW.actual },
-        { name: seriesLabels.budget, values: budgetValues, color: PAYROLL_DEPT_SERIES_TW.budget },
+        { name: seriesLabels.actual, values: actualValues, color: PAYROLL_DEPT_SERIES_HEX.actual },
+        { name: seriesLabels.budget, values: budgetValues, color: PAYROLL_DEPT_SERIES_HEX.budget },
       ];
   return (
     <div data-testid="payroll-grouped-bar-chart" data-prior-year-plotted={anyPriorYear ? "true" : "false"}>
