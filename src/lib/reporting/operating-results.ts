@@ -197,19 +197,51 @@ export async function getOperatingResults(
         if (b.budget) monthlyBudgetNoi = b.monthlyNoi;
       } catch { /* budget not imported yet → leave null */ }
 
-      // Build a 12-slot skeleton anchored on FY2026 (Jan..Dec).
+      // Build a 12-slot skeleton anchored on `anchorYear` (Jan..Dec).
       const anchorYear = asOf.getUTCFullYear();
-      const actualByMonth = new Map<number, OperatingMonth>();
-      for (const m of snapshotMonths) actualByMonth.set(m.endDate.getUTCMonth(), m);
+      // MBR-FP-6 (2026-10-13) — key the Actual lookup by (year, month)
+      // instead of month alone.  Pre-fix the map was keyed by
+      // `getUTCMonth()` only, which let prior-year months (e.g. Feb
+      // 2025, Mar 2025) collide with current-year slots (Feb 2026,
+      // Mar 2026) — the founder reported "Feb and Mar 2026 actuals
+      // visible on the January 2026 package", which the trace
+      // showed was prior-year 2025 values bleeding into the 2026
+      // skeleton via the month-only key.  The reporting cutoff
+      // (asOf: { lte: asOfEod }) correctly excluded Feb/Mar 2026
+      // snapshots; it was the downstream map that re-admitted
+      // other years' same-month snapshots.  The new (year, month)
+      // tuple key eliminates the leak: only snapshots whose year
+      // equals `anchorYear` can populate a current-year slot.
+      const actualByYearMonth = new Map<string, OperatingMonth>();
+      for (const m of snapshotMonths) {
+        const key = `${m.endDate.getUTCFullYear()}-${m.endDate.getUTCMonth()}`;
+        actualByYearMonth.set(key, m);
+      }
+      // MBR-FP-6 (2026-10-13) — additional reporting-cutoff safety:
+      // the asOf's month index + anchorYear bound every CURRENT-year
+      // Actual slot.  Months strictly AFTER the reporting period's
+      // month (within the same year) must stay null even if a
+      // snapshot leaked past the lte filter.  This defence-in-depth
+      // check preserves historical package immutability regardless
+      // of the import order of future-month TBs.
+      const reportingMonthIdx = asOf.getUTCMonth();
       const monthLabels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
       const enriched: OperatingMonth[] = [];
       for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
-        const existing = actualByMonth.get(monthIndex);
+        const key = `${anchorYear}-${monthIndex}`;
+        const existing = actualByYearMonth.get(key);
         const endDate = new Date(Date.UTC(anchorYear, monthIndex + 1, 0, 23, 59, 59, 999));
         const budgetForMonth = monthlyBudgetNoi
           ? monthlyBudgetNoi[monthIndex] ?? null
           : null;
-        if (existing) {
+        // MBR-FP-6 — a current-year Actual is admitted ONLY when the
+        // snapshot's month index is ≤ the reporting period's month.
+        // Future months (within the same year) stay null even if a
+        // snapshot happens to exist — honours the directive's "a
+        // Jan 2026 package must behave as though Feb/Mar 2026
+        // results do not yet exist" rule.
+        const admitActual = existing != null && monthIndex <= reportingMonthIdx;
+        if (admitActual && existing) {
           // Snapshot-backed Actual + Budget overlay.
           enriched.push({ ...existing, budgetNoi: budgetForMonth ?? existing.budgetNoi });
         } else {
