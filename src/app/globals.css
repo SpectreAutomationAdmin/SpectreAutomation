@@ -6757,6 +6757,90 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 }
 
+/* ---------- AP-ORB-1 (2026-10-14) — Vendor-field intelligence motion ----
+   Narrow, production-scoped motion inside the Vendor VALUE cell of
+   the AP Invoice Review page.  No layout shift elsewhere; the cell
+   itself retains the same height + baseline alignment as the plain-
+   text rendering.  Reduced-motion short-circuits every animation. */
+
+.ap-orb-vendor-cell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.4em;         /* match the surrounding row's leading */
+  line-height: 1.4;
+  overflow: hidden;          /* clip the text's upward slide */
+  vertical-align: middle;
+}
+
+/* Orb — absolutely positioned so it occupies no layout space and
+   its fade-out never shifts the resting vendor text. */
+.ap-orb-vendor-orb {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+/* Vendor text — static final state is translate3d(0, 0, 0) +
+   opacity: 1 so the resting cell is byte-identical to the pre-
+   AP-ORB-1 render.  During the choreography the component drives
+   both via inline style; the CSS here only sets the resting
+   values + the will-change hint for a smoother tween. */
+.ap-orb-vendor-text {
+  display: inline-block;
+  will-change: transform, opacity;
+}
+
+/* Replay button — ONLY renders when `?orb=1` is in the URL.  Kept
+   understated so it doesn't advertise itself in a founder review
+   screenshot. */
+.ap-orb-vendor-replay {
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--wi-ink-3, rgba(0, 0, 0, 0.55));
+  background: transparent;
+  border: 1px solid var(--wi-review-hairline, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+}
+.ap-orb-vendor-replay:hover:not(:disabled) {
+  background: rgba(201, 162, 74, 0.08);
+  border-color: #c9a24a;
+  color: #4a3410;
+}
+.ap-orb-vendor-replay:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Reduced-motion safety.  The orb-reveal component already short-
+   circuits its rAF loop when prefers-reduced-motion is set, so the
+   text never moves.  Here we also neutralise the hover transition
+   on the replay button for consistency. */
+@media (prefers-reduced-motion: reduce) {
+  .ap-orb-vendor-orb {
+    transition: none !important;
+  }
+  .ap-orb-vendor-text {
+    will-change: auto;
+  }
+  .ap-orb-vendor-replay {
+    transition: none !important;
+  }
+}
+
 /* ---------- Spectre intelligence rail ---------- */
 .wi-review-rail {
   background: var(--wi-review-rail-bg);

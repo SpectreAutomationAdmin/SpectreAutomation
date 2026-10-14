@@ -13,6 +13,14 @@
 import Link from "next/link";
 import type { RealReviewData } from "@/lib/work-intake/review-detail-view-model";
 import DocumentPdfPreview from "./DocumentPdfPreview";
+// AP-ORB-1 (2026-10-14) — client wrapper for the Vendor VALUE cell
+// only.  The wrapper renders the SAME DOM as the pre-AP-ORB-1 cell
+// in its default state; when the URL carries `?orb=1`, a small
+// "Replay orb" button appears next to the vendor value and triggers
+// a short choreographed intelligence reveal (thinking orb +
+// synchronized upward text motion).  No auto-play, no backend
+// calls, no mutation surface.  Reduced-motion respected.
+import VendorFieldClient from "./VendorFieldClient";
 
 function BackArrow() {
   return (
@@ -261,7 +269,10 @@ function Classification({ data }: { data: RealReviewData }) {
   const i = data.invoice;
   return (
     <div className="wi-review-classify" aria-label="Extracted information">
-      <MetaRow label="Vendor" value={i.vendor ?? <Pending />} />
+      <MetaRow
+        label="Vendor"
+        value={i.vendor ? <VendorFieldClient vendor={i.vendor} /> : <Pending />}
+      />
       <MetaRow label="Invoice #" value={i.invoiceNumber ?? <Pending />} />
       <MetaRow label="Invoice Date" value={i.invoiceDateLabel ?? <Pending />} />
       <MetaRow label="Due Date" value={i.dueDateLabel ?? <Pending />} />
