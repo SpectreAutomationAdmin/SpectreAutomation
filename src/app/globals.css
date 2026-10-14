@@ -6332,6 +6332,431 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 .wi-review-flow-stage--active .wi-review-flow-supporting { color: var(--wi-ink-2); }
 
+/* ---------- AP-MOTION-1 (2026-10-13) — isolated prototype ----------
+   Motion vocabulary for the dedicated review-prototype route.
+   Field-level only; no new layout wrappers added to the production
+   review page.  Every animation respects prefers-reduced-motion. */
+
+.ap-motion-root { position: relative; }
+
+/* Persistent "prototype" ribbon pinned top-right. */
+.ap-motion-ribbon {
+  position: sticky; top: 0; z-index: 60;
+  background: #fdf7e8;
+  border-bottom: 1px solid #e7cfa0;
+  color: #4a3410;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 6px 20px;
+  text-align: center;
+}
+
+/* Document panel chrome around the demo SVG. */
+.ap-motion-doc {
+  background: var(--wi-review-card-bg, #fdfbf4);
+  border: 1px solid var(--wi-review-hairline, rgba(0,0,0,0.08));
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.ap-motion-doc-svg {
+  width: 100%; height: auto; display: block;
+  background: #fdfbf4;
+}
+.ap-motion-doc-ribbon {
+  background: rgba(201, 162, 74, 0.1);
+  border-top: 1px solid var(--wi-review-hairline, rgba(0,0,0,0.08));
+  padding: 8px 12px;
+  font-size: 11px;
+  color: #4a3410;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* Document-to-data highlight — short flash on hover of a populated field. */
+.ap-motion-doc-highlight {
+  animation: ap-motion-doc-flash 900ms ease-out;
+}
+@keyframes ap-motion-doc-flash {
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+/* Classification panel + field cells. */
+.ap-motion-info {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ap-motion-fields {
+  display: flex; flex-direction: column;
+}
+.ap-motion-field-divider {
+  height: 1px;
+  background: var(--wi-review-hairline, rgba(0,0,0,0.08));
+  margin: 6px 0;
+}
+.ap-motion-info-foot {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--wi-ink-3, rgba(0,0,0,0.5));
+  font-style: italic;
+}
+
+.ap-motion-field {
+  position: relative;
+  display: grid;
+  grid-template-columns: 118px 1fr;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out;
+}
+.ap-motion-field + .ap-motion-field {
+  border-top: 1px solid rgba(0,0,0,0.04);
+}
+.ap-motion-field-label {
+  font-size: 10.5px;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--wi-ink-3, rgba(0,0,0,0.5));
+}
+.ap-motion-field-value {
+  font-size: 13px;
+  color: var(--wi-ink, rgba(0,0,0,0.9));
+  font-variant-numeric: tabular-nums;
+}
+.ap-motion-field-waiting-text {
+  color: var(--wi-ink-3, rgba(0,0,0,0.4));
+  font-style: italic;
+}
+
+/* State: waiting (not yet extracted) — subtle. */
+.ap-motion-field--waiting { }
+
+/* State: processing — soft shimmer on the row background. */
+.ap-motion-field--processing {
+  background: linear-gradient(90deg, rgba(201,162,74,0) 0%, rgba(201,162,74,0.12) 50%, rgba(201,162,74,0) 100%);
+  background-size: 200% 100%;
+  animation: ap-motion-shimmer 1.4s linear infinite;
+}
+@keyframes ap-motion-shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: -100% 0; }
+}
+
+/* State: populated — one-shot fade + 4px rise + micro-scale on
+   the value, re-fired via React key swap on each scene change. */
+.ap-motion-field--populated .ap-motion-field-value {
+  animation: ap-motion-populated 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes ap-motion-populated {
+  0%   { opacity: 0; transform: translateY(4px); }
+  60%  { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* State: attention — persistent warm-gold left border + muted
+   gold value colour.  Vendor field during the exception scene. */
+.ap-motion-field--attention {
+  background: #fdf7e8;
+  border-left: 3px solid #c9a24a;
+  padding-left: 10px;
+}
+.ap-motion-field--attention .ap-motion-field-value { color: #4a3410; }
+.ap-motion-field-attention-dot {
+  position: absolute;
+  right: 14px;
+  top: 16px;
+  width: 8px;
+  height: 8px;
+  background: #c9a24a;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(201, 162, 74, 0.6);
+  animation: ap-motion-attention-pulse 1.8s ease-out infinite;
+}
+@keyframes ap-motion-attention-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(201, 162, 74, 0.55); }
+  100% { box-shadow: 0 0 0 10px rgba(201, 162, 74, 0); }
+}
+
+/* State: resolved — persistent green left border + check. */
+.ap-motion-field--resolved {
+  background: #edf7eb;
+  border-left: 3px solid #3f7042;
+  padding-left: 10px;
+}
+.ap-motion-field--resolved .ap-motion-field-value { color: #1f6f3f; }
+.ap-motion-field-resolved-check {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #dff0dd;
+  border-radius: 50%;
+  color: #1f6f3f;
+  animation: ap-motion-resolved-pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes ap-motion-resolved-pop {
+  0%   { opacity: 0; transform: scale(0.6); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Inline "Match vendor →" button and resolved caption. */
+.ap-motion-field-match-btn {
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: #4a3410;
+  background: transparent;
+  border: 1px solid #c9a24a;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+.ap-motion-field-match-btn:hover {
+  background: rgba(201, 162, 74, 0.15);
+}
+.ap-motion-field-match-resolved {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #1f6f3f;
+  font-style: italic;
+}
+
+/* Vendor-match popover — opens inline next to the Vendor field. */
+.ap-motion-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 118px;
+  width: 320px;
+  z-index: 20;
+  background: #ffffff;
+  border: 1px solid var(--wi-review-hairline, rgba(0,0,0,0.1));
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.1);
+  animation: ap-motion-populated 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.ap-motion-popover-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.ap-motion-popover-eyebrow {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--wi-ink-3, rgba(0,0,0,0.55));
+}
+.ap-motion-popover-close {
+  background: transparent; border: none;
+  color: var(--wi-ink-3, rgba(0,0,0,0.5));
+  font-size: 16px; line-height: 1;
+  cursor: pointer; padding: 2px 6px;
+}
+.ap-motion-popover-body { padding: 10px 12px 12px; }
+.ap-motion-popover-copy {
+  font-size: 12px;
+  color: var(--wi-ink-2, rgba(0,0,0,0.75));
+  margin: 0 0 10px;
+}
+.ap-motion-popover-list {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.ap-motion-popover-item {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  background: #faf6ec;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+.ap-motion-popover-item:hover {
+  background: #f6edd7;
+  border-color: #c9a24a;
+}
+.ap-motion-popover-item-name {
+  font-size: 12.5px;
+  color: var(--wi-ink, rgba(0,0,0,0.9));
+  font-weight: 500;
+}
+.ap-motion-popover-item-meta {
+  font-size: 11px;
+  color: var(--wi-ink-3, rgba(0,0,0,0.55));
+}
+
+/* Workflow — small polish:  completed stages render a check SVG
+   inside the circle via the component JSX; here we just scale-in. */
+.ap-motion-stage--done .wi-review-flow-circle {
+  animation: ap-motion-stage-done-pop 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  color: #1f6f3f;
+  background: #dff0dd;
+  border-color: #a7d1a7;
+}
+@keyframes ap-motion-stage-done-pop {
+  0%   { transform: scale(0.75); }
+  100% { transform: scale(1); }
+}
+
+/* AI rail — content swap when scene changes. */
+.ap-motion-rail-swap {
+  animation: ap-motion-rail-swap 320ms ease-out both;
+}
+@keyframes ap-motion-rail-swap {
+  0%   { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.ap-motion-rail-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ap-motion-rail-list li {
+  font-size: 12.5px;
+  color: var(--wi-ink-2, rgba(0,0,0,0.75));
+  line-height: 17px;
+  padding-left: 12px;
+  position: relative;
+}
+.ap-motion-rail-list li::before {
+  content: "";
+  position: absolute; left: 0; top: 7px;
+  width: 4px; height: 4px;
+  background: #c9a24a;
+  border-radius: 50%;
+}
+.ap-motion-rail-reco {
+  font-size: 12.5px;
+  color: var(--wi-ink, rgba(0,0,0,0.9));
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(201, 162, 74, 0.1);
+  border-left: 3px solid #c9a24a;
+  border-radius: 4px;
+}
+
+/* Playback controls — bottom-centred, floating. */
+.ap-motion-controls {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  background: #1a1a1a;
+  color: #fdfbf4;
+  padding: 10px 16px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+  max-width: calc(100vw - 40px);
+}
+.ap-motion-controls-caption {
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 220px;
+  max-width: 320px;
+}
+.ap-motion-controls-eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: rgba(253, 251, 244, 0.55);
+}
+.ap-motion-controls-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fdfbf4;
+}
+.ap-motion-controls-copy {
+  font-size: 11px;
+  color: rgba(253, 251, 244, 0.7);
+  line-height: 14px;
+}
+.ap-motion-controls-buttons {
+  display: flex; align-items: center; gap: 6px;
+}
+.ap-motion-controls-btn {
+  background: rgba(255,255,255,0.08);
+  color: #fdfbf4;
+  border: none;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background-color 150ms ease-out, transform 150ms ease-out;
+}
+.ap-motion-controls-btn:hover {
+  background: rgba(255,255,255,0.16);
+}
+.ap-motion-controls-btn:active {
+  transform: scale(0.95);
+}
+.ap-motion-controls-btn--primary {
+  background: #c9a24a;
+  color: #1a1a1a;
+}
+.ap-motion-controls-btn--primary:hover {
+  background: #d6b05a;
+}
+.ap-motion-controls-dots {
+  display: flex; align-items: center; gap: 5px;
+}
+.ap-motion-controls-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: rgba(253, 251, 244, 0.25);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, transform 150ms ease-out;
+}
+.ap-motion-controls-dot--done   { background: rgba(201, 162, 74, 0.55); }
+.ap-motion-controls-dot--active {
+  background: #c9a24a;
+  transform: scale(1.4);
+}
+
+/* Mobile layout for the controls — stack caption + buttons. */
+@media (max-width: 720px) {
+  .ap-motion-controls {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 14px;
+  }
+  .ap-motion-controls-caption { min-width: 0; max-width: 100%; text-align: center; }
+}
+
+/* Reduced-motion — every ap-motion keyframe collapses to instant. */
+@media (prefers-reduced-motion: reduce) {
+  .ap-motion-field--processing,
+  .ap-motion-field--populated .ap-motion-field-value,
+  .ap-motion-field-attention-dot,
+  .ap-motion-field-resolved-check,
+  .ap-motion-stage--done .wi-review-flow-circle,
+  .ap-motion-rail-swap,
+  .ap-motion-popover,
+  .ap-motion-doc-highlight {
+    animation: none !important;
+  }
+  .ap-motion-field--processing {
+    background: linear-gradient(90deg, rgba(201,162,74,0.08) 0%, rgba(201,162,74,0.12) 50%, rgba(201,162,74,0.08) 100%) !important;
+  }
+  .ap-motion-controls-btn,
+  .ap-motion-popover-item,
+  .ap-motion-field-match-btn {
+    transition: none !important;
+  }
+}
+
 /* ---------- Spectre intelligence rail ---------- */
 .wi-review-rail {
   background: var(--wi-review-rail-bg);
