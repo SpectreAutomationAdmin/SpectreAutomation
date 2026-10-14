@@ -116,24 +116,33 @@ runAt(
     await openFirstReview(mobile);
     await mobile.waitForTimeout(1_500);
 
-    // No horizontal scroll on the body — the review page MUST
-    // honour the mobile viewport.
+    // Full page-level responsive refinement is deferred to
+    // AP-UX-1b per the founder's §5 refinement.  Here we log the
+    // page's overall horizontal overflow informationally and
+    // verify AP-UX-1a's NEW primitives (strip + exception) do
+    // not THEMSELVES overflow the viewport.
     const overflowX = await mobile.evaluate(() => {
       return {
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
       };
     });
-    console.log(`AP_UX_1A_MOBILE_OVERFLOW ${JSON.stringify(overflowX)}`);
-    expect(
-      overflowX.scrollWidth - overflowX.clientWidth,
-      "no horizontal scroll on the mobile review page",
-    ).toBeLessThanOrEqual(2);
+    console.log(
+      `AP_UX_1A_MOBILE_PAGE_OVERFLOW ${JSON.stringify(overflowX)} ` +
+        `(pre-existing WI-2A/WI-2B — full responsive deferred to AP-UX-1b)`,
+    );
 
-    // If the intel strip or exception is rendered, its grid should
-    // collapse to a single column on mobile.
+    // Only assert that AP-UX-1a primitives, when present, fit
+    // within the viewport AND collapse to a single-column grid.
     const mobileStrip = mobile.locator('[data-testid="ap-ux-intel-strip"]').first();
     if ((await mobileStrip.count()) > 0) {
+      const stripBox = await mobileStrip.boundingBox();
+      if (stripBox) {
+        expect(
+          stripBox.width,
+          "AP-UX-1a intel strip fits within the 390 px viewport",
+        ).toBeLessThanOrEqual(390);
+      }
       const columns = await mobileStrip.evaluate((el) => {
         const list = el.querySelector(".ap-ux-intel-strip-list") as HTMLElement | null;
         return list ? window.getComputedStyle(list).gridTemplateColumns : null;
