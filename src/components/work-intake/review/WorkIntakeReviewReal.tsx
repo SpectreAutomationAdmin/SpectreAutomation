@@ -13,6 +13,13 @@
 import Link from "next/link";
 import type { RealReviewData } from "@/lib/work-intake/review-detail-view-model";
 import DocumentPdfPreview from "./DocumentPdfPreview";
+// AP-UX-1a (2026-10-13) — progressive intelligence strip + reusable
+// exception notice.  The strip reads authoritative state only; the
+// notice is a reusable primitive that does NOT own any mutation
+// behaviour (every action route points at an existing authorized
+// workflow — nothing new is wired here).
+import IntelligenceStrip from "./IntelligenceStrip";
+import ExceptionNotice from "./ExceptionNotice";
 
 function BackArrow() {
   return (
@@ -499,6 +506,63 @@ function SpectreRail({ data }: { data: RealReviewData }) {
   );
 }
 
+/**
+ * AP-UX-1a — vendor-match exception panel.
+ *
+ * Surfaces an attention-coloured notice above the Invoice Details
+ * card when the AP intelligence pipeline reports an unresolved
+ * vendor match (`AMBIGUOUS` / `NOT_FOUND` / `INSUFFICIENT_SIGNAL`).
+ *
+ * No new mutation surface is introduced here.  The authoritative
+ * vendor-create + match-and-post workflow lives on Mission Control's
+ * AP card (two-step `_create-vendor-actions` → `_post-ap-invoice-actions`
+ * routed through `CreateVendorAndPostModal`); the WI-2B review page
+ * keeps approve/send-back DISABLED per §17 and this slice does NOT
+ * relax that.  The notice's primary action is therefore a navigation
+ * link to Mission Control where the authorized workflow is wired.
+ */
+function VendorMatchException({ data }: { data: RealReviewData }) {
+  const state = data.invoice.vendorMatchState;
+  const extracted = data.invoice.vendor;
+  const unresolved =
+    state === "AMBIGUOUS" ||
+    state === "NOT_FOUND" ||
+    state === "INSUFFICIENT_SIGNAL";
+  if (!unresolved) return null;
+  const stateCopy =
+    state === "NOT_FOUND"
+      ? "no confirmed matching vendor record was identified"
+      : state === "AMBIGUOUS"
+        ? "multiple possible vendor records matched"
+        : "the available signal was insufficient to pick a vendor record";
+  return (
+    <ExceptionNotice
+      testid="ap-ux-vendor-match-exception"
+      headline="Vendor match required"
+      tone="attention"
+      body={
+        <>
+          {extracted ? (
+            <>
+              Spectre extracted the supplier as <strong>{extracted}</strong>, but {stateCopy}.
+            </>
+          ) : (
+            <>Spectre could not identify the supplier from the invoice document.</>
+          )}{" "}
+          Resolve the match from the authorized workflow on Mission Control.
+        </>
+      }
+      actions={[
+        {
+          label: "Open in Mission Control",
+          href: "/app/admin",
+          variant: "primary",
+        },
+      ]}
+    />
+  );
+}
+
 export default function WorkIntakeReviewReal({ data }: { data: RealReviewData }) {
   return (
     <div
@@ -512,6 +576,14 @@ export default function WorkIntakeReviewReal({ data }: { data: RealReviewData })
           <Header data={data} />
           <Tabs />
           <div className="wi-review-body">
+            {/* AP-UX-1a — progressive intelligence strip above the
+                details card.  Reads authoritative state only.  Renders
+                nothing when no stage has produced a signal yet. */}
+            <IntelligenceStrip data={data} />
+            {/* AP-UX-1a — vendor-match exception.  Surfaces only when
+                the AP intelligence pipeline reports an unresolved
+                match; otherwise returns null. */}
+            <VendorMatchException data={data} />
             {/* WI-2B.7 — Invoice Details now includes Metadata,
                Context, and Line Items as sections. Standalone
                Line Items and Context cards were removed. */}

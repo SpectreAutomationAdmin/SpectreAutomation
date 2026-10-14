@@ -6332,6 +6332,256 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 .wi-review-flow-stage--active .wi-review-flow-supporting { color: var(--wi-ink-2); }
 
+/* ---------- AP-UX-1a (2026-10-13) ---------- */
+/* Reusable interaction primitives for the AP review experience.
+   Namespace: `.ap-ux-*`.  Motion is restrained: fade + translate on
+   mount only; no continuous breathing / pulsing on static states.
+   Processing-glyph animation applies ONLY to the explicit
+   PROCESSING status (data-status="PROCESSING") and is suppressed
+   under `prefers-reduced-motion`. */
+
+/* Intelligence strip (above Invoice Details card) */
+.ap-ux-intel-strip {
+  background: var(--wi-review-card-bg-strong, #faf6ec);
+  border: 1px solid var(--wi-review-hairline, rgba(0, 0, 0, 0.08));
+  border-radius: 10px;
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: ap-ux-rise 180ms ease-out both;
+}
+.ap-ux-intel-strip-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ap-ux-intel-strip-heading-eyebrow {
+  font-size: 10px;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: var(--wi-ink-3, rgba(0, 0, 0, 0.55));
+  font-weight: 500;
+}
+.ap-ux-intel-strip-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 14px;
+}
+.ap-ux-intel-strip-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 2px;
+  animation: ap-ux-rise 220ms ease-out both;
+}
+.ap-ux-intel-strip-item-glyph {
+  flex-shrink: 0;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  margin-top: 2px;
+}
+.ap-ux-intel-strip-item-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ap-ux-intel-strip-item-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--wi-ink, rgba(0, 0, 0, 0.85));
+  line-height: 16px;
+}
+.ap-ux-intel-strip-item-status {
+  font-size: 11px;
+  color: var(--wi-ink-3, rgba(0, 0, 0, 0.55));
+  line-height: 14px;
+}
+.ap-ux-intel-strip-item-detail {
+  color: var(--wi-ink-2, rgba(0, 0, 0, 0.7));
+}
+
+/* Status-driven glyph colours.  Restrained — no stoplight red. */
+.ap-ux-intel-strip-item--completed .ap-ux-intel-strip-item-glyph {
+  background: #dff0dd;
+  color: #1f6f3f;
+}
+.ap-ux-intel-strip-item--suggested .ap-ux-intel-strip-item-glyph {
+  background: #f6edd7;
+  color: #8a6a1f;
+}
+.ap-ux-intel-strip-item--attention .ap-ux-intel-strip-item-glyph {
+  background: #f6e4d7;
+  color: #8b3520;
+}
+.ap-ux-intel-strip-item--processing .ap-ux-intel-strip-item-glyph {
+  background: #e4ebe4;
+  color: var(--wi-ink-2, rgba(0, 0, 0, 0.7));
+}
+.ap-ux-intel-strip-item--unevaluated .ap-ux-intel-strip-item-glyph {
+  background: transparent;
+  color: var(--wi-ink-3, rgba(0, 0, 0, 0.4));
+}
+
+/* Processing glyph — three dots, animated ONLY for the processing
+   status.  Reduced-motion suppresses the animation and shows a
+   static set of dots. */
+.ap-ux-intel-strip-item--processing .ap-ux-intel-strip-processing-glyph circle:nth-child(1) {
+  animation: ap-ux-dot-pulse 1.4s ease-in-out infinite;
+}
+.ap-ux-intel-strip-item--processing .ap-ux-intel-strip-processing-glyph circle:nth-child(2) {
+  animation: ap-ux-dot-pulse 1.4s ease-in-out infinite 0.18s;
+}
+.ap-ux-intel-strip-item--processing .ap-ux-intel-strip-processing-glyph circle:nth-child(3) {
+  animation: ap-ux-dot-pulse 1.4s ease-in-out infinite 0.36s;
+}
+
+/* Exception notice (reusable primitive). */
+.ap-ux-exception {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid #e7cfa0;
+  background: #fdf7e8;
+  animation: ap-ux-rise 180ms ease-out both;
+}
+.ap-ux-exception--informational {
+  border-color: var(--wi-review-hairline, rgba(0, 0, 0, 0.1));
+  background: var(--wi-review-card-bg-strong, #faf6ec);
+}
+.ap-ux-exception-icon {
+  flex-shrink: 0;
+  color: #8a6a1f;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ap-ux-exception--informational .ap-ux-exception-icon {
+  color: var(--wi-ink-3, rgba(0, 0, 0, 0.55));
+}
+.ap-ux-exception-body {
+  flex: 1;
+  min-width: 0;
+}
+.ap-ux-exception-headline {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wi-ink, rgba(0, 0, 0, 0.9));
+  line-height: 18px;
+}
+.ap-ux-exception-text {
+  font-size: 12.5px;
+  color: var(--wi-ink-2, rgba(0, 0, 0, 0.7));
+  line-height: 17px;
+  margin-top: 2px;
+}
+.ap-ux-exception-text strong {
+  font-weight: 600;
+  color: var(--wi-ink, rgba(0, 0, 0, 0.9));
+}
+.ap-ux-exception-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.ap-ux-exception-action {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+.ap-ux-exception-action--primary {
+  background: #c9a24a;
+  color: #1a1a1a;
+  border: 1px solid #c9a24a;
+}
+.ap-ux-exception-action--primary:hover {
+  background: #b89139;
+  border-color: #b89139;
+}
+.ap-ux-exception-action--ghost {
+  background: transparent;
+  color: var(--wi-ink, rgba(0, 0, 0, 0.85));
+  border: 1px solid var(--wi-review-hairline, rgba(0, 0, 0, 0.15));
+}
+.ap-ux-exception-action--ghost:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* AP-UX-1a — workflow stage "verified" affordance on completed
+   stages.  The circle still carries its gold background; adding a
+   subtle check SVG via mask would require JSX changes, so for this
+   slice we deepen the completed-stage ring and darken the index
+   number — restrained + no new motion.  The existing component
+   JSX remains unchanged; this only adjusts the completed-stage
+   colour balance. */
+.wi-review-flow-stage--done .wi-review-flow-circle {
+  box-shadow: inset 0 0 0 1px rgba(74, 52, 16, 0.25);
+}
+.wi-review-flow-stage--done .wi-review-flow-label {
+  color: var(--wi-ink-2, rgba(0, 0, 0, 0.75));
+}
+/* Active stage retains its existing muted-grey fill; no continuous
+   breathing is added here (per directive — "Avoid continuous
+   breathing or pulsing animations for static active states"). */
+
+/* Motion primitives. */
+@keyframes ap-ux-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ap-ux-dot-pulse {
+  0%, 60%, 100% { opacity: 0.35; }
+  30%           { opacity: 1;    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ap-ux-intel-strip,
+  .ap-ux-intel-strip-item,
+  .ap-ux-exception {
+    animation: none !important;
+  }
+  .ap-ux-intel-strip-item--processing .ap-ux-intel-strip-processing-glyph circle {
+    animation: none !important;
+    opacity: 0.7;
+  }
+  .ap-ux-exception-action {
+    transition: none !important;
+  }
+}
+
+/* Mobile — stack the exception notice vertically so the primary
+   action moves below the body text at narrow widths. */
+@media (max-width: 640px) {
+  .ap-ux-exception {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ap-ux-exception-actions {
+    width: 100%;
+  }
+  .ap-ux-exception-action {
+    flex: 1;
+    text-align: center;
+  }
+  .ap-ux-intel-strip-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---------- Spectre intelligence rail ---------- */
 .wi-review-rail {
   background: var(--wi-review-rail-bg);
