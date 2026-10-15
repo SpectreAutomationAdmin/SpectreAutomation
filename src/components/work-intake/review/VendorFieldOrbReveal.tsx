@@ -277,21 +277,32 @@ function OrbOverlay(props: {
 }) {
   const { anchorRef, visible, opacity, size, speed, paused } = props;
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   useLayoutEffect(() => {
+    // AP-ORB-2 instrumentation — remove once the portal is confirmed
+    // mounting as expected.
+    try {
+      // eslint-disable-next-line no-console
+      console.log("[AP-ORB-2 OrbOverlay] useLayoutEffect visible=", visible, "anchor=", !!anchorRef.current, "size=", size);
+    } catch {}
     if (!visible) {
       setCoords(null);
       return;
     }
     const update = () => {
       const el = anchorRef.current;
-      if (!el) return;
+      if (!el) {
+        try {
+          // eslint-disable-next-line no-console
+          console.log("[AP-ORB-2 OrbOverlay] anchor is NULL");
+        } catch {}
+        return;
+      }
       const r = el.getBoundingClientRect();
+      try {
+        // eslint-disable-next-line no-console
+        console.log("[AP-ORB-2 OrbOverlay] setCoords", r.top, r.left, r.width, r.height);
+      } catch {}
       setCoords({
         top: r.top + r.height / 2 - size / 2,
         left: r.left + r.width / 2 - size / 2,
@@ -306,7 +317,9 @@ function OrbOverlay(props: {
     };
   }, [visible, anchorRef, size]);
 
-  if (!mounted || !visible || !coords || typeof document === "undefined") return null;
+  // Guard against SSR + the one-tick window where `coords` is still
+  // null between first render and useLayoutEffect.
+  if (typeof window === "undefined" || !visible || !coords) return null;
   return createPortal(
     <div
       className="ap-orb-vendor-overlay"
