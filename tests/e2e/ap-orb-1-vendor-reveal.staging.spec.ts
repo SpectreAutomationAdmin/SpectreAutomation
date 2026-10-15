@@ -69,6 +69,8 @@ runAt(
     // never touches the production Vendor-cell wiring.
     const reviewUrl = `${BASE}/app/admin/work-intake/vendor-orb-demo?orb=1`;
     console.log(`AP_ORB_1_SELECTED_REVIEW ${reviewUrl}`);
+    await page.goto(reviewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2_000);
 
     const vendorCell = page.locator('[data-testid="ap-orb-vendor-cell"]').first();
     await vendorCell.waitFor({ state: "visible", timeout: 15_000 });
@@ -186,5 +188,57 @@ runAt(
     await ctx.close(); // closes recordVideo
     console.log(`AP_ORB_1_VIDEO_DIR test-results/ap-orb-1-video`);
     console.log(`AP_ORB_1_FRAME_DIR test-results/ap-orb-1-frames`);
+  },
+);
+
+runAt(
+  "AP-ORB-1 · prefers-reduced-motion short-circuit — orb never animates",
+  async ({ browser }) => {
+    test.setTimeout(120_000);
+    const outDir = ensureOutDir();
+    const ctx = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      reducedMotion: "reduce",
+    });
+    const page = await loginAsFounder(ctx);
+    const reviewUrl = `${BASE}/app/admin/work-intake/vendor-orb-demo?orb=1`;
+    await page.goto(reviewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(1_500);
+
+    const vendorCell = page.locator('[data-testid="ap-orb-vendor-cell"]').first();
+    await vendorCell.waitFor({ state: "visible", timeout: 15_000 });
+
+    const vendorBefore = (await vendorCell.textContent())?.trim() ?? "";
+    console.log(`AP_ORB_1_RM_VENDOR_BEFORE "${vendorBefore}"`);
+    expect(vendorBefore.length).toBeGreaterThan(0);
+
+    // Click Replay with reduced-motion in effect.  The component
+    // short-circuits via `prefersReducedMotion.current` — elapsed
+    // jumps to AP_ORB_DURATION_MS on the first tick, onComplete
+    // fires via microtask, and the parent flips playing back to
+    // false before the next paint.  Expected observation: orb
+    // canvas either never mounts or disappears within one frame.
+    await page.locator('[data-testid="ap-orb-vendor-replay"]').first().click();
+
+    // Sample within 400 ms — far shorter than the 850 ms Phase A
+    // length — and verify the phase is already back to idle.
+    await page.waitForTimeout(200);
+    const phaseFast = await vendorCell.getAttribute("data-ap-orb-phase");
+    const orbFast = await page.locator('[data-testid="ap-orb-vendor-orb"]').count();
+    console.log(`AP_ORB_1_RM_PHASE_200ms "${phaseFast}" orbCount=${orbFast}`);
+    expect(phaseFast, "reduced-motion resolves to idle well before Phase A ends").toBe("idle");
+    expect(orbFast, "reduced-motion never leaves the orb canvas mounted").toBe(0);
+
+    // Text stays identical.
+    const vendorAfter = (await vendorCell.textContent())?.trim() ?? "";
+    expect(vendorAfter).toBe(vendorBefore);
+
+    await page.screenshot({
+      path: path.join(outDir, "ap-orb-1-reduced-motion.png"),
+      clip: { x: 0, y: 0, width: 1440, height: 900 },
+    });
+    console.log("AP_ORB_1_RM_SCREENSHOT test-results/ap-orb-1-reduced-motion.png");
+
+    await ctx.close();
   },
 );
