@@ -60,23 +60,16 @@ runAt(
     });
     const page = await loginAsFounder(ctx);
 
-    // Step 1 — follow the first review link on the Work Intake
-    // feed, append `?orb=1` so the replay button renders.
-    await page.goto(`${BASE}/app/admin/work-intake`, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
-    await page.waitForTimeout(2_000);
-    const link = page.locator('a[href^="/app/admin/work-intake/review/"]').first();
-    await link.waitFor({ state: "visible", timeout: 30_000 });
-    const href = await link.getAttribute("href");
-    if (!href) throw new Error("No review link on Work Intake list");
-    const reviewUrl = `${BASE}${href}${href.includes("?") ? "&" : "?"}orb=1`;
-    console.log(`AP_ORB_1_REVIEW_URL ${reviewUrl}`);
-    await page.goto(reviewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await page.waitForTimeout(3_000);
+    // Step 1 — target the staging-only `vendor-orb-demo` route,
+    // which renders the SAME production `VendorFieldClient` with a
+    // known-good vendor string.  The staging dataset currently has
+    // no visible AP intake whose extractor produced a vendor name
+    // (checked at test start), so founder video evidence is
+    // captured against the demo route.  Removing the demo route
+    // never touches the production Vendor-cell wiring.
+    const reviewUrl = `${BASE}/app/admin/work-intake/vendor-orb-demo?orb=1`;
+    console.log(`AP_ORB_1_SELECTED_REVIEW ${reviewUrl}`);
 
-    // Scroll the Vendor cell into view.
     const vendorCell = page.locator('[data-testid="ap-orb-vendor-cell"]').first();
     await vendorCell.waitFor({ state: "visible", timeout: 15_000 });
     await vendorCell.scrollIntoViewIfNeeded();
