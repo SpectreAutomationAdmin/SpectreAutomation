@@ -15,7 +15,7 @@
 // production Vendor-cell behaviour is unaffected.
 
 import Link from "next/link";
-import VendorFieldClient from "@/components/work-intake/review/VendorFieldClient";
+import VendorOrbDemoSelector from "@/components/work-intake/review/VendorOrbDemoSelector";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Vendor Orb · Demo" };
@@ -54,6 +54,9 @@ export default function VendorOrbDemoPage() {
           Staging-only route for founder motion acceptance.  Renders the
           production <code>VendorFieldClient</code> with a demo vendor
           string.  Append <code>?orb=1</code> to see the Replay button.
+          AP-ORB-2 adds a 20<span>&nbsp;</span>px / 64<span>&nbsp;</span>px
+          size selector so the founder can replay either variant for direct
+          comparison.
         </p>
 
         <div className="wi-review-card wi-review-card--details" aria-label="Vendor demo">
@@ -80,7 +83,7 @@ export default function VendorOrbDemoPage() {
               color: "var(--wi-ink)",
               fontVariantNumeric: "tabular-nums",
             }}>
-              <VendorFieldClient vendor={demoVendor} />
+              <VendorOrbDemoSelector vendor={demoVendor} />
             </div>
           </div>
         </div>

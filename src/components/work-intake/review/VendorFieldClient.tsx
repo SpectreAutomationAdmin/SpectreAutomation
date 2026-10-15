@@ -19,6 +19,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
+import type { OrbSize } from "thinking-orbs";
 import VendorFieldOrbReveal, {
   VendorFieldOrbStatic,
   useVendorOrbReplay,
@@ -26,9 +27,14 @@ import VendorFieldOrbReveal, {
 
 interface Props {
   vendor: string;
+  /** Orb pixel size.  Default 20 (AP-ORB-1 production).  The real
+   *  AP Review page NEVER passes this — it keeps the default so
+   *  production stays byte-identical.  Only the staging demo
+   *  surface sets 64 (AP-ORB-2 experiment). */
+  size?: OrbSize;
 }
 
-export default function VendorFieldClient({ vendor }: Props) {
+export default function VendorFieldClient({ vendor, size = 20 }: Props) {
   const searchParams = useSearchParams();
   const replayEnabled = searchParams?.get("orb") === "1";
   const { playing, trigger, complete } = useVendorOrbReplay();
@@ -36,7 +42,12 @@ export default function VendorFieldClient({ vendor }: Props) {
   return (
     <>
       {playing ? (
-        <VendorFieldOrbReveal vendor={vendor} playing={true} onComplete={complete} />
+        <VendorFieldOrbReveal
+          vendor={vendor}
+          playing={true}
+          onComplete={complete}
+          size={size}
+        />
       ) : (
         <VendorFieldOrbStatic vendor={vendor} />
       )}

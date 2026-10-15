@@ -44,8 +44,9 @@
 
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { ThinkingOrb } from "thinking-orbs";
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
+import { ThinkingOrb, type OrbSize } from "thinking-orbs";
 
 /** Total animation duration in milliseconds. */
 export const AP_ORB_DURATION_MS = 2_100;
@@ -77,9 +78,21 @@ interface Props {
    *  to flip `playing` back to false and remove the orb canvas
    *  from the DOM. */
   onComplete: () => void;
+  /** Orb pixel size.  Default 20 (AP-ORB-1 production).  When set
+   *  to 64 (AP-ORB-2 experiment) the orb renders in a portal
+   *  overlay anchored to the Vendor cell, extending beyond the
+   *  cell without altering document flow.  The cell's row height
+   *  is unchanged at every size.  Only the two hand-tuned
+   *  thinking-orbs sizes are permitted. */
+  size?: OrbSize;
 }
 
-export default function VendorFieldOrbReveal({ vendor, playing, onComplete }: Props) {
+export default function VendorFieldOrbReveal({
+  vendor,
+  playing,
+  onComplete,
+  size = 20,
+}: Props) {
   // Elapsed-time state drives all downstream derived values on
   // every rAF tick.  Capped at AP_ORB_DURATION_MS.
   const [elapsed, setElapsed] = useState(0);
@@ -185,13 +198,21 @@ export default function VendorFieldOrbReveal({ vendor, playing, onComplete }: Pr
   // rotation shows while it fades out.
   const orbPaused = inResolve;
 
+  const useOverlay = size > 20;
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+
   return (
     <span
+      ref={anchorRef}
       className="ap-orb-vendor-cell"
       data-testid="ap-orb-vendor-cell"
       data-ap-orb-phase={inThinking ? "thinking" : inDecel ? "decel" : inResolve ? "resolve" : "idle"}
+      data-ap-orb-size={size}
     >
-      {orbVisible ? (
+      {/* 20 px (AP-ORB-1 production) — orb sits inside the cell at
+          left: 0, clipped by the cell's overflow:hidden to the row
+          height.  No portal; byte-identical to the production path. */}
+      {!useOverlay && orbVisible ? (
         <span
           className="ap-orb-vendor-orb"
           style={{ opacity: orbOpacity }}
@@ -200,7 +221,7 @@ export default function VendorFieldOrbReveal({ vendor, playing, onComplete }: Pr
         >
           <ThinkingOrb
             state="solving"
-            size={20}
+            size={size}
             speed={orbSpeed}
             paused={orbPaused}
             theme="light"
@@ -221,7 +242,98 @@ export default function VendorFieldOrbReveal({ vendor, playing, onComplete }: Pr
       >
         {vendor}
       </span>
+      {/* AP-ORB-2 overlay — only renders at size > 20.  Portaled to
+          document.body with position:fixed anchored to the Vendor
+          cell's bounding rect, so no ancestor can clip it and the
+          Vendor row's height is untouched. */}
+      {useOverlay ? (
+        <OrbOverlay
+          anchorRef={anchorRef}
+          visible={orbVisible}
+          opacity={orbOpacity}
+          size={size}
+          speed={orbSpeed}
+          paused={orbPaused}
+        />
+      ) : null}
     </span>
+  );
+}
+
+/** Portal overlay for the AP-ORB-2 64 px variant.
+ *
+ *  Renders a `position: fixed` wrapper into `document.body`, keyed
+ *  to the Vendor cell's center via `getBoundingClientRect()`.  The
+ *  overlay is `pointer-events: none` and `aria-hidden`, so it never
+ *  intercepts clicks or shows up in assistive tech.  Unmounts the
+ *  moment `visible` flips to false (end of Phase C). */
+function OrbOverlay(props: {
+  anchorRef: React.RefObject<HTMLSpanElement | null>;
+  visible: boolean;
+  opacity: number;
+  size: OrbSize;
+  speed: number;
+  paused: boolean;
+}) {
+  const { anchorRef, visible, opacity, size, speed, paused } = props;
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!visible) {
+      setCoords(null);
+      return;
+    }
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setCoords({
+        top: r.top + r.height / 2 - size / 2,
+        left: r.left + r.width / 2 - size / 2,
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [visible, anchorRef, size]);
+
+  if (!mounted || !visible || !coords || typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      className="ap-orb-vendor-overlay"
+      style={{
+        position: "fixed",
+        top: coords.top,
+        left: coords.left,
+        width: size,
+        height: size,
+        opacity,
+        pointerEvents: "none",
+        zIndex: 50,
+      }}
+      aria-hidden="true"
+      data-testid="ap-orb-vendor-overlay"
+      data-ap-orb-size={size}
+    >
+      <ThinkingOrb
+        state="solving"
+        size={size}
+        speed={speed}
+        paused={paused}
+        theme="light"
+        aria-hidden="true"
+      />
+    </div>,
+    document.body,
   );
 }
 
