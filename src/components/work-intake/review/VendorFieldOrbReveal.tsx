@@ -199,11 +199,20 @@ export default function VendorFieldOrbReveal({
   const orbPaused = inResolve;
 
   const useOverlay = size > 20;
-  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  // Callback ref — resolves the anchor element to state so that
+  // the OrbOverlay child always sees a NON-null anchor on the
+  // render pass that follows the parent's DOM commit.  Reading
+  // from a plain `useRef` object inside a child's useLayoutEffect
+  // raced against ref attachment on fresh VendorFieldOrbReveal
+  // mounts (anchor was null when the effect fired).
+  const [anchor, setAnchor] = useState<HTMLSpanElement | null>(null);
+  const anchorRefCb = useCallback((el: HTMLSpanElement | null) => {
+    setAnchor(el);
+  }, []);
 
   return (
     <span
-      ref={anchorRef}
+      ref={anchorRefCb}
       className="ap-orb-vendor-cell"
       data-testid="ap-orb-vendor-cell"
       data-ap-orb-phase={inThinking ? "thinking" : inDecel ? "decel" : inResolve ? "resolve" : "idle"}
@@ -248,7 +257,7 @@ export default function VendorFieldOrbReveal({
           Vendor row's height is untouched. */}
       {useOverlay ? (
         <OrbOverlay
-          anchorRef={anchorRef}
+          anchor={anchor}
           visible={orbVisible}
           opacity={orbOpacity}
           size={size}
@@ -268,41 +277,23 @@ export default function VendorFieldOrbReveal({
  *  intercepts clicks or shows up in assistive tech.  Unmounts the
  *  moment `visible` flips to false (end of Phase C). */
 function OrbOverlay(props: {
-  anchorRef: React.RefObject<HTMLSpanElement | null>;
+  anchor: HTMLSpanElement | null;
   visible: boolean;
   opacity: number;
   size: OrbSize;
   speed: number;
   paused: boolean;
 }) {
-  const { anchorRef, visible, opacity, size, speed, paused } = props;
+  const { anchor, visible, opacity, size, speed, paused } = props;
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
 
   useLayoutEffect(() => {
-    // AP-ORB-2 instrumentation — remove once the portal is confirmed
-    // mounting as expected.
-    try {
-      // eslint-disable-next-line no-console
-      console.log("[AP-ORB-2 OrbOverlay] useLayoutEffect visible=", visible, "anchor=", !!anchorRef.current, "size=", size);
-    } catch {}
-    if (!visible) {
+    if (!visible || !anchor) {
       setCoords(null);
       return;
     }
     const update = () => {
-      const el = anchorRef.current;
-      if (!el) {
-        try {
-          // eslint-disable-next-line no-console
-          console.log("[AP-ORB-2 OrbOverlay] anchor is NULL");
-        } catch {}
-        return;
-      }
-      const r = el.getBoundingClientRect();
-      try {
-        // eslint-disable-next-line no-console
-        console.log("[AP-ORB-2 OrbOverlay] setCoords", r.top, r.left, r.width, r.height);
-      } catch {}
+      const r = anchor.getBoundingClientRect();
       setCoords({
         top: r.top + r.height / 2 - size / 2,
         left: r.left + r.width / 2 - size / 2,
@@ -315,7 +306,7 @@ function OrbOverlay(props: {
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
     };
-  }, [visible, anchorRef, size]);
+  }, [visible, anchor, size]);
 
   // Guard against SSR + the one-tick window where `coords` is still
   // null between first render and useLayoutEffect.
