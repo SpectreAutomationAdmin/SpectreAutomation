@@ -233,10 +233,15 @@ export default function VendorFieldOrbReveal({ vendor, playing, onComplete }: Pr
 // ---------------------------------------------------------------------------
 export function VendorFieldOrbStatic({ vendor }: { vendor: string }) {
   return (
-    <span className="ap-orb-vendor-cell" data-ap-orb-phase="idle">
+    <span
+      className="ap-orb-vendor-cell"
+      data-ap-orb-phase="idle"
+      data-testid="ap-orb-vendor-cell"
+    >
       <span
         className="ap-orb-vendor-text"
         style={{ transform: "translate3d(0, 0px, 0)", opacity: 1 }}
+        data-testid="ap-orb-vendor-text"
       >
         {vendor}
       </span>
