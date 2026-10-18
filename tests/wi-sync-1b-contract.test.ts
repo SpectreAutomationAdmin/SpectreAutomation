@@ -96,6 +96,40 @@ describe("WI-SYNC-1b · worker loop wiring", () => {
   });
 });
 
+describe("WI-SYNC-1b · bounded cursor advancement across sweep runs", () => {
+  it("MailboxConnection schema carries reconciliationCursorReceivedAt (DateTime?)", () => {
+    const SCHEMA = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+    expect(SCHEMA).toMatch(/reconciliationCursorReceivedAt\s+DateTime\?/);
+  });
+  it("sweep runs read the cursor and filter candidates by receivedAt < cursor", () => {
+    expect(RECONCILIATION).toMatch(/triggerKind\s*===\s*"RECONCILIATION_SWEEP"/);
+    expect(RECONCILIATION).toMatch(/reconciliationCursorReceivedAt/);
+    expect(RECONCILIATION).toMatch(/receivedAt:\s*\{\s*lt:\s*cursorBefore/);
+  });
+  it("end-of-run advances cursor to OLDEST examined receivedAt when more rows exist", () => {
+    expect(RECONCILIATION).toMatch(/candidates\[candidates\.length - 1\]\?\.receivedAt/);
+    expect(RECONCILIATION).toMatch(/reconciliationCursorReceivedAt:\s*cursorAfter/);
+  });
+  it("resets cursor to null when the run reaches the bottom of the mailbox", () => {
+    expect(RECONCILIATION).toMatch(/reachedBottom\s*=\s*examinedCount\s*<\s*limit/);
+    expect(RECONCILIATION).toMatch(/reachedBottom\s*\?\s*null\s*:/);
+  });
+  it("operator-initiated runs (triggerKind=RECONCILIATION) never touch the cursor", () => {
+    // The cursor-advancing update sits inside `if (isSweep && !partial)`.
+    expect(RECONCILIATION).toMatch(/if\s*\(isSweep\s*&&\s*!partial\)/);
+  });
+  it("PARTIAL runs (any INACCESSIBLE_RETRYABLE row) leave the cursor unchanged", () => {
+    // The !partial guard is the explicit lock on this behaviour.
+    const section = RECONCILIATION.slice(RECONCILIATION.indexOf("cursor advancement"));
+    expect(section).toMatch(/!partial/);
+  });
+  it("report surfaces cursorBefore / cursorAfter / reachedBottomOfMailbox for operator visibility", () => {
+    expect(RECONCILIATION).toMatch(/cursorBefore\?:/);
+    expect(RECONCILIATION).toMatch(/cursorAfter\?:/);
+    expect(RECONCILIATION).toMatch(/reachedBottomOfMailbox\?:/);
+  });
+});
+
 describe("WI-SYNC-1b · reconciliation service persists observability runs", () => {
   it("creates a MailboxSyncRun BEFORE any Graph call", () => {
     const idxCreate = RECONCILIATION.indexOf("prisma.mailboxSyncRun.create");

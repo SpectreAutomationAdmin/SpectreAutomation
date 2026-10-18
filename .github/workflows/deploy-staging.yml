@@ -105,11 +105,20 @@ jobs:
           SHORT_SHA=$(git rev-parse --short=12 HEAD)
           IMAGE_TAG="sha-${SHORT_SHA}"
           IMAGE_REF="registry.fly.io/spectre-staging:${IMAGE_TAG}"
-          echo "full_sha=${FULL_SHA}"    >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}"  >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}"  >> "$GITHUB_OUTPUT"
-          echo "image_ref=${IMAGE_REF}"  >> "$GITHUB_OUTPUT"
+          # WI-SYNC-1b (2026-10-18) — worker image is a parallel
+          # build from Dockerfile.worker, pushed to a distinct
+          # registry (spectre-staging-worker), deployed to the
+          # separate Fly app.  Both images carry the same SHA tag,
+          # so a later version-compat check can assert web + worker
+          # are serving the same code revision.
+          WORKER_IMAGE_REF="registry.fly.io/spectre-staging-worker:${IMAGE_TAG}"
+          echo "full_sha=${FULL_SHA}"               >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"             >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"             >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}"             >> "$GITHUB_OUTPUT"
+          echo "worker_image_ref=${WORKER_IMAGE_REF}" >> "$GITHUB_OUTPUT"
           echo "::notice::Deploying ${FULL_SHA} → ${IMAGE_REF}"
+          echo "::notice::Worker image → ${WORKER_IMAGE_REF}"
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
@@ -184,6 +193,102 @@ jobs:
           GITHUB_SHA:                       ${{ steps.sha.outputs.full_sha }}
           GITHUB_REF_NAME:                  ${{ steps.ref.outputs.value }}
         run: npm run deploy:staging
+
+      # WI-SYNC-1b (2026-10-18) — build + push the worker image.
+      # Separate Dockerfile (Dockerfile.worker) runs bin/worker.ts
+      # on `spectre-staging-worker`.  Uses its own cache scope so
+      # the web build cache isn't invalidated by worker changes.
+      # Independent registry destination — the FLY_API_TOKEN
+      # (web-scoped) cannot push here; the Fly registry accepts
+      # the deploy token in the password slot so the Fly-worker
+      # token below is what grants push access.  We re-login
+      # Docker with the worker token for the push step only.
+      - name: Log in to Fly worker registry (worker-scoped token)
+        if: success()
+        env:
+          FLY_WORKER_API_TOKEN: ${{ secrets.FLY_WORKER_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_WORKER_API_TOKEN" ]; then
+            echo "::error::FLY_WORKER_API_TOKEN secret is not set on the staging environment."
+            echo "::error::Founder must run: flyctl tokens create deploy -a spectre-staging-worker"
+            echo "::error::and upload the resulting token to the 'staging' environment as FLY_WORKER_API_TOKEN."
+            exit 2
+          fi
+          echo "$FLY_WORKER_API_TOKEN" | docker login registry.fly.io -u x --password-stdin
+
+      - name: Build + push WORKER image (Dockerfile.worker → worker registry)
+        if: success()
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.worker
+          push: true
+          tags: ${{ steps.sha.outputs.worker_image_ref }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.sha.outputs.full_sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+          cache-from: type=gha,scope=spectre-staging-worker
+          cache-to: type=gha,mode=max,scope=spectre-staging-worker
+
+      - name: Deploy spectre-staging-worker (rolling, image-only)
+        if: success()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_WORKER_API_TOKEN }}
+          WORKER_IMAGE: ${{ steps.sha.outputs.worker_image_ref }}
+        run: |
+          # Rolling, image-only.  No local docker build (image is
+          # already pushed above).  No release_command on the
+          # worker (per deploy/fly.worker.toml — the web app owns
+          # Prisma migrations and ran them first).  wait-timeout
+          # 180 s is generous for the worker's small startup.
+          flyctl deploy \
+            --app spectre-staging-worker \
+            --config deploy/fly.worker.toml \
+            --image "$WORKER_IMAGE" \
+            --strategy rolling \
+            --wait-timeout 180
+
+      - name: Verify worker is healthy (machine state + image tag)
+        if: success()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_WORKER_API_TOKEN }}
+          WORKER_IMAGE: ${{ steps.sha.outputs.worker_image_ref }}
+          EXPECTED_IMAGE_TAG: ${{ steps.sha.outputs.image_tag }}
+        run: |
+          # Poll `flyctl status --json` for up to 180 s until every
+          # worker machine reports state=started.  Then assert the
+          # running image reference ends with the SAME sha-<short>
+          # tag the web app was deployed with — proving web and
+          # worker are serving compatible application versions
+          # (WI-SYNC-1b §7).  A worker machine stuck in `starting`
+          # or on a stale image fails the step.
+          attempt=0
+          while [ "$attempt" -lt 18 ]; do
+            attempt=$((attempt + 1))
+            STATUS_JSON=$(flyctl status --app spectre-staging-worker --json 2>/dev/null || echo '{}')
+            # Collect machine states + their running image refs.
+            STATES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.state] | @csv' 2>/dev/null || echo "")
+            IMAGES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.image_ref.tag] | @csv' 2>/dev/null || echo "")
+            NON_STARTED=$(echo "$STATUS_JSON" | jq -r '[.Machines[]? | select(.state != "started")] | length' 2>/dev/null || echo "99")
+            echo "::notice::worker attempt=${attempt} states=${STATES} images=${IMAGES} non_started=${NON_STARTED}"
+            if [ "$NON_STARTED" = "0" ]; then
+              # Every machine is started.  Now assert image tag.
+              WRONG_TAG=$(echo "$STATUS_JSON" | jq -r --arg t "$EXPECTED_IMAGE_TAG" '[.Machines[]? | select(.image_ref.tag != $t)] | length' 2>/dev/null || echo "99")
+              if [ "$WRONG_TAG" = "0" ]; then
+                echo "::notice::worker — all machines started on tag $EXPECTED_IMAGE_TAG"
+                exit 0
+              else
+                echo "::error::worker — $WRONG_TAG machine(s) on a stale image tag (expected $EXPECTED_IMAGE_TAG)"
+                echo "$STATUS_JSON" | jq '.Machines[] | {id,state,image_ref:.image_ref.tag}' || true
+                exit 1
+              fi
+            fi
+            sleep 10
+          done
+          echo "::error::worker — machines did not reach state=started within 180 s"
+          echo "$STATUS_JSON" | jq '.Machines[]? | {id,state,image_ref:.image_ref.tag}' || true
+          exit 1
 
       - name: Smoke — public login page reachable
         if: success()

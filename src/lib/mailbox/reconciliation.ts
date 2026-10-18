@@ -123,6 +123,14 @@ export interface ReconciliationReport {
   archiveFolderId: string | null;
   resolvedFolderNamesById: Record<string, string>;
   rows: ReconciliationRowReport[];
+  /** WI-SYNC-1b (2026-10-18) — reconciliation walk cursor.  Only
+   *  populated for RECONCILIATION_SWEEP runs; null everywhere
+   *  else.  `cursorBefore`: cursor read before the run started.
+   *  `cursorAfter`: cursor the run wrote back (or null if the
+   *  mailbox walk reached the bottom this run). */
+  cursorBefore?: Date | null;
+  cursorAfter?: Date | null;
+  reachedBottomOfMailbox?: boolean;
 }
 
 export interface ReconcileMailboxArgs {
@@ -181,6 +189,21 @@ export async function reconcileMailbox(
     );
   }
 
+  // WI-SYNC-1b (2026-10-18) — cursor-based advancement for
+  // scheduled sweeps.  Scheduled runs (triggerKind
+  // RECONCILIATION_SWEEP) walk older messages across successive
+  // runs via MailboxConnection.reconciliationCursorReceivedAt.
+  // Operator-initiated runs ignore the cursor and scan newest.
+  const isSweep = triggerKind === "RECONCILIATION_SWEEP";
+  const cursorBefore: Date | null = isSweep
+    ? await prisma.mailboxConnection
+        .findUnique({
+          where: { id: args.mailboxConnectionId },
+          select: { reconciliationCursorReceivedAt: true },
+        })
+        .then((r) => r?.reconciliationCursorReceivedAt ?? null)
+    : null;
+
   // Pull the active-side candidate set — every EmailMessage in
   // this mailbox that is NOT already soft-deleted.  Rows that
   // already carry softDeletedAt have been handled by a prior pass
@@ -191,6 +214,11 @@ export async function reconcileMailbox(
       mailboxConnectionId: args.mailboxConnectionId,
       softDeletedAt: null,
       ...(args.receivedSince ? { receivedAt: { gte: args.receivedSince } } : {}),
+      // Sweep-cursor filter: only consider messages older than the
+      // cursor so each run picks up where the last one left off.
+      ...(isSweep && cursorBefore
+        ? { receivedAt: { lt: cursorBefore } }
+        : {}),
     },
     orderBy: { receivedAt: "desc" },
     take: limit,
@@ -409,6 +437,37 @@ export async function reconcileMailbox(
     },
   });
 
+  // WI-SYNC-1b (2026-10-18) — cursor advancement.  Only scheduled
+  // sweeps touch the cursor.  Operator-initiated runs leave it
+  // alone so they never disrupt the sweep's walk.
+  //
+  // Semantics:
+  //   * If the run examined < limit candidates, we've reached the
+  //     bottom of the mailbox (nothing older to look at).  Reset
+  //     the cursor to null so the next cycle starts fresh from
+  //     newest.
+  //   * Otherwise, advance the cursor to the OLDEST examined row's
+  //     receivedAt.  The next run picks up where this one left
+  //     off (`receivedAt < cursor`).
+  //   * On a PARTIAL run (any INACCESSIBLE_RETRYABLE), keep the
+  //     current cursor so the next run retries the same window
+  //     before advancing.  This matches the directive's §3
+  //     requirement that "Failed synchronization attempts must be
+  //     retryable without creating duplicate Work Intake items or
+  //     audit activities."
+  let cursorAfter: Date | null = cursorBefore;
+  let reachedBottom = false;
+  if (isSweep && !partial) {
+    const examinedCount = candidates.length;
+    reachedBottom = examinedCount < limit;
+    const oldestExamined = candidates[candidates.length - 1]?.receivedAt;
+    cursorAfter = reachedBottom ? null : (oldestExamined ?? null);
+    await prisma.mailboxConnection.update({
+      where: { id: args.mailboxConnectionId },
+      data: { reconciliationCursorReceivedAt: cursorAfter },
+    });
+  }
+
   return {
     mailboxConnectionId: args.mailboxConnectionId,
     clubId: args.clubId,
@@ -421,6 +480,9 @@ export async function reconcileMailbox(
     archiveFolderId: archiveFolder?.id ?? null,
     resolvedFolderNamesById: folderNames,
     rows,
+    cursorBefore: isSweep ? cursorBefore : null,
+    cursorAfter: isSweep ? cursorAfter : null,
+    reachedBottomOfMailbox: isSweep ? reachedBottom : undefined,
   };
 }
 

@@ -11244,6 +11244,19 @@ model MailboxConnection {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // WI-SYNC-1b (2026-10-18) — bounded reconciliation cursor.
+  // Each scheduled sweep (triggerKind = RECONCILIATION_SWEEP) walks
+  // messages whose receivedAt is older than this cursor, up to the
+  // run's `limit`.  At end-of-run the cursor advances to the oldest
+  // examined row's receivedAt; when a run returns fewer rows than
+  // the limit (bottom of mailbox reached), the cursor resets to
+  // null so the next cycle starts fresh from newest.  Nullable:
+  // null means "scan newest" — the first sweep after connection
+  // and the fresh-start marker after a full-cycle completion.
+  // Operator-initiated runs (triggerKind = RECONCILIATION) ignore
+  // and do not advance this cursor.
+  reconciliationCursorReceivedAt DateTime?
+
   accesses      MailboxAccess[]
   subscriptions GraphSubscription[]
   messages      EmailMessage[]
