@@ -256,27 +256,34 @@ jobs:
           WORKER_IMAGE: ${{ steps.sha.outputs.worker_image_ref }}
           EXPECTED_IMAGE_TAG: ${{ steps.sha.outputs.image_tag }}
         run: |
-          # Poll `flyctl status --json` for up to 180 s until every
-          # worker machine reports state=started.  Then assert the
-          # running image reference ends with the SAME sha-<short>
-          # tag the web app was deployed with — proving web and
-          # worker are serving compatible application versions
-          # (WI-SYNC-1b §7).  A worker machine stuck in `starting`
-          # or on a stale image fails the step.
+          # Verifies two things, with up to 180 s of polling:
+          #   1. At least one worker machine is in `state=started`.
+          #      (Fly worker apps commonly carry 1 started + 1
+          #      stopped standby for scaling / zero-downtime
+          #      rolling deploys; the stopped machine is NOT a
+          #      failure.  Only `starting`, `pending`, `crashed`,
+          #      `failed`, or every-machine-stopped would be.)
+          #   2. EVERY machine (started AND stopped) is on the
+          #      expected `sha-<short>` image tag, proving the
+          #      rolling deploy touched every slot and web + worker
+          #      are serving compatible application versions (§7).
           attempt=0
           while [ "$attempt" -lt 18 ]; do
             attempt=$((attempt + 1))
             STATUS_JSON=$(flyctl status --app spectre-staging-worker --json 2>/dev/null || echo '{}')
-            # Collect machine states + their running image refs.
             STATES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.state] | @csv' 2>/dev/null || echo "")
             IMAGES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.image_ref.tag] | @csv' 2>/dev/null || echo "")
-            NON_STARTED=$(echo "$STATUS_JSON" | jq -r '[.Machines[]? | select(.state != "started")] | length' 2>/dev/null || echo "99")
-            echo "::notice::worker attempt=${attempt} states=${STATES} images=${IMAGES} non_started=${NON_STARTED}"
-            if [ "$NON_STARTED" = "0" ]; then
-              # Every machine is started.  Now assert image tag.
+            STARTED=$(echo "$STATUS_JSON" | jq -r '[.Machines[]? | select(.state == "started")] | length' 2>/dev/null || echo "0")
+            STUCK=$(echo "$STATUS_JSON" | jq -r '[.Machines[]? | select(.state == "starting" or .state == "pending" or .state == "crashed" or .state == "failed" or .state == "replacing" or .state == "creating")] | length' 2>/dev/null || echo "0")
+            echo "::notice::worker attempt=${attempt} states=${STATES} images=${IMAGES} started=${STARTED} stuck=${STUCK}"
+            if [ "$STUCK" = "0" ] && [ "$STARTED" -ge "1" ]; then
+              # No stuck machines + at least one started.  Assert
+              # EVERY machine is on the expected image tag (started
+              # or stopped — a stopped standby on a stale image
+              # would be a defect the next scale-up would expose).
               WRONG_TAG=$(echo "$STATUS_JSON" | jq -r --arg t "$EXPECTED_IMAGE_TAG" '[.Machines[]? | select(.image_ref.tag != $t)] | length' 2>/dev/null || echo "99")
               if [ "$WRONG_TAG" = "0" ]; then
-                echo "::notice::worker — all machines started on tag $EXPECTED_IMAGE_TAG"
+                echo "::notice::worker — ${STARTED} machine(s) started on tag $EXPECTED_IMAGE_TAG; all machines on expected tag"
                 exit 0
               else
                 echo "::error::worker — $WRONG_TAG machine(s) on a stale image tag (expected $EXPECTED_IMAGE_TAG)"
@@ -286,7 +293,7 @@ jobs:
             fi
             sleep 10
           done
-          echo "::error::worker — machines did not reach state=started within 180 s"
+          echo "::error::worker — no healthy started machine within 180 s (stuck=${STUCK}, started=${STARTED})"
           echo "$STATUS_JSON" | jq '.Machines[]? | {id,state,image_ref:.image_ref.tag}' || true
           exit 1
 
