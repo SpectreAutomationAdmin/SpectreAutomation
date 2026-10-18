@@ -10450,6 +10450,12 @@ model WorkIntakeItem {
   displayReceivedAt     DateTime
   displayHasAttachments Boolean  @default(false)
 
+  // WI-SYNC-1c (2026-10-18) — restore + dismiss metadata.  See
+  // prisma-postgres/schema.prisma for the canonical doc block.
+  statusBeforeSuppression String?
+  userDismissedAt         DateTime?
+  userDismissedByUserId   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -10613,6 +10619,33 @@ model OutlookArchiveMutation {
   @@unique([workCompletionEventId, emailMessageId])
   @@index([clubId, status])
   @@index([workIntakeId])
+}
+
+// WI-SYNC-1c (2026-10-18) — Outlook delete-to-trash mutations.
+// Mirrors OutlookArchiveMutation.  See prisma-postgres/schema.prisma
+// for the canonical doc block.
+model OutlookDeleteMutation {
+  id                         String    @id @default(cuid())
+  clubId                     String
+  workIntakeItemId           String
+  emailMessageId             String
+  originalGraphMessageId     String
+  resultingGraphMessageId    String?
+  originalFolderId           String?
+  destinationFolderId        String?
+  mailboxConnectionId        String
+  triggeredByUserId          String?
+  status                     String    @default("PENDING")
+  attemptCount               Int       @default(0)
+  lastAttemptAt              DateTime?
+  completedAt                DateTime?
+  errorCode                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
 }
 
 // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
@@ -11255,7 +11288,13 @@ model MailboxConnection {
   // and the fresh-start marker after a full-cycle completion.
   // Operator-initiated runs (triggerKind = RECONCILIATION) ignore
   // and do not advance this cursor.
-  reconciliationCursorReceivedAt DateTime?
+  //
+  // WI-SYNC-1c (2026-10-18) — tie-breaker on top of receivedAt.
+  // The composite cursor + tuple ordering guarantees every tied
+  // message is examined on one sweep before the cursor advances
+  // past them.
+  reconciliationCursorReceivedAt     DateTime?
+  reconciliationCursorEmailMessageId String?
 
   accesses      MailboxAccess[]
   subscriptions GraphSubscription[]

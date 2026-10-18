@@ -16,7 +16,11 @@ import { getFreshDelegatedAccessToken } from "./connect";
 import { SYNC_SCOPE } from "./sync-scope";
 import { normalizeGraphMessage, stableIdentityForEmail } from "./normalize";
 import { classifyEmail } from "./classifier";
-import { upsertEmailIntake, handleEmailEvidenceDeleted } from "./email-materializer";
+import {
+  upsertEmailIntake,
+  handleEmailEvidenceDeleted,
+  handleEmailEvidenceRestored,
+} from "./email-materializer";
 import {
   MAILBOX_STATUS,
   assertMailboxStatusTransition,
@@ -520,6 +524,15 @@ export async function ingestOneMessage(args: {
       },
     },
   });
+
+  // WI-SYNC-1c (2026-10-18) — restore detection.
+  //
+  // The Inbox-scoped delta re-surfaces a message whose row we
+  // previously tombstoned (softDeletedAt != null) when the user
+  // moves it from Deleted Items / Archive back into the Inbox.
+  // Clear softDeletedAt + reactivate the linked WI (respecting
+  // user dismissal).
+  const isRestore = !!existing?.softDeletedAt;
   // Phase 4R rev-13 (2026-08-16) — TRI-STATE isRead + hasAttachments.
   // The base data object omits both flags. They are added ONLY
   // when the normalized value is a real boolean; a normalized
@@ -564,11 +577,37 @@ export async function ingestOneMessage(args: {
   const email = existing
     ? await prisma.emailMessage.update({
         where: { id: existing.id },
-        data: updateData,
+        data: {
+          ...updateData,
+          // WI-SYNC-1c — restore clears softDeletedAt in the SAME
+          // update so a split-brain window (email live but WI
+          // still SUPPRESSED) does not persist across reader
+          // snapshots.
+          ...(isRestore ? { softDeletedAt: null } : {}),
+        },
       })
     : await prisma.emailMessage.create({
         data: createData,
       });
+
+  // WI-SYNC-1c — fire the restore handler AFTER the EmailMessage
+  // write so the WI transition reads a consistent softDeletedAt
+  // null state.  Non-fatal if the handler throws — the row is
+  // still restored at the EmailMessage layer and the sweep will
+  // reconcile the WI side on its next pass.
+  if (isRestore) {
+    try {
+      await handleEmailEvidenceRestored({
+        clubId: args.clubId,
+        emailMessageId: email.id,
+      });
+    } catch (err) {
+      logger.warn("mailbox.sync.restore_handler_failed", {
+        emailMessageIdTail: email.id.slice(-6),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // Attachment metadata.
   // Sprint 2 Step 13A — the controlled-sync attachment bypass skips

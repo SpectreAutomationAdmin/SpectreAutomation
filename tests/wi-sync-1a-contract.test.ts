@@ -21,7 +21,10 @@ const ROUTE_TS = readFileSync(join(process.cwd(), "src/app/api/admin/mailbox/rec
 
 describe("WI-SYNC-1a · delta tombstone branch wires WI suppression", () => {
   it("imports handleEmailEvidenceDeleted from email-materializer", () => {
-    expect(SYNC_TS).toMatch(/handleEmailEvidenceDeleted.*from.*email-materializer/);
+    // WI-SYNC-1c (2026-10-18) — import may be single- or multi-
+    // line (the 1c slice added handleEmailEvidenceRestored as a
+    // sibling import).  Multiline-flag regex covers both shapes.
+    expect(SYNC_TS).toMatch(/handleEmailEvidenceDeleted[\s\S]*from[\s\S]*email-materializer/);
   });
   it("calls handleEmailEvidenceDeleted inside the `norm.isRemoved` branch", () => {
     const removedBranch = SYNC_TS.slice(SYNC_TS.indexOf("norm.isRemoved"));

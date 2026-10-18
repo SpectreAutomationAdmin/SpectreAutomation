@@ -192,35 +192,72 @@ export async function reconcileMailbox(
   // WI-SYNC-1b (2026-10-18) — cursor-based advancement for
   // scheduled sweeps.  Scheduled runs (triggerKind
   // RECONCILIATION_SWEEP) walk older messages across successive
-  // runs via MailboxConnection.reconciliationCursorReceivedAt.
-  // Operator-initiated runs ignore the cursor and scan newest.
+  // runs via MailboxConnection.reconciliationCursorReceivedAt
+  // and reconciliationCursorEmailMessageId (WI-SYNC-1c tie
+  // breaker).  Operator-initiated runs ignore both cursors and
+  // scan newest.
   const isSweep = triggerKind === "RECONCILIATION_SWEEP";
-  const cursorBefore: Date | null = isSweep
-    ? await prisma.mailboxConnection
-        .findUnique({
-          where: { id: args.mailboxConnectionId },
-          select: { reconciliationCursorReceivedAt: true },
-        })
-        .then((r) => r?.reconciliationCursorReceivedAt ?? null)
+  const cursorRow = isSweep
+    ? await prisma.mailboxConnection.findUnique({
+        where: { id: args.mailboxConnectionId },
+        select: {
+          reconciliationCursorReceivedAt: true,
+          reconciliationCursorEmailMessageId: true,
+        },
+      })
     : null;
+  const cursorBefore: Date | null =
+    cursorRow?.reconciliationCursorReceivedAt ?? null;
+  const cursorBeforeId: string | null =
+    cursorRow?.reconciliationCursorEmailMessageId ?? null;
+
+  // WI-SYNC-1c (2026-10-18) — tuple cursor filter.  A pure
+  // `receivedAt < cursor.receivedAt` filter would skip the
+  // second-of-a-tie when two messages share the same ms-level
+  // receivedAt (bulk list-mail imports can produce dozens).  The
+  // composite tuple predicate below guarantees every tied message
+  // is examined on a single sweep before the cursor advances past
+  // them:
+  //
+  //     receivedAt < cursorReceivedAt
+  //   OR (receivedAt = cursorReceivedAt AND id < cursorEmailId)
+  //
+  // and the ORDER BY is matched to [receivedAt DESC, id DESC] so
+  // the "oldest examined" row at the END of each page is the
+  // correct tuple to persist as the next cursor.
+  const cursorFilter =
+    isSweep && cursorBefore
+      ? cursorBeforeId
+        ? {
+            OR: [
+              { receivedAt: { lt: cursorBefore } },
+              {
+                AND: [
+                  { receivedAt: cursorBefore },
+                  { id: { lt: cursorBeforeId } },
+                ],
+              },
+            ],
+          }
+        : { receivedAt: { lt: cursorBefore } }
+      : {};
 
   // Pull the active-side candidate set — every EmailMessage in
   // this mailbox that is NOT already soft-deleted.  Rows that
   // already carry softDeletedAt have been handled by a prior pass
-  // (idempotency).
+  // (idempotency); on a restore the delta sync clears
+  // softDeletedAt and the WI is reactivated via
+  // handleEmailEvidenceRestored, so the sweep correctly sees
+  // restored rows in its candidate set.
   const candidates = await prisma.emailMessage.findMany({
     where: {
       clubId: args.clubId,
       mailboxConnectionId: args.mailboxConnectionId,
       softDeletedAt: null,
       ...(args.receivedSince ? { receivedAt: { gte: args.receivedSince } } : {}),
-      // Sweep-cursor filter: only consider messages older than the
-      // cursor so each run picks up where the last one left off.
-      ...(isSweep && cursorBefore
-        ? { receivedAt: { lt: cursorBefore } }
-        : {}),
+      ...cursorFilter,
     },
-    orderBy: { receivedAt: "desc" },
+    orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
     take: limit,
     select: {
       id: true,
@@ -456,15 +493,24 @@ export async function reconcileMailbox(
   //     retryable without creating duplicate Work Intake items or
   //     audit activities."
   let cursorAfter: Date | null = cursorBefore;
+  let cursorAfterId: string | null = cursorBeforeId;
   let reachedBottom = false;
   if (isSweep && !partial) {
     const examinedCount = candidates.length;
     reachedBottom = examinedCount < limit;
-    const oldestExamined = candidates[candidates.length - 1]?.receivedAt;
-    cursorAfter = reachedBottom ? null : (oldestExamined ?? null);
+    // WI-SYNC-1c (2026-10-18) — persist BOTH the oldest examined
+    // row's receivedAt AND its id so a next-run tuple filter can
+    // resume strictly past this page even if the oldest row has
+    // several receivedAt-tied siblings.
+    const oldestRow = candidates[candidates.length - 1];
+    cursorAfter = reachedBottom ? null : (oldestRow?.receivedAt ?? null);
+    cursorAfterId = reachedBottom ? null : (oldestRow?.id ?? null);
     await prisma.mailboxConnection.update({
       where: { id: args.mailboxConnectionId },
-      data: { reconciliationCursorReceivedAt: cursorAfter },
+      data: {
+        reconciliationCursorReceivedAt: cursorAfter,
+        reconciliationCursorEmailMessageId: cursorAfterId,
+      },
     });
   }
 

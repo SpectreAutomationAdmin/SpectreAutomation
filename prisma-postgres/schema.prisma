@@ -10206,6 +10206,21 @@ model WorkIntakeItem {
   displayReceivedAt     DateTime
   displayHasAttachments Boolean  @default(false)
 
+  // WI-SYNC-1c (2026-10-18) — restore + dismiss metadata.
+  //   statusBeforeSuppression: captured when evidence-driven
+  //     suppression flips `status` to SUPPRESSED, so a later
+  //     restore (Outlook moves the message back to Inbox) can
+  //     return the WI to its prior state.  Null for WIs that
+  //     have never been suppressed.
+  //   userDismissedAt / userDismissedByUserId: set by the
+  //     Dismiss action (no Outlook mutation).  Blocks the
+  //     reconciliation restore path — a user who explicitly
+  //     dismissed a WI should not have it reappear just because
+  //     the email is still in Inbox.
+  statusBeforeSuppression String?
+  userDismissedAt         DateTime?
+  userDismissedByUserId   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -10369,6 +10384,36 @@ model OutlookArchiveMutation {
   @@unique([workCompletionEventId, emailMessageId])
   @@index([clubId, status])
   @@index([workIntakeId])
+}
+
+// WI-SYNC-1c (2026-10-18) — Outlook delete-to-trash mutations.
+// Mirrors OutlookArchiveMutation: tracks every Spectre-initiated
+// move to Deleted Items so the delta sync's @removed branch can
+// recognize our own writes (loop prevention — see
+// handleEmailEvidenceDeleted) and so audit history captures the
+// Graph round-trip outcome.
+model OutlookDeleteMutation {
+  id                         String    @id @default(cuid())
+  clubId                     String
+  workIntakeItemId           String
+  emailMessageId             String
+  originalGraphMessageId     String
+  resultingGraphMessageId    String?
+  originalFolderId           String?
+  destinationFolderId        String?
+  mailboxConnectionId        String
+  triggeredByUserId          String?
+  status                     String    @default("PENDING") // PENDING | RUNNING | SUCCEEDED | RETRYABLE | FAILED_TERMINAL
+  attemptCount               Int       @default(0)
+  lastAttemptAt              DateTime?
+  completedAt                DateTime?
+  errorCode                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
 }
 
 // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
@@ -11011,7 +11056,17 @@ model MailboxConnection {
   // and the fresh-start marker after a full-cycle completion.
   // Operator-initiated runs (triggerKind = RECONCILIATION) ignore
   // and do not advance this cursor.
-  reconciliationCursorReceivedAt DateTime?
+  //
+  // WI-SYNC-1c (2026-10-18) — tie-breaker on top of receivedAt.
+  // Two messages can share the same `receivedAt` down to the ms
+  // (bulk list-mail imports, API-forwarded messages).  A pure
+  // receivedAt cursor would skip the second-of-a-tie because
+  // `receivedAt < cursor.receivedAt` is strict.  The composite
+  // cursor + tuple ordering `(receivedAt, id) < (cursor.received,
+  // cursor.id)` guarantees every tied message is examined on one
+  // sweep before the cursor advances past them.
+  reconciliationCursorReceivedAt     DateTime?
+  reconciliationCursorEmailMessageId String?
 
   accesses      MailboxAccess[]
   subscriptions GraphSubscription[]

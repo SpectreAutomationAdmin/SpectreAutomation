@@ -107,7 +107,11 @@ describe("WI-SYNC-1b · bounded cursor advancement across sweep runs", () => {
     expect(RECONCILIATION).toMatch(/receivedAt:\s*\{\s*lt:\s*cursorBefore/);
   });
   it("end-of-run advances cursor to OLDEST examined receivedAt when more rows exist", () => {
-    expect(RECONCILIATION).toMatch(/candidates\[candidates\.length - 1\]\?\.receivedAt/);
+    // WI-SYNC-1c (2026-10-18) — the old `candidates[last].receivedAt`
+    // literal was refactored into a `const oldestRow = candidates[last]`
+    // binding so the sibling cursor-id write can share it.  Match
+    // either the direct index or the bound-row shape.
+    expect(RECONCILIATION).toMatch(/candidates\[candidates\.length - 1\][\s\S]{0,80}receivedAt/);
     expect(RECONCILIATION).toMatch(/reconciliationCursorReceivedAt:\s*cursorAfter/);
   });
   it("resets cursor to null when the run reaches the bottom of the mailbox", () => {

@@ -565,16 +565,134 @@ export async function handleEmailEvidenceDeleted(args: {
     });
     return;
   }
+  // WI-SYNC-1c (2026-10-18) — Spectre-initiated Delete loop guard.
+  // The deleteOutlookMessageForWorkIntake service already flipped
+  // the WI to SUPPRESSED + wrote an EVIDENCE_DELETED activity
+  // locally.  When delta sync later observes `@removed`, we don't
+  // want to re-fire the suppression; just record a reconciliation
+  // note so the audit trail shows Graph confirmed our move.
+  const ourDelete = await prisma.outlookDeleteMutation.findFirst({
+    where: {
+      workIntakeItemId: link.workIntakeItemId,
+      emailMessageId: args.emailMessageId,
+      status: "SUCCEEDED",
+    },
+    select: { id: true },
+  });
+  if (ourDelete) {
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_DELETE_RECONCILED",
+        note: "Graph confirmed Spectre-initiated Delete move — no additional state change.",
+      },
+    });
+    return;
+  }
+  // WI-SYNC-1c (2026-10-18) — capture statusBeforeSuppression so
+  // a later restore (Outlook moves the message back to Inbox) can
+  // return the WI to its prior state.  Only overwrite if not
+  // already set — a prior dismiss/delete may have captured the
+  // true original value.
+  const captureBefore =
+    link.workIntakeItem.statusBeforeSuppression == null
+      ? link.workIntakeItem.status
+      : link.workIntakeItem.statusBeforeSuppression;
   await prisma.$transaction([
     prisma.workIntakeItem.update({
       where: { id: link.workIntakeItemId },
-      data: { status: "SUPPRESSED" },
+      data: {
+        status: "SUPPRESSED",
+        statusBeforeSuppression: captureBefore,
+      },
     }),
     prisma.workIntakeActivity.create({
       data: {
         workIntakeItemId: link.workIntakeItemId,
         action: "EVIDENCE_DELETED",
         note: "Source email was removed from the mailbox",
+      },
+    }),
+  ]);
+}
+
+/**
+ * WI-SYNC-1c (2026-10-18) — restore flow.
+ *
+ * Called from the delta-sync ingestion path when a message that
+ * previously carried `softDeletedAt` reappears in the Inbox
+ * (user moved it back from Deleted Items or Archive, OR
+ * Spectre-side Delete was reversed in Outlook).  Restores the
+ * linked Work Intake item to its pre-suppression state so it
+ * reappears in the active feed — unless the user explicitly
+ * Dismissed the WI (userDismissedAt set), in which case the
+ * dismissal is honored and the WI stays SUPPRESSED.
+ */
+export async function handleEmailEvidenceRestored(args: {
+  clubId: string;
+  emailMessageId: string;
+}): Promise<void> {
+  const link = await prisma.emailWorkIntakeOrigin.findFirst({
+    where: { emailMessageId: args.emailMessageId, role: "PRIMARY" },
+    include: {
+      workIntakeItem: {
+        select: {
+          id: true,
+          clubId: true,
+          status: true,
+          statusBeforeSuppression: true,
+          userDismissedAt: true,
+        },
+      },
+    },
+  });
+  if (!link) return;
+  if (link.workIntakeItem.clubId !== args.clubId) return; // tenant
+  // Respect explicit user dismissal — the WI stays suppressed.
+  if (link.workIntakeItem.userDismissedAt) {
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_RESTORED_DISMISSED",
+        note:
+          "Source email returned to Inbox but the WI was explicitly dismissed. No state change.",
+      },
+    });
+    return;
+  }
+  if (link.workIntakeItem.status !== "SUPPRESSED") {
+    // Not currently suppressed; nothing to restore.  Still log an
+    // activity for audit transparency.
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_RESTORED_NOOP",
+        note:
+          "Source email returned to Inbox but the WI was not SUPPRESSED. No change.",
+      },
+    });
+    return;
+  }
+  // Only auto-restore WIs we previously suppressed via EVIDENCE_
+  // DELETED.  A WI with userDismissedAt set has already been
+  // caught above.  If statusBeforeSuppression is null (pre-1c
+  // suppression without the saved value), default to
+  // INFORMATIONAL so the user sees it again and can re-triage.
+  const restoredStatus =
+    link.workIntakeItem.statusBeforeSuppression ?? "INFORMATIONAL";
+  await prisma.$transaction([
+    prisma.workIntakeItem.update({
+      where: { id: link.workIntakeItemId },
+      data: {
+        status: restoredStatus,
+        statusBeforeSuppression: null,
+      },
+    }),
+    prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_RESTORED",
+        note: `Source email returned to the Inbox; WI restored to ${restoredStatus}.`,
       },
     }),
   ]);
