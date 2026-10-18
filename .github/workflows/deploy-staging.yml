@@ -105,11 +105,16 @@ jobs:
           SHORT_SHA=$(git rev-parse --short=12 HEAD)
           IMAGE_TAG="sha-${SHORT_SHA}"
           IMAGE_REF="registry.fly.io/spectre-staging:${IMAGE_TAG}"
-          echo "full_sha=${FULL_SHA}"    >> "$GITHUB_OUTPUT"
-          echo "short_sha=${SHORT_SHA}"  >> "$GITHUB_OUTPUT"
-          echo "image_tag=${IMAGE_TAG}"  >> "$GITHUB_OUTPUT"
-          echo "image_ref=${IMAGE_REF}"  >> "$GITHUB_OUTPUT"
+          # WI-SYNC-1b (2026-10-18) — worker image is a separate build
+          # from Dockerfile.worker, deployed to spectre-staging-worker.
+          WORKER_IMAGE_REF="registry.fly.io/spectre-staging-worker:${IMAGE_TAG}"
+          echo "full_sha=${FULL_SHA}"              >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"            >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"            >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}"            >> "$GITHUB_OUTPUT"
+          echo "worker_image_ref=${WORKER_IMAGE_REF}" >> "$GITHUB_OUTPUT"
           echo "::notice::Deploying ${FULL_SHA} → ${IMAGE_REF}"
+          echo "::notice::Worker image → ${WORKER_IMAGE_REF}"
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
@@ -184,6 +189,46 @@ jobs:
           GITHUB_SHA:                       ${{ steps.sha.outputs.full_sha }}
           GITHUB_REF_NAME:                  ${{ steps.ref.outputs.value }}
         run: npm run deploy:staging
+
+      # WI-SYNC-1b (2026-10-18) — Build + push the WORKER image.
+      # Separate Dockerfile (Dockerfile.worker) → runs bin/worker.ts
+      # on `spectre-staging-worker` so the scheduled reconciliation
+      # sweep + delta tick live inside the long-running worker loop.
+      # The web deploy above already ran Prisma migrations; the worker
+      # has NO release_command, so this step just rolls the new
+      # image onto the worker machine.
+      - name: Build + push WORKER image (Dockerfile.worker → worker registry)
+        if: success()
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.worker
+          push: true
+          tags: ${{ steps.sha.outputs.worker_image_ref }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.sha.outputs.full_sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+          cache-from: type=gha,scope=spectre-staging-worker
+          cache-to: type=gha,mode=max,scope=spectre-staging-worker
+
+      - name: Deploy spectre-staging-worker (rolling, image-only)
+        if: success()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WORKER_IMAGE: ${{ steps.sha.outputs.worker_image_ref }}
+        run: |
+          # Rolling, image-only.  No local docker build (image already
+          # pushed to Fly's registry above).  No release_command on
+          # the worker (per deploy/fly.worker.toml comments).  The
+          # worker takes a few seconds to roll; we don't block on a
+          # health URL since the worker has no HTTP surface.
+          flyctl deploy \
+            --app spectre-staging-worker \
+            --config deploy/fly.worker.toml \
+            --image "$WORKER_IMAGE" \
+            --strategy rolling \
+            --wait-timeout 180
 
       - name: Smoke — public login page reachable
         if: success()
