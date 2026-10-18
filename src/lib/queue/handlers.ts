@@ -244,15 +244,55 @@ registerHandler<{
   };
 });
 
-// MAILBOX_RENEW_SUBSCRIPTION is still deferred to WI-SYNC-1d.
-registerHandler("MAILBOX_RENEW_SUBSCRIPTION", async ({ jobId }) => {
-  logger.warn("queue.handler.mailbox.not_implemented", {
-    kind: "MAILBOX_RENEW_SUBSCRIPTION",
-    jobId,
+// WI-SYNC-1d (2026-10-18) — MAILBOX_RENEW_SUBSCRIPTION promoted
+// from stub to IMPLEMENTED.  The subscription scheduler enqueues
+// one job per (mailbox, action, bucket); the handler calls the
+// shared maintainSubscriptionForMailbox service.  Idempotent per
+// mailbox: a RENEW on an already-renewed subscription short-
+// circuits to ALREADY_ACTIVE.
+registerHandler<{
+  mailboxConnectionId: string;
+  callerUserId: string | null;
+  hint?: "CREATE" | "RENEW" | "RECREATE";
+}>("MAILBOX_RENEW_SUBSCRIPTION", async ({ payload }) => {
+  const rawId = payload?.mailboxConnectionId;
+  if (typeof rawId !== "string" || rawId.length === 0) {
+    throw new Error(
+      "MAILBOX_RENEW_SUBSCRIPTION payload missing mailboxConnectionId",
+    );
+  }
+  const { prisma } = await import("@/lib/prisma");
+  const mbx = await prisma.mailboxConnection.findUnique({
+    where: { id: rawId },
+    select: { id: true, clubId: true, userId: true, status: true },
   });
-  throw new Error(
-    "NOT_IMPLEMENTED: MAILBOX_RENEW_SUBSCRIPTION — reserved for WI-SYNC-1d (change notifications)",
+  if (!mbx) {
+    throw new Error(
+      `MAILBOX_RENEW_SUBSCRIPTION: mailboxConnectionId ${rawId} not found`,
+    );
+  }
+  if (mbx.status !== "CONNECTED") {
+    logger.info("mailbox.subscription.skipped_not_connected", {
+      mailboxConnectionIdTail: mbx.id.slice(-6),
+      status: mbx.status,
+    });
+    return { outcome: "SKIPPED", reason: "not_connected" };
+  }
+  const publicBaseUrl =
+    process.env.SPECTRE_PLATFORM_HOST ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    "https://staging.spectreautomation.com";
+  const { maintainSubscriptionForMailbox } = await import(
+    "../mailbox/subscriptions"
   );
+  const result = await maintainSubscriptionForMailbox({
+    mailboxConnectionId: mbx.id,
+    clubId: mbx.clubId,
+    publicBaseUrl,
+    callerUserId: payload?.callerUserId ?? mbx.userId,
+    forceRecreate: payload?.hint === "RECREATE",
+  });
+  return result;
 });
 
 // ---------------------------------------------------------------------------
@@ -370,7 +410,7 @@ registerHandler<{
 export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_INITIAL_SYNC: "IMPLEMENTED",
   MAILBOX_DELTA_SYNC: "IMPLEMENTED",
-  MAILBOX_RENEW_SUBSCRIPTION: "RESERVED_PHASE_C",
+  MAILBOX_RENEW_SUBSCRIPTION: "IMPLEMENTED",
   MAILBOX_ATTACHMENT_FETCH: "IMPLEMENTED",
   MAILBOX_RECONCILIATION_HEARTBEAT: "IMPLEMENTED",
   MAILBOX_MARK_READ: "IMPLEMENTED",

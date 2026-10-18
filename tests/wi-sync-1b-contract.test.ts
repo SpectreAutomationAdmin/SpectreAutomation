@@ -78,8 +78,15 @@ describe("WI-SYNC-1b · MAILBOX_RECONCILIATION_HEARTBEAT handler", () => {
     expect(HANDLERS).toMatch(/dryRun:\s*false/);
     expect(HANDLERS).toMatch(/triggerKind:\s*"RECONCILIATION_SWEEP"/);
   });
-  it("MAILBOX_RENEW_SUBSCRIPTION is still deferred to WI-SYNC-1d", () => {
-    expect(HANDLERS).toMatch(/NOT_IMPLEMENTED: MAILBOX_RENEW_SUBSCRIPTION/);
+  it("MAILBOX_RENEW_SUBSCRIPTION status was deferred at this slice (promoted in WI-SYNC-1d)", () => {
+    // Historical snapshot — the handler was NOT_IMPLEMENTED when
+    // WI-SYNC-1b landed; WI-SYNC-1d promotes it to IMPLEMENTED
+    // with the real subscription-service wiring.  At runtime the
+    // handler now has a working implementation — but the WI-
+    // SYNC-1b contract test should not block a correct WI-SYNC-1d
+    // promotion.  The *current* status is asserted in the
+    // wi-sync-1d-contract suite.
+    expect(HANDLERS).toMatch(/MAILBOX_RENEW_SUBSCRIPTION/);
   });
 });
 

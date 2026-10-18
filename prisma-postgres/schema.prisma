@@ -11110,19 +11110,37 @@ model GraphSubscription {
   id                      String            @id @default(cuid())
   mailboxConnectionId     String
   mailboxConnection       MailboxConnection @relation(fields: [mailboxConnectionId], references: [id], onDelete: Cascade)
+  // WI-SYNC-1d (2026-10-18) — tenant denorm so webhook validation
+  // can tenant-check without joining the mailbox row.
+  clubId                  String
   microsoftSubscriptionId String            @unique
   resource                String
   changeTypes             String
+  // clientStateSecretRef now stores the SHA-256 HEX of the random
+  // clientState value Spectre supplied on createSubscription.  The
+  // plaintext value is NEVER stored at rest; only the webhook can
+  // verify an incoming notification by comparing hash(payload.
+  // clientState) to this column.
   clientStateSecretRef    String
   expirationDateTime      DateTime
+  // ACTIVE | EXPIRED | REVOKED | FAILED | RECREATING
   lifecycleState          String            @default("ACTIVE")
   lastRenewalAt           DateTime?
   lastNotificationAt      DateTime?
+  // WI-SYNC-1d — when the most recent incoming notification
+  // triggered an expedited delta enqueue.
+  lastNotificationTriggeredDeltaAt DateTime?
+  // WI-SYNC-1d — consecutive renewal failures since the last
+  // successful renew.  Reset to 0 on any successful renew.
+  renewalFailureCount     Int               @default(0)
+  // WI-SYNC-1d — last error observed on renew or recreate.
+  lastRenewalError        String?
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
 
   @@index([expirationDateTime])
   @@index([mailboxConnectionId, lifecycleState])
+  @@index([clubId, lifecycleState])
 }
 
 // Canonical email evidence. Body HTML is sanitised BEFORE persistence.

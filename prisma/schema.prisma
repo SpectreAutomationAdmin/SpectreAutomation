@@ -11338,6 +11338,7 @@ model GraphSubscription {
   id                      String            @id @default(cuid())
   mailboxConnectionId     String
   mailboxConnection       MailboxConnection @relation(fields: [mailboxConnectionId], references: [id], onDelete: Cascade)
+  clubId                  String
   microsoftSubscriptionId String            @unique
   resource                String
   changeTypes             String
@@ -11346,11 +11347,15 @@ model GraphSubscription {
   lifecycleState          String            @default("ACTIVE")
   lastRenewalAt           DateTime?
   lastNotificationAt      DateTime?
+  lastNotificationTriggeredDeltaAt DateTime?
+  renewalFailureCount     Int               @default(0)
+  lastRenewalError        String?
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
 
   @@index([expirationDateTime])
   @@index([mailboxConnectionId, lifecycleState])
+  @@index([clubId, lifecycleState])
 }
 
 // Canonical email evidence. Body HTML is sanitised BEFORE persistence.

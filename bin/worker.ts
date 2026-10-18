@@ -15,6 +15,7 @@ import { processPending, captureQueueHealth, listRegisteredHandlers } from "../s
 import { logger } from "../src/lib/observability/logger";
 import { tickAutoSync } from "../src/lib/mailbox/auto-sync-scheduler";
 import { tickReconciliationSweep } from "../src/lib/mailbox/reconciliation-scheduler";
+import { tickSubscriptionMaintenance } from "../src/lib/mailbox/subscription-scheduler";
 import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
 
 const queues = process.argv.slice(2);
@@ -42,6 +43,13 @@ async function main() {
       // delta tick; the two schedulers are additive — delta is the
       // primary polling path and reconciliation is a safety net.
       await tickReconciliationSweep();
+      // WI-SYNC-1d (2026-10-18) — subscription-maintenance tick.
+      // Enqueues MAILBOX_RENEW_SUBSCRIPTION jobs for mailboxes
+      // whose subscription is missing / expiring / failed.  Fires
+      // at most once per MAILBOX_SUBSCRIPTION_INTERVAL_MS (default
+      // 5 min).  Feature-gated; collapses to zero work when
+      // MAILBOX_INTEGRATION_ENABLED is false.
+      await tickSubscriptionMaintenance();
       // Payroll-3D-3B Slice 3 (2026-09-06) — periodic sweep of
       // manager-relevant pay periods → enqueue ensure jobs so the
       // approval WI obligation always exists even if inline

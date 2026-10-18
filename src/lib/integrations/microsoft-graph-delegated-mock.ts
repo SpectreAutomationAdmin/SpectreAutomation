@@ -437,6 +437,30 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
   ): Promise<import("./microsoft-graph-delegated").GetWellKnownFolderResult | null> {
     return null;
   }
+
+  // WI-SYNC-1d (2026-10-18) — subscription lifecycle stubs.
+  async createSubscription(
+    args: import("./microsoft-graph-delegated").CreateSubscriptionArgs,
+  ): Promise<import("./microsoft-graph-delegated").CreateSubscriptionResult> {
+    return {
+      microsoftSubscriptionId: "mock-sub-" + Math.random().toString(36).slice(2, 10),
+      expirationDateTime: args.expirationDateTime,
+      resource: args.resource,
+    };
+  }
+  async renewSubscription(
+    args: import("./microsoft-graph-delegated").RenewSubscriptionArgs,
+  ): Promise<import("./microsoft-graph-delegated").RenewSubscriptionResult> {
+    return {
+      microsoftSubscriptionId: args.microsoftSubscriptionId,
+      expirationDateTime: args.expirationDateTime,
+    };
+  }
+  async deleteSubscription(
+    _args: import("./microsoft-graph-delegated").DeleteSubscriptionArgs,
+  ): Promise<void> {
+    return;
+  }
 }
 
 function makeMsalError(fields: { errorCode: string; errorNo?: string; subError?: string; response?: { status: number } }): Error {

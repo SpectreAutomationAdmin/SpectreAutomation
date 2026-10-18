@@ -70,6 +70,9 @@ function installDelegatedProviderMock(): MicrosoftDelegatedProvider {
     async markMessageRead() { return { graphMessageId: "syn-mid", markedReadAt: new Date() }; },
     async probeMessage() { return { outcome: "INACCESSIBLE_RETRYABLE", errorCode: "mock_not_configured" }; },
     async getWellKnownFolder() { return null; },
+    async createSubscription() { return { microsoftSubscriptionId: "mock", expirationDateTime: new Date().toISOString(), resource: "/me/mailFolders('inbox')/messages" }; },
+    async renewSubscription(args) { return { microsoftSubscriptionId: args.microsoftSubscriptionId, expirationDateTime: args.expirationDateTime }; },
+    async deleteSubscription() { return; },
   };
   setMicrosoftDelegatedProvider(mock);
   return mock;

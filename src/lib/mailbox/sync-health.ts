@@ -47,6 +47,21 @@ export interface MailboxSyncHealth {
     messagesSuppressed: number;
     failureCategory: string | null;
   } | null;
+  // WI-SYNC-1d (2026-10-18) — Graph change-notification subscription
+  // health for this mailbox.  Null when no subscription row exists
+  // (polling-only fallback is active).
+  subscription: {
+    microsoftSubscriptionIdTail: string;
+    lifecycleState: string;
+    expirationDateTime: Date;
+    expiresInSeconds: number;
+    lastNotificationAt: Date | null;
+    lastNotificationAgeSeconds: number | null;
+    lastNotificationTriggeredDeltaAt: Date | null;
+    renewalFailureCount: number;
+    lastRenewalError: string | null;
+    pollingFallbackActive: boolean;
+  } | null;
   requiresIntervention: boolean;
   interventionReasons: string[];
 }
@@ -64,6 +79,10 @@ export interface MailboxSyncHealthReport {
     mailboxesConnected: number;
     mailboxesRequiringIntervention: number;
     mailboxesWithoutDelta: number;
+    // WI-SYNC-1d
+    mailboxesWithActiveSubscription: number;
+    mailboxesWithoutSubscription: number;
+    mailboxesOnPollingFallback: number;
   };
 }
 
@@ -127,6 +146,21 @@ export async function getMailboxSyncHealthForClub(
       orderBy: { completedAt: "desc" },
       select: { completedAt: true },
     });
+    // WI-SYNC-1d — most recent subscription row (ACTIVE or not).
+    const subRow = await prisma.graphSubscription.findFirst({
+      where: { mailboxConnectionId: m.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        microsoftSubscriptionId: true,
+        lifecycleState: true,
+        expirationDateTime: true,
+        lastNotificationAt: true,
+        lastNotificationTriggeredDeltaAt: true,
+        renewalFailureCount: true,
+        lastRenewalError: true,
+      },
+    });
+
     const consecutiveFailures = await prisma.mailboxSyncRun.count({
       where: {
         mailboxConnectionId: m.id,
@@ -169,6 +203,18 @@ export async function getMailboxSyncHealthForClub(
       reasons.push(`consecutive_delta_failures_${consecutiveFailures}`);
     }
     if (m.lastSyncError) reasons.push(`last_error=${m.lastSyncError}`);
+    // WI-SYNC-1d subscription-health reasons (added to intervention
+    // reasons list; a missing subscription falls back to polling and
+    // is NOT by itself an intervention — the mailbox still works).
+    if (subRow && subRow.renewalFailureCount >= 3) {
+      reasons.push(`subscription_renewal_failures_${subRow.renewalFailureCount}`);
+    }
+    if (
+      subRow &&
+      (subRow.lifecycleState === "FAILED" || subRow.lifecycleState === "EXPIRED")
+    ) {
+      reasons.push(`subscription_${subRow.lifecycleState.toLowerCase()}`);
+    }
 
     per.push({
       mailboxConnectionId: m.id,
@@ -197,6 +243,37 @@ export async function getMailboxSyncHealthForClub(
             failureCategory: latestReconcile.failureCategory,
           }
         : null,
+      subscription: subRow
+        ? {
+            microsoftSubscriptionIdTail: subRow.microsoftSubscriptionId.slice(-6),
+            lifecycleState: subRow.lifecycleState,
+            expirationDateTime: subRow.expirationDateTime,
+            expiresInSeconds: Math.max(
+              0,
+              Math.floor(
+                (subRow.expirationDateTime.getTime() - now.getTime()) / 1000,
+              ),
+            ),
+            lastNotificationAt: subRow.lastNotificationAt,
+            lastNotificationAgeSeconds: subRow.lastNotificationAt
+              ? Math.floor(
+                  (now.getTime() - subRow.lastNotificationAt.getTime()) / 1000,
+                )
+              : null,
+            lastNotificationTriggeredDeltaAt: subRow.lastNotificationTriggeredDeltaAt,
+            renewalFailureCount: subRow.renewalFailureCount,
+            lastRenewalError: subRow.lastRenewalError,
+            // Polling fallback is "active" (i.e. the delta
+            // scheduler is the primary signal) whenever there's
+            // no subscription OR the subscription is not ACTIVE
+            // OR it has expired.  Polling is NEVER disabled — but
+            // this flag tells operators whether notifications are
+            // currently expected to drive sync.
+            pollingFallbackActive:
+              subRow.lifecycleState !== "ACTIVE" ||
+              subRow.expirationDateTime.getTime() < now.getTime(),
+          }
+        : null,
       requiresIntervention: reasons.length > 0,
       interventionReasons: reasons,
     });
@@ -216,6 +293,17 @@ export async function getMailboxSyncHealthForClub(
       mailboxesRequiringIntervention: per.filter((p) => p.requiresIntervention)
         .length,
       mailboxesWithoutDelta: per.filter((p) => !p.deltaLink).length,
+      // WI-SYNC-1d — subscription-coverage counts.
+      mailboxesWithActiveSubscription: per.filter(
+        (p) =>
+          p.subscription?.lifecycleState === "ACTIVE" &&
+          p.subscription?.expiresInSeconds > 0,
+      ).length,
+      mailboxesWithoutSubscription: per.filter((p) => p.subscription == null)
+        .length,
+      mailboxesOnPollingFallback: per.filter(
+        (p) => p.subscription?.pollingFallbackActive === true,
+      ).length,
     },
   };
 }

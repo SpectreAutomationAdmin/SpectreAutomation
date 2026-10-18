@@ -515,6 +515,18 @@ export interface MicrosoftDelegatedProvider {
    *      the EmailMessage row.
    *    - This call is read-only; no PATCH / POST / DELETE. */
   probeMessage(args: ProbeMessageArgs): Promise<ProbeMessageResult>;
+  /** WI-SYNC-1d (2026-10-18) — Graph change-notification
+   *  subscription lifecycle.  Creates a subscription on
+   *  `/me/mailFolders/inbox/messages` and returns the id +
+   *  expiration + any webhook validation step completion. */
+  createSubscription(args: CreateSubscriptionArgs): Promise<CreateSubscriptionResult>;
+  /** WI-SYNC-1d — extend an existing subscription's expiration
+   *  via PATCH /subscriptions/{id}.  Graph refuses dates > the
+   *  3-day inbox cap; the caller clamps to a safe horizon. */
+  renewSubscription(args: RenewSubscriptionArgs): Promise<RenewSubscriptionResult>;
+  /** WI-SYNC-1d — remove a subscription (DELETE /subscriptions/{id}).
+   *  Idempotent on 404 (already gone). */
+  deleteSubscription(args: DeleteSubscriptionArgs): Promise<void>;
   /** WI-SYNC-1a (2026-10-18) — resolve a well-known folder's id.
    *
    *  Endpoint: GET /v1.0/me/mailFolders/{wellKnownName}?$select=id,displayName
@@ -529,6 +541,40 @@ export interface MicrosoftDelegatedProvider {
    *    - Well-known names Microsoft honors: "inbox" | "archive"
    *      | "deleteditems" | "sentitems" | "drafts" | "junkemail". */
   getWellKnownFolder(args: GetWellKnownFolderArgs): Promise<GetWellKnownFolderResult | null>;
+}
+
+export interface CreateSubscriptionArgs {
+  accessToken: string;
+  /** URL Graph will POST notifications to; must be HTTPS + reachable. */
+  notificationUrl: string;
+  /** Opaque secret echoed in every notification payload.  Spectre
+   *  validates incoming notifications by hashing this + comparing
+   *  to the stored hash. */
+  clientState: string;
+  /** Resource to watch, e.g. `/me/mailFolders/inbox/messages`. */
+  resource: string;
+  /** Comma-separated change types: created,updated,deleted. */
+  changeTypes: string;
+  /** ISO8601 expiration — Graph caps mail subscriptions at ~3 days. */
+  expirationDateTime: string;
+}
+export interface CreateSubscriptionResult {
+  microsoftSubscriptionId: string;
+  expirationDateTime: string;
+  resource: string;
+}
+export interface RenewSubscriptionArgs {
+  accessToken: string;
+  microsoftSubscriptionId: string;
+  expirationDateTime: string;
+}
+export interface RenewSubscriptionResult {
+  microsoftSubscriptionId: string;
+  expirationDateTime: string;
+}
+export interface DeleteSubscriptionArgs {
+  accessToken: string;
+  microsoftSubscriptionId: string;
 }
 
 export interface ProbeMessageArgs {
@@ -1111,6 +1157,78 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
         displayName: body.displayName,
         wellKnownName: args.wellKnownName,
       };
+    },
+    async createSubscription(args) {
+      // WI-SYNC-1d — POST /subscriptions.  Graph requires the
+      // notificationUrl to be reachable + responds to a validation
+      // handshake WHILE the POST is in flight.  Our webhook route
+      // (/api/webhooks/microsoft-graph/notifications) echoes the
+      // validationToken; if the handshake fails, the POST returns
+      // 400.
+      const url = "https://graph.microsoft.com/v1.0/subscriptions";
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          changeType: args.changeTypes,
+          notificationUrl: args.notificationUrl,
+          resource: args.resource,
+          expirationDateTime: args.expirationDateTime,
+          clientState: args.clientState,
+        }),
+      });
+      if (!res.ok) throw graphErrorFromResponse(res);
+      const body = (await res.json()) as {
+        id: string;
+        expirationDateTime: string;
+        resource: string;
+      };
+      return {
+        microsoftSubscriptionId: body.id,
+        expirationDateTime: body.expirationDateTime,
+        resource: body.resource,
+      };
+    },
+    async renewSubscription(args) {
+      // WI-SYNC-1d — PATCH /subscriptions/{id} with a new
+      // expirationDateTime.  Graph does not reset clientState or
+      // resource; only the expiration is extended.
+      const url =
+        `https://graph.microsoft.com/v1.0/subscriptions/${encodeURIComponent(args.microsoftSubscriptionId)}`;
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expirationDateTime: args.expirationDateTime }),
+      });
+      if (!res.ok) throw graphErrorFromResponse(res);
+      const body = (await res.json()) as {
+        id: string;
+        expirationDateTime: string;
+      };
+      return {
+        microsoftSubscriptionId: body.id,
+        expirationDateTime: body.expirationDateTime,
+      };
+    },
+    async deleteSubscription(args) {
+      // WI-SYNC-1d — DELETE /subscriptions/{id}.  Idempotent on 404
+      // (Graph already removed the row — treat as success).
+      const url =
+        `https://graph.microsoft.com/v1.0/subscriptions/${encodeURIComponent(args.microsoftSubscriptionId)}`;
+      const res = await fetch(url, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+        },
+      });
+      if (res.status === 404) return;
+      if (!res.ok) throw graphErrorFromResponse(res);
     },
   };
 }
