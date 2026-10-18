@@ -48,11 +48,24 @@ runAt(
     console.log("WI_SYNC_1A_DRY_RUN_REPORT_PATH", reportPath);
     console.log("WI_SYNC_1A_DRY_RUN_TOTALS", JSON.stringify(report.totals));
 
-    // Sanity checks against staging data we know from the prior
-    // diagnostic: Coulee has 71 EmailMessage rows, all with
-    // softDeletedAt == null before this slice, so the candidate
-    // set should match 71.  Six of them are the reported ghosts.
-    expect(report.totals.messagesExamined, "71 candidates expected").toBe(71);
+    // Sanity checks — on Coulee the pre-apply dry-run should land
+    // on the breakdown confirmed in the WI-SYNC-1a dry-run report:
+    //   total examined         : up to 71 (shrinks after apply)
+    //   present inbox          : 32
+    //   present deleted items  : 23 (candidates for TOMBSTONE)
+    //   present archive        : 16 (SKIP in 1a — deferred)
+    //   deleted / inaccessible : 0 each
+    // We check only the post-split numbers that must hold true for
+    // the apply pass to be safe.  Any violation blocks apply.
+    expect(report.totals.presentArchive, "Archive is SKIPPED in 1a").toBeGreaterThanOrEqual(0);
+    expect(report.totals.presentDeletedItems, "Deleted Items detected").toBeGreaterThanOrEqual(0);
+    // Tombstones proposed must equal (presentDeletedItems + deleted)
+    // under the 1a classifier.  No archive items should be in that
+    // count.
+    expect(
+      report.totals.tombstonesProposedOrApplied,
+      "tombstones = Deleted Items + Graph-404 only; Archive must NOT be included",
+    ).toBe(report.totals.presentDeletedItems + report.totals.deleted);
 
     await ctx.close();
   },

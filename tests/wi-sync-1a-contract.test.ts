@@ -46,11 +46,13 @@ describe("WI-SYNC-1a · email-intake feed filter respects softDeletedAt", () => 
 });
 
 describe("WI-SYNC-1a · reconciliation service", () => {
-  it("exports reconcileMailbox + classifyProbe + the five dispositions", () => {
+  it("exports reconcileMailbox + classifyProbe + the seven dispositions", () => {
     expect(RECON_TS).toMatch(/export async function reconcileMailbox/);
     expect(RECON_TS).toMatch(/export function classifyProbe/);
     for (const d of [
       '"PRESENT_INBOX"',
+      '"PRESENT_DELETED_ITEMS"',
+      '"PRESENT_ARCHIVE"',
       '"PRESENT_OTHER_FOLDER"',
       '"DELETED"',
       '"INACCESSIBLE_RETRYABLE"',
@@ -58,6 +60,10 @@ describe("WI-SYNC-1a · reconciliation service", () => {
     ]) {
       expect(RECON_TS).toContain(d);
     }
+  });
+  it("exposes explicit SKIP_ARCHIVE_DEFERRED and SKIP_UNKNOWN_FOLDER actions so Archive never tombstones in 1a", () => {
+    expect(RECON_TS).toContain('"SKIP_ARCHIVE_DEFERRED"');
+    expect(RECON_TS).toContain('"SKIP_UNKNOWN_FOLDER"');
   });
   it("blocks cross-tenant: refuses when mailbox.clubId !== args.clubId", () => {
     expect(RECON_TS).toMatch(/mailbox does not belong to the stated club/);
@@ -94,6 +100,11 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
     hasApIntakeSource: false,
     probeOutcome: "PRESENT" as const,
   };
+  const ids = {
+    inboxFolderId: "folder-inbox",
+    deletedItemsFolderId: "folder-deleted",
+    archiveFolderId: "folder-archive",
+  };
   const folderNames = {
     "folder-inbox": "Inbox (Inbox)",
     "folder-deleted": "Deleted Items (Deleted Items)",
@@ -104,41 +115,54 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
     const r = classifyProbe({
       base,
       probe: { outcome: "PRESENT", parentFolderId: "folder-inbox" },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("PRESENT_INBOX");
     expect(r.action).toBe("NONE");
   });
 
-  it("PRESENT in Deleted Items → TOMBSTONE_AND_SUPPRESS", () => {
+  it("PRESENT in Deleted Items → PRESENT_DELETED_ITEMS → TOMBSTONE_AND_SUPPRESS", () => {
     const r = classifyProbe({
       base,
       probe: { outcome: "PRESENT", parentFolderId: "folder-deleted" },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
-    expect(r.disposition).toBe("PRESENT_OTHER_FOLDER");
+    expect(r.disposition).toBe("PRESENT_DELETED_ITEMS");
     expect(r.action).toBe("TOMBSTONE_AND_SUPPRESS");
     expect(r.reason).toMatch(/Deleted Items/);
   });
 
-  it("PRESENT in Archive → TOMBSTONE_AND_SUPPRESS (feed matches mailbox)", () => {
+  it("PRESENT in Archive → PRESENT_ARCHIVE → SKIP_ARCHIVE_DEFERRED (no tombstone in 1a)", () => {
     const r = classifyProbe({
       base,
       probe: { outcome: "PRESENT", parentFolderId: "folder-archive" },
-      inboxFolderId: "folder-inbox",
+      ...ids,
+      folderNames,
+    });
+    expect(r.disposition).toBe("PRESENT_ARCHIVE");
+    expect(r.action).toBe("SKIP_ARCHIVE_DEFERRED");
+    expect(r.reason).toMatch(/not equivalent to deletion/i);
+    expect(r.reason).toMatch(/deferred/);
+  });
+
+  it("PRESENT in a user-defined folder → PRESENT_OTHER_FOLDER → SKIP_UNKNOWN_FOLDER", () => {
+    const r = classifyProbe({
+      base,
+      probe: { outcome: "PRESENT", parentFolderId: "folder-custom-xyz" },
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("PRESENT_OTHER_FOLDER");
-    expect(r.action).toBe("TOMBSTONE_AND_SUPPRESS");
+    expect(r.action).toBe("SKIP_UNKNOWN_FOLDER");
   });
 
   it("Graph 404 → DELETED → TOMBSTONE_AND_SUPPRESS", () => {
     const r = classifyProbe({
       base,
       probe: { outcome: "DELETED", httpStatus: 404 },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("DELETED");
@@ -154,7 +178,7 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
         errorCode: "throttled",
         retryAfterSeconds: 10,
       },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("INACCESSIBLE_RETRYABLE");
@@ -170,7 +194,7 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
         httpStatus: 503,
         errorCode: "service_unavailable",
       },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("INACCESSIBLE_RETRYABLE");
@@ -185,7 +209,7 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
         httpStatus: 403,
         errorCode: "forbidden",
       },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.disposition).toBe("INACCESSIBLE_PERMANENT");
@@ -196,7 +220,7 @@ describe("WI-SYNC-1a · classifyProbe behavioural outcomes", () => {
     const r = classifyProbe({
       base,
       probe: { outcome: "INACCESSIBLE_RETRYABLE", errorCode: "network_error" },
-      inboxFolderId: "folder-inbox",
+      ...ids,
       folderNames,
     });
     expect(r.action).toBe("SKIP_INACCESSIBLE_RETRYABLE");

@@ -55,18 +55,29 @@ import { handleEmailEvidenceDeleted } from "./email-materializer";
 import { logger } from "@/lib/observability/logger";
 
 /** The disposition we conclude for one EmailMessage after probing
- *  Graph. */
+ *  Graph.  WI-SYNC-1a-rev1 (2026-10-18) — the "present but not in
+ *  Inbox" case is split so Archive is distinguishable from Deleted
+ *  Items and from user-defined folders.  Only Deleted Items (and
+ *  hard-deletion) are tombstone candidates in this slice; Archive
+ *  behaviour is deferred to WI-SYNC-1c per founder brief. */
 export type ReconciliationDisposition =
   | "PRESENT_INBOX"
+  | "PRESENT_DELETED_ITEMS"
+  | "PRESENT_ARCHIVE"
   | "PRESENT_OTHER_FOLDER"
   | "DELETED"
   | "INACCESSIBLE_RETRYABLE"
   | "INACCESSIBLE_PERMANENT";
 
-/** The action the reconciler proposed (dry-run) or applied. */
+/** The action the reconciler proposed (dry-run) or applied.
+ *  Archive and unknown-folder cases are explicit SKIP outcomes so
+ *  the next slice can safely add their behaviour without reading
+ *  the dispositions as "unchanged forever." */
 export type ReconciliationAction =
   | "NONE"
   | "TOMBSTONE_AND_SUPPRESS"
+  | "SKIP_ARCHIVE_DEFERRED"
+  | "SKIP_UNKNOWN_FOLDER"
   | "SKIP_INACCESSIBLE_RETRYABLE"
   | "SKIP_INACCESSIBLE_PERMANENT";
 
@@ -98,6 +109,8 @@ export interface ReconciliationReport {
   totals: {
     messagesExamined: number;
     presentInbox: number;
+    presentDeletedItems: number;
+    presentArchive: number;
     presentOtherFolder: number;
     deleted: number;
     inaccessibleRetryable: number;
@@ -106,6 +119,8 @@ export interface ReconciliationReport {
     workIntakeItemsAffected: number;
   };
   inboxFolderId: string | null;
+  deletedItemsFolderId: string | null;
+  archiveFolderId: string | null;
   resolvedFolderNamesById: Record<string, string>;
   rows: ReconciliationRowReport[];
 }
@@ -232,6 +247,8 @@ export async function reconcileMailbox(
   const totals = {
     messagesExamined: 0,
     presentInbox: 0,
+    presentDeletedItems: 0,
+    presentArchive: 0,
     presentOtherFolder: 0,
     deleted: 0,
     inaccessibleRetryable: 0,
@@ -280,10 +297,23 @@ export async function reconcileMailbox(
       retryAfterSeconds: probe.retryAfterSeconds,
     };
 
-    const row = classifyProbe({ base, probe, inboxFolderId: inboxFolder?.id ?? null, folderNames });
+    const row = classifyProbe({
+      base,
+      probe,
+      inboxFolderId: inboxFolder?.id ?? null,
+      deletedItemsFolderId: deletedFolder?.id ?? null,
+      archiveFolderId: archiveFolder?.id ?? null,
+      folderNames,
+    });
     switch (row.disposition) {
       case "PRESENT_INBOX":
         totals.presentInbox += 1;
+        break;
+      case "PRESENT_DELETED_ITEMS":
+        totals.presentDeletedItems += 1;
+        break;
+      case "PRESENT_ARCHIVE":
+        totals.presentArchive += 1;
         break;
       case "PRESENT_OTHER_FOLDER":
         totals.presentOtherFolder += 1;
@@ -331,6 +361,8 @@ export async function reconcileMailbox(
     completedAt: new Date(),
     totals,
     inboxFolderId: inboxFolder?.id ?? null,
+    deletedItemsFolderId: deletedFolder?.id ?? null,
+    archiveFolderId: archiveFolder?.id ?? null,
     resolvedFolderNamesById: folderNames,
     rows,
   };
@@ -342,9 +374,11 @@ export function classifyProbe(args: {
   base: Omit<ReconciliationRowReport, "disposition" | "action" | "reason">;
   probe: Awaited<ReturnType<ReturnType<typeof getMicrosoftDelegatedProvider>["probeMessage"]>>;
   inboxFolderId: string | null;
+  deletedItemsFolderId: string | null;
+  archiveFolderId: string | null;
   folderNames: Record<string, string>;
 }): ReconciliationRowReport {
-  const { base, probe, inboxFolderId, folderNames } = args;
+  const { base, probe, inboxFolderId, deletedItemsFolderId, archiveFolderId, folderNames } = args;
   if (probe.outcome === "PRESENT") {
     const parent = probe.parentFolderId;
     const parentName = parent ? (folderNames[parent] ?? "Non-inbox folder") : "unknown folder";
@@ -356,15 +390,47 @@ export function classifyProbe(args: {
         reason: `Message is still in Inbox (${parentName}); no change proposed.`,
       };
     }
+    if (parent && deletedItemsFolderId && parent === deletedItemsFolderId) {
+      // The ONLY tombstone case for a PRESENT probe in WI-SYNC-1a.
+      return {
+        ...base,
+        disposition: "PRESENT_DELETED_ITEMS",
+        action: "TOMBSTONE_AND_SUPPRESS",
+        reason:
+          `Message is in Outlook's Deleted Items folder (${parentName}).` +
+          `  Tombstone + suppress the linked Work Intake item so the` +
+          ` feed matches the mailbox.`,
+      };
+    }
+    if (parent && archiveFolderId && parent === archiveFolderId) {
+      // Explicit SKIP — the founder's WI-SYNC-1a brief defers
+      // archive behaviour to a later slice.  Archiving an email is
+      // not equivalent to deleting it, so we neither touch
+      // softDeletedAt nor transition the linked WI.
+      return {
+        ...base,
+        disposition: "PRESENT_ARCHIVE",
+        action: "SKIP_ARCHIVE_DEFERRED",
+        reason:
+          `Message is in Outlook's Archive folder (${parentName}).` +
+          `  Archive is NOT equivalent to deletion; archive-folder` +
+          ` behaviour is intentionally deferred to a later` +
+          ` synchronization slice.  No action taken.`,
+      };
+    }
+    // Any other non-inbox folder — a user-defined folder, Sent
+    // Items, Drafts, Junk, etc.  Also explicitly skipped in 1a;
+    // surfaced for human review before any mass change.
     return {
       ...base,
       disposition: "PRESENT_OTHER_FOLDER",
-      action: "TOMBSTONE_AND_SUPPRESS",
+      action: "SKIP_UNKNOWN_FOLDER",
       reason:
-        `Message is no longer in Inbox — now in ${parentName}` +
-        (parent ? ` (${parent})` : "") +
-        `.  Tombstone + suppress the linked Work Intake item so the` +
-        ` feed matches the mailbox.`,
+        `Message is in a non-inbox folder that is not Deleted Items` +
+        ` or Archive (${parentName}` +
+        (parent ? `, ${parent}` : "") +
+        `).  Skipped — folder behaviour is undefined in this slice;` +
+        ` surface for human review.`,
     };
   }
   if (probe.outcome === "DELETED") {
@@ -438,6 +504,8 @@ function emptyReport(args: ReconcileMailboxArgs, startedAt: Date): Reconciliatio
     totals: {
       messagesExamined: 0,
       presentInbox: 0,
+      presentDeletedItems: 0,
+      presentArchive: 0,
       presentOtherFolder: 0,
       deleted: 0,
       inaccessibleRetryable: 0,
@@ -446,6 +514,8 @@ function emptyReport(args: ReconcileMailboxArgs, startedAt: Date): Reconciliatio
       workIntakeItemsAffected: 0,
     },
     inboxFolderId: null,
+    deletedItemsFolderId: null,
+    archiveFolderId: null,
     resolvedFolderNamesById: {},
     rows: [],
   };
