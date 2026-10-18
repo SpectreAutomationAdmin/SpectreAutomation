@@ -59,9 +59,13 @@ export async function POST(_req: NextRequest) {
     callerClubId: clubId,
     callerUserId: principal.id,
   });
-  // Target: now + 2d 20h (within Graph's 3-day inbox cap).
+  // Target: now + 2d 23h — the same ceiling the subscription
+  // service uses on fresh CREATE.  This maximizes the extension
+  // over the existing expiration without exceeding Graph's ~3-day
+  // inbox-subscription cap.  Earlier targets would be no-ops
+  // (Graph refuses to shorten).
   const now = new Date();
-  const target = new Date(now.getTime() + (2 * 24 + 20) * 60 * 60 * 1000).toISOString();
+  const target = new Date(now.getTime() + (2 * 24 + 23) * 60 * 60 * 1000).toISOString();
   const oldExpiration = sub.expirationDateTime.toISOString();
   try {
     const result = await getMicrosoftDelegatedProvider().renewSubscription({
