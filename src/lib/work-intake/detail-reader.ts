@@ -47,6 +47,7 @@ export interface WorkIntakeDetail {
     hasAttachments: boolean;
   };
   email: {
+    id: string;
     senderName: string;
     senderAddress: string;
     subject: string;
@@ -58,6 +59,7 @@ export interface WorkIntakeDetail {
     bodyTextExtract: string | null;
     webLink: string | null;
     isSoftDeleted: boolean;
+    isRead: boolean;
     mailboxConnectedEmail: string;
     attachments: Array<{
       id: string;
@@ -220,6 +222,7 @@ export async function loadWorkIntakeDetail(args: {
     },
     email: email
       ? {
+          id: email.id,
           senderName: email.senderName,
           senderAddress: email.senderAddress,
           subject: email.subject,
@@ -231,6 +234,7 @@ export async function loadWorkIntakeDetail(args: {
           bodyTextExtract: email.bodyTextExtract,
           webLink: safeWebLink(email.webLink),
           isSoftDeleted: email.softDeletedAt != null,
+          isRead: email.isRead,
           mailboxConnectedEmail: email.mailboxConnection.connectedEmail,
           attachments: email.attachments.map((a) => ({
             id: a.id,

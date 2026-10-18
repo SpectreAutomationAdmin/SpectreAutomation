@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { WorkIntakeDetail } from "@/lib/work-intake/detail-reader";
+import MailboxActionsRow from "@/components/mission-control/MailboxActionsRow";
 
 interface Props {
   detail: WorkIntakeDetail;
@@ -103,9 +104,19 @@ export default function WorkIntakeDetailClient({ detail, currentUserId }: Props)
           <section className="card p-6" data-testid="evidence-card">
             <h2 className="text-sm font-semibold text-stone-900 mb-3">Email evidence</h2>
             {detail.email?.isSoftDeleted && (
-              <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="evidence-unavailable">
-                The original email was removed from the mailbox. The intake orchestration state is preserved for your records.
-              </div>
+              <>
+                <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="evidence-unavailable">
+                  The original email was removed from the mailbox. The intake orchestration state is preserved for your records.
+                </div>
+                <div className="mb-3">
+                  <MailboxActionsRow
+                    workIntakeItemId={detail.id}
+                    wiStatus={detail.status}
+                    isRead={detail.email.isRead}
+                    isSoftDeleted={true}
+                  />
+                </div>
+              </>
             )}
             <RecipientLine label="From" value={`${detail.email?.senderName ?? ""} <${detail.email?.senderAddress ?? ""}>`} />
             <RecipientLine label="To" value={(detail.email?.recipientsTo ?? []).join(", ") || "—"} />

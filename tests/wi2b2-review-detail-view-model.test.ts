@@ -169,9 +169,9 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
   it("email without a stored PDF attachment → primaryPdf is null", () => {
     const detail = baseDetail({
       email: {
-        senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
+        id: "em-fixture", senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
         receivedAt: "", sentAt: null, bodyHtmlSanitized: null, bodyTextExtract: null,
-        webLink: null, isSoftDeleted: false, mailboxConnectedEmail: "",
+        webLink: null, isSoftDeleted: false, isRead: true, mailboxConnectedEmail: "",
         attachments: [
           { id: "att-1", filename: "note.txt", contentType: "text/plain", sizeBytes: 12, storageState: "STORED", ingestedDocumentId: "doc-1" },
         ],
@@ -184,9 +184,9 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
   it("email with STORED application/pdf attachment and promoted id → primaryPdf populated", () => {
     const detail = baseDetail({
       email: {
-        senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
+        id: "em-fixture", senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
         receivedAt: "", sentAt: null, bodyHtmlSanitized: null, bodyTextExtract: null,
-        webLink: null, isSoftDeleted: false, mailboxConnectedEmail: "",
+        webLink: null, isSoftDeleted: false, isRead: true, mailboxConnectedEmail: "",
         attachments: [
           { id: "att-1", filename: "200824.pdf", contentType: "application/pdf", sizeBytes: 999, storageState: "STORED", ingestedDocumentId: "doc-1" },
         ],
@@ -203,9 +203,9 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
   it("PDF attachment present but NOT yet promoted (ingestedDocumentId null) → primaryPdf remains null", () => {
     const detail = baseDetail({
       email: {
-        senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
+        id: "em-fixture", senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
         receivedAt: "", sentAt: null, bodyHtmlSanitized: null, bodyTextExtract: null,
-        webLink: null, isSoftDeleted: false, mailboxConnectedEmail: "",
+        webLink: null, isSoftDeleted: false, isRead: true, mailboxConnectedEmail: "",
         attachments: [
           { id: "att-1", filename: "200824.pdf", contentType: "application/pdf", sizeBytes: 999, storageState: "METADATA_ONLY", ingestedDocumentId: null },
         ],
@@ -229,9 +229,9 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
         byteLength: 71369,
       },
       email: {
-        senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
+        id: "em-fixture", senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
         receivedAt: "", sentAt: null, bodyHtmlSanitized: null, bodyTextExtract: null,
-        webLink: null, isSoftDeleted: false, mailboxConnectedEmail: "",
+        webLink: null, isSoftDeleted: false, isRead: true, mailboxConnectedEmail: "",
         attachments: [
           { id: "att-1", filename: "200824.pdf", contentType: "application/pdf", sizeBytes: 71565, storageState: "METADATA_ONLY", ingestedDocumentId: null },
         ],
