@@ -30,6 +30,13 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  // WI-SYNC-1e (2026-10-18) — production safety gate.  This
+  // endpoint is a staging acceptance / operator tool; it must
+  // never respond on production.  SPECTRE_ALLOW_STAGING_DEBUG
+  // is unset in prod secrets, set to "1" on spectre-staging.
+  if (process.env.SPECTRE_ALLOW_STAGING_DEBUG !== "1") {
+    return NextResponse.json({ error: "debug_endpoint_disabled" }, { status: 404 });
+  }
   if (!isMailboxIntegrationEnabled()) {
     return NextResponse.json({ error: "mailbox_integration_disabled" }, { status: 404 });
   }

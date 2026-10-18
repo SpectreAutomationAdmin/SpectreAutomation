@@ -53,6 +53,7 @@ import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/li
 // button label and the modal-open decision come from this function
 // so they can never drift.
 import { deriveApAction, type ApAction } from "@/lib/mission-control/ap-action";
+import MailboxActionsRow from "./MailboxActionsRow";
 // Sprint 3 · Checkpoint 16C (2026-08-04) — unified Work Intake
 // amount formatter. Every amount surface routes through this helper.
 import { formatWorkIntakeAmount } from "@/lib/ap-intelligence/format-amount";
@@ -570,6 +571,16 @@ export default function EmailIntakeCard({ data }: Props) {
                 Could not resolve — please retry.
               </span>
             ) : null}
+            {/* WI-SYNC-1e (2026-10-18) — mailbox actions row for
+                 Dismiss (Spectre-only) + Delete-from-Outlook
+                 (Graph move to Deleted Items + suppress WI).  Only
+                 renders on active (non-resolved) email-origin
+                 cards.  Reuses .spectre-btn tokens; adds no new
+                 branding or layout. */}
+            <MailboxActionsRow
+              workIntakeItemId={data.workIntakeItemId}
+              wiStatus={data.workIntakeStatus ?? ""}
+            />
           </>
         )}
           </div>

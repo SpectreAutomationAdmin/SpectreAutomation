@@ -2072,6 +2072,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
   .spectre-mc-actions .aux:hover { color: var(--spectre-text-secondary); }
   .spectre-mc-actions .aux svg { width: 11px; height: 11px; }
+  /* WI-SYNC-1e — mailbox actions row.  Zero new tokens; reuses
+     the existing .spectre-btn family.  The group just gets the
+     same gap + wrap as the parent so Dismiss + Delete sit next
+     to Resolve on wide screens and wrap below on narrow. */
+  .spectre-mc-mailbox-actions {
+    display: inline-flex; align-items: center; gap: 8px;
+    flex-wrap: wrap;
+  }
   .spectre-mc-aux {
     font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500;
     letter-spacing: 0.005em;
