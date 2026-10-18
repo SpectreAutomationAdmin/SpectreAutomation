@@ -500,6 +500,72 @@ export interface MicrosoftDelegatedProvider {
    *  bit, does not move the message or touch any other property.
    *  See MarkMessageReadArgs for the full contract. */
   markMessageRead(args: MarkMessageReadArgs): Promise<MarkMessageReadResult>;
+  /** WI-SYNC-1a (2026-10-18) — probe a message's current presence +
+   *  folder.  Used by the one-shot mailbox reconciliation to classify
+   *  each known EmailMessage into PRESENT_INBOX / PRESENT_OTHER_FOLDER
+   *  / DELETED / INACCESSIBLE_RETRYABLE / INACCESSIBLE_PERMANENT.
+   *
+   *  Endpoint: GET /v1.0/me/messages/{graphMessageId}?$select=id,parentFolderId,isRead
+   *
+   *  Contract:
+   *    - Delegated identity (Mail.Read scope).
+   *    - Returns a classification outcome; NEVER throws for ordinary
+   *      404 / 403 / 429 / 5xx — the caller needs to distinguish them.
+   *    - `graphMessageId` is the ImmutableId that was persisted on
+   *      the EmailMessage row.
+   *    - This call is read-only; no PATCH / POST / DELETE. */
+  probeMessage(args: ProbeMessageArgs): Promise<ProbeMessageResult>;
+  /** WI-SYNC-1a (2026-10-18) — resolve a well-known folder's id.
+   *
+   *  Endpoint: GET /v1.0/me/mailFolders/{wellKnownName}?$select=id,displayName
+   *
+   *  Contract:
+   *    - Returns the id Microsoft currently uses for the Inbox
+   *      (and the DeletedItems / Archive folders) in the connected
+   *      mailbox so the caller can compare parentFolderId.
+   *    - Delegated identity (Mail.Read scope).
+   *    - Returns null on 404 (the mailbox doesn't expose the
+   *      well-known folder); throws on other non-OK statuses.
+   *    - Well-known names Microsoft honors: "inbox" | "archive"
+   *      | "deleteditems" | "sentitems" | "drafts" | "junkemail". */
+  getWellKnownFolder(args: GetWellKnownFolderArgs): Promise<GetWellKnownFolderResult | null>;
+}
+
+export interface ProbeMessageArgs {
+  accessToken: string;
+  /** The ImmutableId / graphMessageId persisted on EmailMessage. */
+  graphMessageId: string;
+}
+
+export type ProbeMessageOutcome =
+  | "PRESENT"
+  | "DELETED"
+  | "INACCESSIBLE_RETRYABLE"
+  | "INACCESSIBLE_PERMANENT";
+
+export interface ProbeMessageResult {
+  outcome: ProbeMessageOutcome;
+  /** The current parentFolderId if `outcome === "PRESENT"`. */
+  parentFolderId?: string;
+  /** Only present on PRESENT — isRead reflected for diagnostic use. */
+  isRead?: boolean;
+  /** Only on INACCESSIBLE_* — HTTP status Graph returned. */
+  httpStatus?: number;
+  /** Only on INACCESSIBLE_RETRYABLE — Retry-After suggestion. */
+  retryAfterSeconds?: number;
+  /** Only on INACCESSIBLE_* — Graph error code if parseable. */
+  errorCode?: string;
+}
+
+export interface GetWellKnownFolderArgs {
+  accessToken: string;
+  wellKnownName: "inbox" | "archive" | "deleteditems" | "sentitems" | "drafts" | "junkemail";
+}
+
+export interface GetWellKnownFolderResult {
+  id: string;
+  displayName: string;
+  wellKnownName: GetWellKnownFolderArgs["wellKnownName"];
 }
 
 export interface GetAttachmentBytesArgs {
@@ -937,6 +1003,113 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
         messages: body.value ?? [],
         nextPageToken: body["@odata.nextLink"] ?? null,
         deltaLink: body["@odata.deltaLink"] ?? null,
+      };
+    },
+    async probeMessage(args) {
+      // WI-SYNC-1a — single-message presence/folder probe.  Returns
+      // a classified outcome; never throws for ordinary mailbox
+      // conditions (404 / 403 / 429 / 5xx) — the caller needs the
+      // distinction to decide whether to tombstone, retry, or
+      // surface for human review.
+      if (!args.graphMessageId) {
+        throw new Error("probeMessage requires graphMessageId");
+      }
+      const url =
+        `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(args.graphMessageId)}` +
+        `?$select=id,parentFolderId,isRead`;
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${args.accessToken}`,
+            Prefer: 'IdType="ImmutableId"',
+          },
+        });
+      } catch (e) {
+        // Network error — explicitly retryable.
+        return {
+          outcome: "INACCESSIBLE_RETRYABLE",
+          errorCode: (e as Error)?.message ?? "network_error",
+        };
+      }
+      if (res.ok) {
+        const body = (await res.json()) as {
+          id?: string;
+          parentFolderId?: string;
+          isRead?: boolean;
+        };
+        return {
+          outcome: "PRESENT",
+          parentFolderId: body.parentFolderId,
+          isRead: body.isRead,
+        };
+      }
+      // 404 Not Found or 410 Gone — the message is no longer in the
+      // mailbox (hard-deleted, or purged).  Note: a message moved to
+      // Deleted Items STILL returns 200 with parentFolderId pointing
+      // at the deleteditems folder — the caller must disambiguate.
+      if (res.status === 404 || res.status === 410) {
+        return { outcome: "DELETED", httpStatus: res.status };
+      }
+      // 401 / 403 — token stale or scope revoked.  Not retryable
+      // without re-consent.
+      if (res.status === 401 || res.status === 403) {
+        return {
+          outcome: "INACCESSIBLE_PERMANENT",
+          httpStatus: res.status,
+          errorCode: res.status === 401 ? "unauthenticated" : "forbidden",
+        };
+      }
+      // 429 / 503 — Graph throttling.  Retryable.
+      if (res.status === 429 || res.status === 503) {
+        return {
+          outcome: "INACCESSIBLE_RETRYABLE",
+          httpStatus: res.status,
+          retryAfterSeconds: parseRetryAfter(res.headers.get("Retry-After")),
+          errorCode: res.status === 429 ? "throttled" : "service_unavailable",
+        };
+      }
+      // 5xx — treat as retryable so a transient Graph outage doesn't
+      // trigger mass soft-deletes.  (Explicit per directive §4.)
+      if (res.status >= 500) {
+        return {
+          outcome: "INACCESSIBLE_RETRYABLE",
+          httpStatus: res.status,
+          errorCode: `graph_${res.status}`,
+        };
+      }
+      // Anything else (e.g. 400) — permanent in the sense that the
+      // same request will not succeed on retry.  Surface for human
+      // review; never tombstone.
+      return {
+        outcome: "INACCESSIBLE_PERMANENT",
+        httpStatus: res.status,
+        errorCode: `graph_${res.status}`,
+      };
+    },
+    async getWellKnownFolder(args) {
+      // WI-SYNC-1a — resolve a well-known folder's current id.
+      // Graph accepts the well-known names ("inbox", "archive",
+      // "deleteditems", "sentitems", "drafts", "junkemail") in the
+      // {folder-id} path position, so we don't need to pre-list
+      // folders — just request the one we need.
+      const url =
+        `https://graph.microsoft.com/v1.0/me/mailFolders/${encodeURIComponent(args.wellKnownName)}` +
+        `?$select=id,displayName`;
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+        },
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw graphErrorFromResponse(res);
+      const body = (await res.json()) as { id: string; displayName: string };
+      return {
+        id: body.id,
+        displayName: body.displayName,
+        wellKnownName: args.wellKnownName,
       };
     },
   };

@@ -68,6 +68,8 @@ function installDelegatedProviderMock(): MicrosoftDelegatedProvider {
     async moveMessage() { return { resultingGraphMessageId: "new", destinationFolderId: "archive", movedAt: new Date() }; },
     async lookupSentMessagesInConversation() { return { messages: [] }; },
     async markMessageRead() { return { graphMessageId: "syn-mid", markedReadAt: new Date() }; },
+    async probeMessage() { return { outcome: "INACCESSIBLE_RETRYABLE", errorCode: "mock_not_configured" }; },
+    async getWellKnownFolder() { return null; },
   };
   setMicrosoftDelegatedProvider(mock);
   return mock;

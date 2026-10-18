@@ -421,6 +421,22 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     }
     return page;
   }
+
+  // WI-SYNC-1a (2026-10-18) — reconciliation probe + folder lookup.
+  // Default stubs: tests that exercise the reconciliation path
+  // override these via subclassing or setMicrosoftDelegatedProvider
+  // with a bespoke mock.
+  async probeMessage(
+    _args: import("./microsoft-graph-delegated").ProbeMessageArgs,
+  ): Promise<import("./microsoft-graph-delegated").ProbeMessageResult> {
+    return { outcome: "INACCESSIBLE_RETRYABLE", errorCode: "mock_not_configured" };
+  }
+
+  async getWellKnownFolder(
+    _args: import("./microsoft-graph-delegated").GetWellKnownFolderArgs,
+  ): Promise<import("./microsoft-graph-delegated").GetWellKnownFolderResult | null> {
+    return null;
+  }
 }
 
 function makeMsalError(fields: { errorCode: string; errorNo?: string; subError?: string; response?: { status: number } }): Error {

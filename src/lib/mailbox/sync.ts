@@ -16,7 +16,7 @@ import { getFreshDelegatedAccessToken } from "./connect";
 import { SYNC_SCOPE } from "./sync-scope";
 import { normalizeGraphMessage, stableIdentityForEmail } from "./normalize";
 import { classifyEmail } from "./classifier";
-import { upsertEmailIntake } from "./email-materializer";
+import { upsertEmailIntake, handleEmailEvidenceDeleted } from "./email-materializer";
 import {
   MAILBOX_STATUS,
   assertMailboxStatusTransition,
@@ -474,6 +474,17 @@ export async function ingestOneMessage(args: {
   // Soft-delete path: Graph delta responses include `removed`
   // markers — for initial (non-delta) sync we don't see this, but
   // the field is respected for parity with future C-phase code.
+  //
+  // WI-SYNC-1a (2026-10-18) — in addition to flipping EmailMessage.
+  // softDeletedAt, also propagate the tombstone to the linked
+  // WorkIntakeItem via handleEmailEvidenceDeleted().  That function
+  // is tenant-scoped, idempotent (early-returns on already-RESOLVED
+  // or SUPPRESSED WIs), and reconciles with Spectre-initiated
+  // archive moves (if we moved the message ourselves, it skips
+  // SUPPRESS and writes an EVIDENCE_ARCHIVED activity instead).
+  // Without this call the WI stayed OPEN/INFORMATIONAL and the feed
+  // kept rendering the ghost item — the root cause of the six
+  // reported Coulee ghosts.
   if (norm.isRemoved) {
     const existing = await prisma.emailMessage.findFirst({
       where: { mailboxConnectionId: args.mailboxConnectionId, graphMessageId: graphId },
@@ -482,6 +493,10 @@ export async function ingestOneMessage(args: {
       await prisma.emailMessage.update({
         where: { id: existing.id },
         data: { softDeletedAt: new Date(), lastSyncedAt: new Date() },
+      });
+      await handleEmailEvidenceDeleted({
+        clubId: args.clubId,
+        emailMessageId: existing.id,
       });
     }
     return { imported: false, updated: false, intakeCreated: false, intakeAction: "SUPPRESS" };

@@ -35,9 +35,26 @@ export async function loadEmailIntakeItems(args: {
   const items = await prisma.workIntakeItem.findMany({
     where: {
       ...where,
-      // Only email-origin intake items — the `emailOrigins` any-clause
-      // narrows to rows that have at least one email link.
-      emailOrigins: { some: {} },
+      // Only email-origin intake items whose PRIMARY origin email is
+      // still present in the mailbox.  WI-SYNC-1a (2026-10-18) — the
+      // feed must respect the source email's deletion state so an
+      // Outlook-side delete propagates to Mission Control.  The
+      // `handleEmailEvidenceDeleted` path transitions the WI to
+      // SUPPRESSED, which the status filter below already removes
+      // from the feed; this soft-delete filter is a defence-in-depth
+      // guard against any ingestion path that marks the email
+      // deleted without transitioning the WI (e.g. a pre-WI-SYNC-1a
+      // backlog row the reconciliation worker touches first).
+      // Independent accounting workflows live in APInvoice /
+      // financial modules; they are NOT read through this feed, so
+      // hiding the email-origin WI here never conceals an
+      // outstanding financial obligation.
+      emailOrigins: {
+        some: {
+          role: "PRIMARY",
+          emailMessage: { softDeletedAt: null },
+        },
+      },
       // Hide suppressed noise from the feed. Post-C14C, this also
       // hides duplicate intakes that were merged into a canonical
       // conversation intake by remediateDuplicateConversationItems().
