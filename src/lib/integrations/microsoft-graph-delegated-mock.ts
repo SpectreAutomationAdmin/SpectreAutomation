@@ -321,6 +321,7 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     this.markReadOutcome = o;
   }
   async markMessageRead(args: import("./microsoft-graph-delegated").MarkMessageReadArgs): Promise<import("./microsoft-graph-delegated").MarkMessageReadResult> {
+    void args.isRead;
     this.capturedMarkReadCalls.push(args);
     if (!args.graphMessageId) throw new Error("markMessageRead requires graphMessageId");
     if (this.markReadOutcome === "RETRYABLE_THROTTLE") {
@@ -335,6 +336,7 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     return {
       graphMessageId: args.graphMessageId,
       markedReadAt: new Date(),
+      isRead: args.isRead ?? true,
     };
   }
 

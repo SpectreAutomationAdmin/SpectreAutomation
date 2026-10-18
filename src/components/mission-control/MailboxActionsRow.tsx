@@ -1,26 +1,30 @@
-// WI-SYNC-1e (2026-10-18) — Mailbox-action row on the Work Intake
-// card.
+// WI-SYNC-1e-close §1 (2026-10-18) — full mailbox-action row on
+// the Work Intake card.
 //
-// Renders five inline secondary buttons (Mark Unread / Mark Read /
-// Archive / Delete / Dismiss / Restore) wired to the WI-SYNC-1a..1d
-// API endpoints.  Reuses existing design tokens (`.spectre-btn`,
-// `.spectre-btn--secondary`, `.spectre-btn--sm`, `.spectre-mc-
-// inline-status`) — zero new CSS surface, zero branding changes.
+// Renders the five user-initiated mailbox actions built across
+// WI-SYNC-1a..1d-1e as inline secondary buttons.  Reuses existing
+// design tokens (`.spectre-btn`, `.spectre-btn--secondary`,
+// `.spectre-btn--sm`, `.spectre-mc-inline-status--error`) — zero
+// new branding or layout tokens.
 //
-// Each action:
-//   - Shows a loading label on the clicked button.
-//   - Shows a success toast via inline status briefly.
-//   - Shows an error badge on failure; the button stays clickable
-//     so the user can retry.
-//   - Fires `router.refresh()` on success so the feed re-reads.
+// Contextual visibility:
+//   isSoftDeleted = true  → Restore
+//   isSoftDeleted = false → Mark Read / Mark Unread  (toggle by
+//                           isRead), Archive, Delete, Dismiss
 //
-// Visibility rules (filters at render time):
-//   - "Restore" renders only when the WI is SUPPRESSED AND the
-//     linked email has softDeletedAt set.
-//   - "Mark Read" renders only when the email is currently unread;
-//     "Mark Unread" renders only when the email is currently read.
-//   - "Dismiss" is always available for email-origin WIs.
-//   - "Archive" and "Delete" render for OPEN / INFORMATIONAL WIs.
+// Accessibility:
+//   • role="group" with aria-label on the row.
+//   • Explicit aria-label per button (independent of visible text).
+//   • Loading / success / error states announced via role="alert"
+//     and the loading label change.
+//   • Keyboard focus delegated to the native button element.
+//
+// Mutation safety:
+//   • While one action is pending, ALL buttons are disabled.
+//   • stopPropagation() prevents clicks from toggling the parent
+//     card.
+//   • `router.refresh()` after success so the feed re-reads from
+//     the server (new WI state immediately visible).
 
 "use client";
 
@@ -30,18 +34,18 @@ import { useRouter } from "next/navigation";
 export interface MailboxActionsRowProps {
   workIntakeItemId: string;
   wiStatus: string; // OPEN | IN_PROGRESS | RESOLVED | INFORMATIONAL | SUPPRESSED
+  isRead: boolean;
+  isSoftDeleted: boolean;
 }
 
-// WI-SYNC-1e exposes the two user-initiated actions built in
-// WI-SYNC-1c on active (non-resolved, non-suppressed) email cards.
-//   • Dismiss  — Spectre-only, no Outlook touch.
-//   • Delete   — Spectre + Outlook (moves to Deleted Items).
-// Restore is deliberately NOT exposed as a button: a user who
-// wants a message back moves it in Outlook (delta sync detects
-// it + auto-restores the WI).  Operator-side restore is served
-// by /api/admin/mailbox/debug/move-to-inbox.
-// Mark-read + Archive are pre-existing flows surfaced elsewhere.
-type ActionKey = "delete" | "dismiss";
+type ActionKey =
+  | "mark_read"
+  | "mark_unread"
+  | "archive"
+  | "delete"
+  | "dismiss"
+  | "restore";
+
 interface ActionDef {
   key: ActionKey;
   label: string;
@@ -50,6 +54,24 @@ interface ActionDef {
 }
 
 const ACTIONS: Record<ActionKey, ActionDef> = {
+  mark_read: {
+    key: "mark_read",
+    label: "Mark read",
+    loadingLabel: "Marking…",
+    endpoint: (wiId) => `/api/work-intake/${encodeURIComponent(wiId)}/mark-read-email`,
+  },
+  mark_unread: {
+    key: "mark_unread",
+    label: "Mark unread",
+    loadingLabel: "Marking…",
+    endpoint: (wiId) => `/api/work-intake/${encodeURIComponent(wiId)}/mark-unread-email`,
+  },
+  archive: {
+    key: "archive",
+    label: "Archive in Outlook",
+    loadingLabel: "Archiving…",
+    endpoint: (wiId) => `/api/work-intake/${encodeURIComponent(wiId)}/archive-email`,
+  },
   delete: {
     key: "delete",
     label: "Delete from Outlook",
@@ -61,6 +83,12 @@ const ACTIONS: Record<ActionKey, ActionDef> = {
     label: "Dismiss",
     loadingLabel: "Dismissing…",
     endpoint: (wiId) => `/api/work-intake/${encodeURIComponent(wiId)}/dismiss`,
+  },
+  restore: {
+    key: "restore",
+    label: "Restore email",
+    loadingLabel: "Restoring…",
+    endpoint: (wiId) => `/api/work-intake/${encodeURIComponent(wiId)}/restore-email`,
   },
 };
 
@@ -96,15 +124,21 @@ export default function MailboxActionsRow(props: MailboxActionsRowProps) {
   }
 
   const visible: ActionKey[] = [];
-  const isActive =
-    props.wiStatus === "OPEN" ||
-    props.wiStatus === "IN_PROGRESS" ||
-    props.wiStatus === "INFORMATIONAL" ||
-    props.wiStatus === "DEFERRED";
-  if (isActive) {
-    visible.push("dismiss", "delete");
-  }
+  const isSuppressedByDelete =
+    props.wiStatus === "SUPPRESSED" && props.isSoftDeleted;
+  const isActiveEmailBacked =
+    (props.wiStatus === "OPEN" ||
+      props.wiStatus === "IN_PROGRESS" ||
+      props.wiStatus === "INFORMATIONAL" ||
+      props.wiStatus === "DEFERRED") &&
+    !props.isSoftDeleted;
 
+  if (isSuppressedByDelete) {
+    visible.push("restore");
+  } else if (isActiveEmailBacked) {
+    visible.push(props.isRead ? "mark_unread" : "mark_read");
+    visible.push("archive", "delete", "dismiss");
+  }
   if (visible.length === 0) return null;
 
   return (

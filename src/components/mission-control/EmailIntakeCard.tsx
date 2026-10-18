@@ -571,15 +571,19 @@ export default function EmailIntakeCard({ data }: Props) {
                 Could not resolve — please retry.
               </span>
             ) : null}
-            {/* WI-SYNC-1e (2026-10-18) — mailbox actions row for
-                 Dismiss (Spectre-only) + Delete-from-Outlook
-                 (Graph move to Deleted Items + suppress WI).  Only
-                 renders on active (non-resolved) email-origin
-                 cards.  Reuses .spectre-btn tokens; adds no new
-                 branding or layout. */}
+            {/* WI-SYNC-1e-close §1 (2026-10-18) — full mailbox
+                 action set: Mark Read / Unread, Archive, Delete,
+                 Dismiss, Restore (contextual).  Reuses .spectre-
+                 btn tokens; adds no new branding or layout.
+                 isSoftDeleted is false here because the active
+                 feed filters out softDeleted messages — the
+                 archived / SUPPRESSED view (future surface) will
+                 pass true to show the Restore action. */}
             <MailboxActionsRow
               workIntakeItemId={data.workIntakeItemId}
               wiStatus={data.workIntakeStatus ?? ""}
+              isRead={!data.isUnread}
+              isSoftDeleted={false}
             />
           </>
         )}

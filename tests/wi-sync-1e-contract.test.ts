@@ -29,20 +29,29 @@ describe("WI-SYNC-1e · MailboxActionsRow component", () => {
     expect(ROW).toMatch(/useRouter/);
     expect(ROW).toMatch(/router\.refresh\(\)/);
   });
-  it("renders two actions on active WIs: dismiss + delete", () => {
-    // The exposed ActionKey union is exactly these two.
-    expect(ROW).toMatch(/type ActionKey = "delete" \| "dismiss"/);
-    expect(ROW).toMatch(/dismiss:\s*\{/);
-    expect(ROW).toMatch(/delete:\s*\{/);
-    // Visibility: only on active WI statuses.
-    expect(ROW).toMatch(/isActive =/);
-    expect(ROW).toMatch(/"OPEN"/);
-    expect(ROW).toMatch(/"INFORMATIONAL"/);
-    expect(ROW).toMatch(/visible\.push\("dismiss", "delete"\)/);
+  it("WI-SYNC-1e-close §1: six action keys enumerated", () => {
+    for (const key of ["mark_read", "mark_unread", "archive", "delete", "dismiss", "restore"]) {
+      expect(ROW).toContain(`"${key}"`);
+    }
   });
-  it("fires POST against the correct endpoints", () => {
-    expect(ROW).toMatch(/\/api\/work-intake\/\$\{encodeURIComponent\(wiId\)\}\/dismiss/);
-    expect(ROW).toMatch(/\/api\/work-intake\/\$\{encodeURIComponent\(wiId\)\}\/delete-email/);
+  it("WI-SYNC-1e-close §1: visibility — read/unread toggle + Archive + Delete + Dismiss on active cards; Restore when softDeleted", () => {
+    expect(ROW).toMatch(/isActiveEmailBacked/);
+    expect(ROW).toMatch(/isSuppressedByDelete/);
+    expect(ROW).toMatch(/props\.isRead \? "mark_unread" : "mark_read"/);
+    expect(ROW).toMatch(/visible\.push\("archive", "delete", "dismiss"\)/);
+    expect(ROW).toMatch(/visible\.push\("restore"\)/);
+  });
+  it("fires POST against the correct per-action endpoints", () => {
+    for (const endpoint of [
+      /mark-read-email/,
+      /mark-unread-email/,
+      /archive-email/,
+      /delete-email/,
+      /dismiss/,
+      /restore-email/,
+    ]) {
+      expect(ROW).toMatch(endpoint);
+    }
     expect(ROW).toMatch(/method: "POST"/);
   });
   it("renders loading / success / failure feedback", () => {
@@ -55,6 +64,9 @@ describe("WI-SYNC-1e · MailboxActionsRow component", () => {
   it("reuses existing design-system btn tokens (no new branding)", () => {
     expect(ROW).toMatch(/"spectre-btn spectre-btn--secondary spectre-btn--sm"/);
     expect(ROW).toMatch(/"spectre-mc-inline-status spectre-mc-inline-status--error"/);
+  });
+  it("WI-SYNC-1e-close §1: contextual visibility — Restore is only shown when BOTH SUPPRESSED AND softDeleted", () => {
+    expect(ROW).toMatch(/isSuppressedByDelete\s*=[\s\S]*"SUPPRESSED"[\s\S]*isSoftDeleted/);
   });
   it("accessibility: role=group + aria-label on the row + aria-label per button + visible focus is from design-system", () => {
     expect(ROW).toMatch(/role="group"/);
@@ -134,6 +146,92 @@ describe("WI-SYNC-1e · user-facing /restore-email route", () => {
     ]) {
       expect(RESTORE_ROUTE).not.toMatch(forbidden);
     }
+  });
+});
+
+describe("WI-SYNC-1e-close §1 · new user-facing action endpoints", () => {
+  const READ_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/work-intake/[id]/mark-read-email/route.ts"),
+    "utf8",
+  );
+  const UNREAD_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/work-intake/[id]/mark-unread-email/route.ts"),
+    "utf8",
+  );
+  const ARCHIVE_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/work-intake/[id]/archive-email/route.ts"),
+    "utf8",
+  );
+  it("mark-read-email: delegates to markReadImpl(wiId, true) + exports markReadImpl", () => {
+    expect(READ_ROUTE).toMatch(/markReadImpl\(params\.id, true\)/);
+    expect(READ_ROUTE).toMatch(/export async function markReadImpl/);
+  });
+  it("mark-unread-email: delegates to markReadImpl(wiId, false)", () => {
+    expect(UNREAD_ROUTE).toMatch(/markReadImpl\(params\.id, false\)/);
+  });
+  it("mark-read-email: tenant-guards + idempotency early-return + Graph PATCH + audit", () => {
+    expect(READ_ROUTE).toMatch(/link\.workIntakeItem\.clubId !== clubId/);
+    expect(READ_ROUTE).toMatch(/mailbox\.clubId !== clubId/);
+    expect(READ_ROUTE).toMatch(/alreadyAtTargetState/);
+    expect(READ_ROUTE).toMatch(/markMessageRead\(/);
+    expect(READ_ROUTE).toMatch(/isRead,/);
+    expect(READ_ROUTE).toMatch(/action: isRead \? "mailbox\.message\.mark-read" : "mailbox\.message\.mark-unread"/);
+  });
+  it("archive-email: writes an OutlookArchiveMutation RUNNING → SUCCEEDED + flips softDeletedAt", () => {
+    expect(ARCHIVE_ROUTE).toMatch(/prisma\.outlookArchiveMutation\.create/);
+    expect(ARCHIVE_ROUTE).toMatch(/status: "RUNNING"/);
+    expect(ARCHIVE_ROUTE).toMatch(/status: "SUCCEEDED"/);
+    expect(ARCHIVE_ROUTE).toMatch(/softDeletedAt: new Date\(\)/);
+    expect(ARCHIVE_ROUTE).toMatch(/destinationId: ARCHIVE_DESTINATION/);
+    expect(ARCHIVE_ROUTE).toMatch(/action: "mailbox\.message\.archive"/);
+  });
+  it("archive-email: 404 feature-off / 401 unauth / 403 cross-tenant / 409 bad-state / 422 mailbox / 502 graph", () => {
+    for (const code of [
+      /"mailbox_integration_disabled"/,
+      /"unauthenticated"/,
+      /"cross_tenant"/,
+      /"email_soft_deleted"/,
+      /"mailbox_not_connected"/,
+      /"graph_error"/,
+    ]) {
+      expect(ARCHIVE_ROUTE).toMatch(code);
+    }
+  });
+  it("none of the new routes touch AP / journal / approval / payment write surfaces", () => {
+    for (const src of [READ_ROUTE, UNREAD_ROUTE, ARCHIVE_ROUTE]) {
+      for (const forbidden of [
+        /prisma\.aPInvoice\.(update|delete|create|upsert)/,
+        /prisma\.journalEntry\.(update|delete|create|upsert)/,
+        /prisma\.approval\.(update|delete|create|upsert)/,
+        /prisma\.payment\.(update|delete|create|upsert)/,
+      ]) {
+        expect(src).not.toMatch(forbidden);
+      }
+    }
+  });
+});
+
+describe("WI-SYNC-1e-close §2 · staging-only PATCH-renewal endpoint", () => {
+  const RENEW = readFileSync(
+    join(process.cwd(), "src/app/api/admin/mailbox/debug/force-patch-renewal/route.ts"),
+    "utf8",
+  );
+  it("gated by SPECTRE_ALLOW_STAGING_DEBUG BEFORE session check", () => {
+    const gate = RENEW.indexOf("SPECTRE_ALLOW_STAGING_DEBUG");
+    const session = RENEW.indexOf("await getCurrentPrincipal(");
+    expect(gate).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(session);
+    expect(RENEW).toMatch(/"debug_endpoint_disabled"/);
+  });
+  it("fires provider.renewSubscription + persists new expiration + writes audit", () => {
+    expect(RENEW).toMatch(/renewSubscription\(/);
+    expect(RENEW).toMatch(/prisma\.graphSubscription\.update/);
+    expect(RENEW).toMatch(/action: "mailbox\.subscription\.patch-renew"/);
+  });
+  it("returns oldExpiration + Graph's new expiration + persisted new expiration", () => {
+    expect(RENEW).toMatch(/oldExpiration/);
+    expect(RENEW).toMatch(/newExpirationFromGraph/);
+    expect(RENEW).toMatch(/newExpirationPersisted/);
   });
 });
 

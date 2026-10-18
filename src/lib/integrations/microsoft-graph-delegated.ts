@@ -410,10 +410,17 @@ export interface LookupSentMessagesResult {
 export interface MarkMessageReadArgs {
   accessToken: string;
   graphMessageId: string;
+  /** WI-SYNC-1e-close §1 (2026-10-18) — explicit mark-unread
+   *  support.  `undefined` or `true` keeps the historical
+   *  mark-as-read behavior; `false` flips the message back to
+   *  unread via the same PATCH /me/messages/{id} endpoint. */
+  isRead?: boolean;
 }
 export interface MarkMessageReadResult {
   graphMessageId: string;
   markedReadAt: Date;
+  /** Reflects the isRead value Spectre asked Graph to set. */
+  isRead: boolean;
 }
 
 export interface MicrosoftDelegatedProvider {
@@ -888,6 +895,7 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
       // categories, flag, importance) is untouched by design —
       // founder brief §14 explicitly forbids side effects.
       if (!args.graphMessageId) throw new Error("markMessageRead requires graphMessageId");
+      const isRead = args.isRead ?? true;
       const url = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(args.graphMessageId)}`;
       const res = await fetch(url, {
         method: "PATCH",
@@ -895,14 +903,13 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
           Authorization: `Bearer ${args.accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ isRead: true }),
+        body: JSON.stringify({ isRead }),
       });
       if (!res.ok) throw graphErrorFromResponse(res);
-      // Response body is the updated message; we don't need to read
-      // it — the Graph 200 OK is sufficient proof of the mutation.
       return {
         graphMessageId: args.graphMessageId,
         markedReadAt: new Date(),
+        isRead,
       };
     },
     async lookupSentMessagesInConversation(args) {

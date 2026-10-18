@@ -67,7 +67,7 @@ function installDelegatedProviderMock(): MicrosoftDelegatedProvider {
     async getAttachmentBytes() { return Buffer.alloc(0); },
     async moveMessage() { return { resultingGraphMessageId: "new", destinationFolderId: "archive", movedAt: new Date() }; },
     async lookupSentMessagesInConversation() { return { messages: [] }; },
-    async markMessageRead() { return { graphMessageId: "syn-mid", markedReadAt: new Date() }; },
+    async markMessageRead() { return { graphMessageId: "syn-mid", markedReadAt: new Date(), isRead: true }; },
     async probeMessage() { return { outcome: "INACCESSIBLE_RETRYABLE", errorCode: "mock_not_configured" }; },
     async getWellKnownFolder() { return null; },
     async createSubscription() { return { microsoftSubscriptionId: "mock", expirationDateTime: new Date().toISOString(), resource: "/me/mailFolders('inbox')/messages" }; },
