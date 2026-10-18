@@ -141,6 +141,14 @@ export interface ReconcileMailboxArgs {
   /** Only consider messages received at or after this date (for
    *  future bounded reconciliations). */
   receivedSince?: Date;
+  /** WI-SYNC-1b (2026-10-18) — the triggerKind to record on the
+   *  MailboxSyncRun.  Scheduled sweeps pass "RECONCILIATION_SWEEP";
+   *  operator-initiated apply/dry-run calls default to
+   *  "RECONCILIATION" so the health endpoint can distinguish them.
+   *  Dry-runs still write a MailboxSyncRun — status is COMPLETED
+   *  with messagesExamined populated and the mode captured on the
+   *  reconciliation report itself. */
+  triggerKind?: "RECONCILIATION" | "RECONCILIATION_SWEEP";
 }
 
 /** Entry point. */
@@ -149,6 +157,8 @@ export async function reconcileMailbox(
 ): Promise<ReconciliationReport> {
   const startedAt = new Date();
   const limit = Math.max(1, Math.min(10_000, args.limit ?? 1_000));
+  const triggerKind: "RECONCILIATION" | "RECONCILIATION_SWEEP" =
+    args.triggerKind ?? "RECONCILIATION";
 
   // Tenant guard: connection must belong to the stated clubId.
   const connection = await prisma.mailboxConnection.findUnique({
@@ -195,7 +205,32 @@ export async function reconcileMailbox(
     },
   });
 
+  // WI-SYNC-1b — persist a MailboxSyncRun BEFORE any Graph call so
+  // a worker crash still leaves an observable trace.  Status starts
+  // RUNNING and is updated to COMPLETED / PARTIAL / TERMINAL at the
+  // end.  Dry-runs record a run too so observability still sees the
+  // scheduler's cadence under test.
+  const syncRun = await prisma.mailboxSyncRun.create({
+    data: {
+      clubId: args.clubId,
+      mailboxConnectionId: args.mailboxConnectionId,
+      status: "RUNNING",
+      triggerKind,
+      startedAt,
+    },
+    select: { id: true },
+  });
+
   if (candidates.length === 0) {
+    await prisma.mailboxSyncRun.update({
+      where: { id: syncRun.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        messagesExamined: 0,
+        messagesUpdated: 0,
+      },
+    });
     return emptyReport(args, startedAt);
   }
 
@@ -353,12 +388,33 @@ export async function reconcileMailbox(
     rows.push(row);
   }
 
+  const completedAt = new Date();
+  // Finalise the MailboxSyncRun row.  INACCESSIBLE_RETRYABLE rows
+  // DO cause status to be PARTIAL — operators can see which
+  // mailboxes need another pass without re-running the service.
+  const partial = totals.inaccessibleRetryable > 0;
+  await prisma.mailboxSyncRun.update({
+    where: { id: syncRun.id },
+    data: {
+      status: partial ? "PARTIAL" : "COMPLETED",
+      completedAt,
+      messagesExamined: totals.messagesExamined,
+      // "messagesUpdated" captures the write intent: dry-run reports
+      // zero because nothing was persisted; apply reports the
+      // tombstone count.
+      messagesUpdated: args.dryRun ? 0 : totals.tombstonesProposedOrApplied,
+      messagesSuppressed: args.dryRun ? 0 : totals.workIntakeItemsAffected,
+      // messagesImported stays zero — reconciliation never creates
+      // new EmailMessage rows.
+    },
+  });
+
   return {
     mailboxConnectionId: args.mailboxConnectionId,
     clubId: args.clubId,
     mode: args.dryRun ? "DRY_RUN" : "APPLY",
     startedAt,
-    completedAt: new Date(),
+    completedAt,
     totals,
     inboxFolderId: inboxFolder?.id ?? null,
     deletedItemsFolderId: deletedFolder?.id ?? null,

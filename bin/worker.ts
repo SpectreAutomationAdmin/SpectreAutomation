@@ -14,6 +14,7 @@ import "../src/lib/pos/webhooks";
 import { processPending, captureQueueHealth, listRegisteredHandlers } from "../src/lib/queue";
 import { logger } from "../src/lib/observability/logger";
 import { tickAutoSync } from "../src/lib/mailbox/auto-sync-scheduler";
+import { tickReconciliationSweep } from "../src/lib/mailbox/reconciliation-scheduler";
 import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
 
 const queues = process.argv.slice(2);
@@ -35,6 +36,12 @@ async function main() {
       // so multiple worker instances only produce one delta job per
       // mailbox per interval. Never enqueues if the feature is off.
       await tickAutoSync();
+      // WI-SYNC-1b (2026-10-18) — scheduled reconciliation sweep.
+      // Fires at most once per MAILBOX_RECONCILIATION_INTERVAL_MS
+      // (default 15 min).  Independent cadence from the 60-second
+      // delta tick; the two schedulers are additive — delta is the
+      // primary polling path and reconciliation is a safety net.
+      await tickReconciliationSweep();
       // Payroll-3D-3B Slice 3 (2026-09-06) — periodic sweep of
       // manager-relevant pay periods → enqueue ensure jobs so the
       // approval WI obligation always exists even if inline

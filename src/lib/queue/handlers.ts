@@ -192,17 +192,68 @@ registerHandler<{
   return { outcome: res.outcome };
 });
 
-// Remaining reserved Phase C kinds — still gated. If a stray job lands,
-// fail loudly so operators see it in JobRun / JobFailure records.
-for (const kind of [
-  "MAILBOX_RENEW_SUBSCRIPTION",
-  "MAILBOX_RECONCILIATION_HEARTBEAT",
-] as const) {
-  registerHandler(kind, async ({ jobId }) => {
-    logger.warn("queue.handler.mailbox.not_implemented", { kind, jobId });
-    throw new Error(`NOT_IMPLEMENTED: ${kind} — reserved for Phase C`);
+// WI-SYNC-1b (2026-10-18) — MAILBOX_RECONCILIATION_HEARTBEAT is now
+// IMPLEMENTED.  The reconciliation-scheduler enqueues one job per
+// mailbox per 15-min bucket; the handler calls the shared
+// reconcileMailbox() service in APPLY mode and the service persists
+// a MailboxSyncRun row for the health endpoint to read.
+registerHandler<{
+  mailboxConnectionId: string;
+  callerUserId: string | null;
+}>("MAILBOX_RECONCILIATION_HEARTBEAT", async ({ payload }) => {
+  const rawId = payload?.mailboxConnectionId;
+  if (typeof rawId !== "string" || rawId.length === 0) {
+    throw new Error(
+      "MAILBOX_RECONCILIATION_HEARTBEAT payload missing mailboxConnectionId",
+    );
+  }
+  const { prisma } = await import("@/lib/prisma");
+  const mbx = await prisma.mailboxConnection.findUnique({
+    where: { id: rawId },
+    select: { id: true, clubId: true, userId: true, status: true },
   });
-}
+  if (!mbx) {
+    throw new Error(
+      `MAILBOX_RECONCILIATION_HEARTBEAT: mailboxConnectionId ${rawId} not found`,
+    );
+  }
+  if (mbx.status !== "CONNECTED") {
+    // Not an error — the scheduled sweep is a best-effort job.
+    // Terminal / disconnected mailboxes are intentionally skipped;
+    // the scheduler will drop them from its scan on the next tick.
+    logger.info("mailbox.reconcile-sweep.skipped_not_connected", {
+      mailboxConnectionIdTail: mbx.id.slice(-6),
+      status: mbx.status,
+    });
+    return { outcome: "SKIPPED", reason: "not_connected" };
+  }
+  const { reconcileMailbox } = await import("../mailbox/reconciliation");
+  const report = await reconcileMailbox({
+    clubId: mbx.clubId,
+    mailboxConnectionId: mbx.id,
+    callerUserId: payload?.callerUserId ?? mbx.userId,
+    dryRun: false,
+    triggerKind: "RECONCILIATION_SWEEP",
+  });
+  return {
+    outcome: "COMPLETED",
+    tombstonesApplied: report.totals.tombstonesProposedOrApplied,
+    workIntakeItemsAffected: report.totals.workIntakeItemsAffected,
+    inaccessibleRetryable: report.totals.inaccessibleRetryable,
+    inaccessiblePermanent: report.totals.inaccessiblePermanent,
+  };
+});
+
+// MAILBOX_RENEW_SUBSCRIPTION is still deferred to WI-SYNC-1d.
+registerHandler("MAILBOX_RENEW_SUBSCRIPTION", async ({ jobId }) => {
+  logger.warn("queue.handler.mailbox.not_implemented", {
+    kind: "MAILBOX_RENEW_SUBSCRIPTION",
+    jobId,
+  });
+  throw new Error(
+    "NOT_IMPLEMENTED: MAILBOX_RENEW_SUBSCRIPTION — reserved for WI-SYNC-1d (change notifications)",
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Sprint 3 · Checkpoint 15X continuation (2026-07-29) — AP_DOCUMENT_OCR.
@@ -321,6 +372,6 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_DELTA_SYNC: "IMPLEMENTED",
   MAILBOX_RENEW_SUBSCRIPTION: "RESERVED_PHASE_C",
   MAILBOX_ATTACHMENT_FETCH: "IMPLEMENTED",
-  MAILBOX_RECONCILIATION_HEARTBEAT: "RESERVED_PHASE_C",
+  MAILBOX_RECONCILIATION_HEARTBEAT: "IMPLEMENTED",
   MAILBOX_MARK_READ: "IMPLEMENTED",
 } as const;
