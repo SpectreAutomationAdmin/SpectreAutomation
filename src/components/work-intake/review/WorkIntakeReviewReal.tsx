@@ -13,14 +13,19 @@
 import Link from "next/link";
 import type { RealReviewData } from "@/lib/work-intake/review-detail-view-model";
 import DocumentPdfPreview from "./DocumentPdfPreview";
-// AP-ORB-1 (2026-10-14) — client wrapper for the Vendor VALUE cell
-// only.  The wrapper renders the SAME DOM as the pre-AP-ORB-1 cell
-// in its default state; when the URL carries `?orb=1`, a small
-// "Replay orb" button appears next to the vendor value and triggers
-// a short choreographed intelligence reveal (thinking orb +
-// synchronized upward text motion).  No auto-play, no backend
-// calls, no mutation surface.  Reduced-motion respected.
-import VendorFieldClient from "./VendorFieldClient";
+// AP-ORB-4 (2026-10-18) — client wrapper for the Vendor VALUE
+// cell.  Default rendering is the plain vendor name (identical
+// to the pre-AP-ORB-1 cell).  When the URL carries `?orb=1`, a
+// staging-only "Replay orb" button appears next to the vendor
+// value and triggers a 2-second render of the ORIGINAL
+// unmodified `thinking-orbs` ThinkingOrb (state="solving",
+// size=64, speed=1, theme="light") inside a position:fixed
+// portal overlay anchored to the cell's center.  No speed
+// manipulation, no deceleration, no text slide, no fade in/out.
+// Prefers-reduced-motion short-circuits the replay to a no-op.
+// No auto-play, no backend calls, no OCR, no vendor matching,
+// no accounting write.
+import VendorFieldAuthenticClient from "./VendorFieldAuthenticClient";
 
 function BackArrow() {
   return (
@@ -271,7 +276,7 @@ function Classification({ data }: { data: RealReviewData }) {
     <div className="wi-review-classify" aria-label="Extracted information">
       <MetaRow
         label="Vendor"
-        value={i.vendor ? <VendorFieldClient vendor={i.vendor} /> : <Pending />}
+        value={i.vendor ? <VendorFieldAuthenticClient vendor={i.vendor} /> : <Pending />}
       />
       <MetaRow label="Invoice #" value={i.invoiceNumber ?? <Pending />} />
       <MetaRow label="Invoice Date" value={i.invoiceDateLabel ?? <Pending />} />

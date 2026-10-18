@@ -6859,6 +6859,31 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 }
 
+/* ---------- AP-ORB-4 authentic Solving-orb Vendor cell ----------
+   Replaces the AP-ORB-1 / AP-ORB-2 custom choreography.  The
+   overlay wrapper is strictly layout — no transform, no filter,
+   no scale, no opacity override, no blend mode, no clipping —
+   so the canvas renders at its native 64 px exactly as in the
+   AP-ORB-3 fidelity lab. */
+.ap-orb-authentic-cell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.4em;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+.ap-orb-authentic-text {
+  display: inline-block;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No ambient transitions to neutralise — this component uses
+     visibility swap + a 2 s timer, both already short-circuited
+     in the component when reduced-motion is set.  Rule kept to
+     document intent + guard against future additions. */
+  .ap-orb-authentic-cell { }
+}
+
 /* ---------- AP-ORB-3 Orb Fidelity Lab ---------------------------
    Standalone staging-only route — no shared Spectre orb styling,
    no transforms, no filters, no blend modes, no scaling, no

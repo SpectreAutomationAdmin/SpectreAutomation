@@ -15,7 +15,7 @@
 // production Vendor-cell behaviour is unaffected.
 
 import Link from "next/link";
-import VendorOrbDemoSelector from "@/components/work-intake/review/VendorOrbDemoSelector";
+import VendorFieldAuthenticClient from "@/components/work-intake/review/VendorFieldAuthenticClient";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Vendor Orb · Demo" };
@@ -52,11 +52,11 @@ export default function VendorOrbDemoPage() {
         </h1>
         <p style={{ fontSize: 12.5, color: "var(--wi-ink-3)", marginBottom: 28 }}>
           Staging-only route for founder motion acceptance.  Renders the
-          production <code>VendorFieldClient</code> with a demo vendor
-          string.  Append <code>?orb=1</code> to see the Replay button.
-          AP-ORB-2 adds a 20<span>&nbsp;</span>px / 64<span>&nbsp;</span>px
-          size selector so the founder can replay either variant for direct
-          comparison.
+          production <code>VendorFieldAuthenticClient</code> with a demo
+          vendor string.  Append <code>?orb=1</code> to see the Replay
+          button, which hides the vendor name and shows the authentic
+          AP-ORB-3 <code>&lt;ThinkingOrb/&gt;</code> at 64 px for ~2 s
+          before restoring the name.
         </p>
 
         <div className="wi-review-card wi-review-card--details" aria-label="Vendor demo">
@@ -83,7 +83,7 @@ export default function VendorOrbDemoPage() {
               color: "var(--wi-ink)",
               fontVariantNumeric: "tabular-nums",
             }}>
-              <VendorOrbDemoSelector vendor={demoVendor} />
+              <VendorFieldAuthenticClient vendor={demoVendor} />
             </div>
           </div>
         </div>
