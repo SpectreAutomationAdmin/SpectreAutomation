@@ -665,35 +665,24 @@ export function classifyProbe(args: {
   };
 }
 
-// WI-SYNC-1h (2026-10-18) — exported so the manual-refresh reverify
-// loop can tombstone an active-WI email after a direct Graph probe
-// finds it in Deleted Items.  Mirrors the main sweep's apply path
-// so the Spectre-initiated delete loop prevention + archive-vs-delete
-// semantics are inherited unchanged.
+// WI-SYNC-1h (2026-10-18) — probe-confirmed tombstone.  The sweep
+// only calls this AFTER classifyProbe returned TOMBSTONE_AND_
+// SUPPRESS, which only fires for PRESENT_DELETED_ITEMS.  The
+// probe-confirmed path delegates to completeOutlookDetectedDelete
+// (reverify-active.ts) which bypasses handleEmailEvidenceDeleted's
+// historical-archive guard — the guard was designed for the
+// delta-sync @removed event where the current folder is unknown.
+// Here the folder is known (Deleted Items), so the guard would
+// mis-attribute the delete to a past archive and leave the WI
+// unsuppressed.
 export async function applyTombstone(args: {
   emailMessageId: string;
   clubId: string;
 }): Promise<void> {
-  // Flip softDeletedAt only when not already set — strict
-  // idempotency.  The companion WorkIntakeItem transition is
-  // delegated to handleEmailEvidenceDeleted which has its own
-  // RESOLVED/SUPPRESSED early returns + Spectre-initiated-archive
-  // reconciliation guard + EVIDENCE_DELETED audit trail.
-  const existing = await prisma.emailMessage.findUnique({
-    where: { id: args.emailMessageId },
-    select: { id: true, clubId: true, softDeletedAt: true },
-  });
-  if (!existing) return;
-  if (existing.clubId !== args.clubId) return; // defence-in-depth tenant guard
-  if (!existing.softDeletedAt) {
-    await prisma.emailMessage.update({
-      where: { id: existing.id },
-      data: { softDeletedAt: new Date(), lastSyncedAt: new Date() },
-    });
-  }
-  await handleEmailEvidenceDeleted({
-    clubId: args.clubId,
+  const { completeOutlookDetectedDelete } = await import("./reverify-active");
+  await completeOutlookDetectedDelete({
     emailMessageId: args.emailMessageId,
+    clubId: args.clubId,
   });
 }
 

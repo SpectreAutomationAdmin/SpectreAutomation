@@ -54,28 +54,30 @@ import { getFreshDelegatedAccessToken } from "./connect";
 import { classifyProbe } from "./reconciliation";
 import { logger } from "@/lib/observability/logger";
 
-// WI-SYNC-1h (2026-10-18) — the reverify path cannot delegate the
-// WI side of the tombstone to handleEmailEvidenceDeleted because
-// that function has a historical-archive guard: if ANY SUCCEEDED
-// OutlookArchiveMutation exists for the (workIntakeItemId,
-// emailMessageId) pair, the handler records
+// WI-SYNC-1h (2026-10-18) — the probe-confirmed tombstone path
+// cannot delegate the WI side to handleEmailEvidenceDeleted
+// because that function has a historical-archive guard: if ANY
+// SUCCEEDED OutlookArchiveMutation exists for the
+// (workIntakeItemId, emailMessageId) pair, the handler records
 // EVIDENCE_ARCHIVED and short-circuits.  The guard was designed
 // for the Inbox-scoped delta's `@removed` event, where the current
 // folder is unknown and the mutation history is the only signal.
 //
-// In the reverify path, probeMessage has ALREADY confirmed that
+// In the probe path, probeMessage has ALREADY confirmed that
 // the current folder is Deleted Items (not Archive).  A past
 // archive is historical and irrelevant to the current state —
 // the user has moved the message to Deleted Items in Outlook
 // since whatever archive we did previously, and the user's intent
 // is clear.
 //
-// This helper is a reverify-specific tombstone that preserves the
+// This helper is a probe-confirmed tombstone that preserves the
 // invariants the general handler cares about (RESOLVED /
 // SUPPRESSED early return, userDismissedAt preservation,
 // Spectre-initiated DELETE loop guard via OutlookDeleteMutation,
 // statusBeforeSuppression capture) WITHOUT the archive guard.
-async function completeOutlookDetectedDelete(args: {
+// Exported so the reconciliation sweep's applyTombstone can share
+// it — both paths probe before invoking, so both benefit.
+export async function completeOutlookDetectedDelete(args: {
   clubId: string;
   emailMessageId: string;
 }): Promise<"SUPPRESSED" | "LOOP_RECONCILED" | "DISMISSED_PRESERVED" | "ALREADY_FINAL" | "NO_LINK"> {
