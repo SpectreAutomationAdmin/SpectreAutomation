@@ -51,8 +51,118 @@
 import { prisma } from "@/lib/prisma";
 import { getMicrosoftDelegatedProvider } from "@/lib/integrations/microsoft-graph-delegated";
 import { getFreshDelegatedAccessToken } from "./connect";
-import { applyTombstone, classifyProbe } from "./reconciliation";
+import { classifyProbe } from "./reconciliation";
 import { logger } from "@/lib/observability/logger";
+
+// WI-SYNC-1h (2026-10-18) — the reverify path cannot delegate the
+// WI side of the tombstone to handleEmailEvidenceDeleted because
+// that function has a historical-archive guard: if ANY SUCCEEDED
+// OutlookArchiveMutation exists for the (workIntakeItemId,
+// emailMessageId) pair, the handler records
+// EVIDENCE_ARCHIVED and short-circuits.  The guard was designed
+// for the Inbox-scoped delta's `@removed` event, where the current
+// folder is unknown and the mutation history is the only signal.
+//
+// In the reverify path, probeMessage has ALREADY confirmed that
+// the current folder is Deleted Items (not Archive).  A past
+// archive is historical and irrelevant to the current state —
+// the user has moved the message to Deleted Items in Outlook
+// since whatever archive we did previously, and the user's intent
+// is clear.
+//
+// This helper is a reverify-specific tombstone that preserves the
+// invariants the general handler cares about (RESOLVED /
+// SUPPRESSED early return, userDismissedAt preservation,
+// Spectre-initiated DELETE loop guard via OutlookDeleteMutation,
+// statusBeforeSuppression capture) WITHOUT the archive guard.
+async function completeOutlookDetectedDelete(args: {
+  clubId: string;
+  emailMessageId: string;
+}): Promise<"SUPPRESSED" | "LOOP_RECONCILED" | "DISMISSED_PRESERVED" | "ALREADY_FINAL" | "NO_LINK"> {
+  const existing = await prisma.emailMessage.findUnique({
+    where: { id: args.emailMessageId },
+    select: { id: true, clubId: true, softDeletedAt: true },
+  });
+  if (!existing) return "NO_LINK";
+  if (existing.clubId !== args.clubId) return "NO_LINK";
+  if (!existing.softDeletedAt) {
+    await prisma.emailMessage.update({
+      where: { id: existing.id },
+      data: { softDeletedAt: new Date(), lastSyncedAt: new Date() },
+    });
+  }
+  const link = await prisma.emailWorkIntakeOrigin.findFirst({
+    where: { emailMessageId: args.emailMessageId, role: "PRIMARY" },
+    include: {
+      workIntakeItem: {
+        select: {
+          id: true, clubId: true, status: true,
+          statusBeforeSuppression: true, userDismissedAt: true,
+        },
+      },
+    },
+  });
+  if (!link) return "NO_LINK";
+  if (link.workIntakeItem.clubId !== args.clubId) return "NO_LINK";
+  if (link.workIntakeItem.status === "RESOLVED" || link.workIntakeItem.status === "SUPPRESSED") {
+    return "ALREADY_FINAL";
+  }
+  if (link.workIntakeItem.userDismissedAt) {
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_RESTORED_DISMISSED",
+        note: "User dismissal preserved on Outlook-detected delete (reverify path).",
+      },
+    });
+    return "DISMISSED_PRESERVED";
+  }
+  // Spectre-initiated DELETE loop guard — if we JUST issued the
+  // delete via deleteOutlookMessageForWorkIntake, the WI is
+  // already SUPPRESSED and this path should not re-fire the
+  // transition.  (The RESOLVED/SUPPRESSED early return above
+  // normally catches this, but the guard is kept for parity with
+  // handleEmailEvidenceDeleted.)
+  const ourDelete = await prisma.outlookDeleteMutation.findFirst({
+    where: {
+      workIntakeItemId: link.workIntakeItemId,
+      emailMessageId: args.emailMessageId,
+      status: "SUCCEEDED",
+    },
+    select: { id: true },
+  });
+  if (ourDelete) {
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_DELETE_RECONCILED",
+        note: "Graph confirmed Spectre-initiated Delete move (reverify path) — no additional state change.",
+      },
+    });
+    return "LOOP_RECONCILED";
+  }
+  const captureBefore =
+    link.workIntakeItem.statusBeforeSuppression == null
+      ? link.workIntakeItem.status
+      : link.workIntakeItem.statusBeforeSuppression;
+  await prisma.$transaction([
+    prisma.workIntakeItem.update({
+      where: { id: link.workIntakeItemId },
+      data: {
+        status: "SUPPRESSED",
+        statusBeforeSuppression: captureBefore,
+      },
+    }),
+    prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_DELETED",
+        note: "Source email found in Outlook Deleted Items by manual-refresh reverify.",
+      },
+    }),
+  ]);
+  return "SUPPRESSED";
+}
 
 export interface ReverifyResult {
   reverifiedCount: number;
@@ -210,9 +320,14 @@ export async function reverifyWorkIntakeEmails(args: {
               break;
             }
             case "PRESENT_DELETED_ITEMS": {
-              // Smallest reliable correction (founder's §3): tombstone
-              // + call handleEmailEvidenceDeleted (idempotent).
-              await applyTombstone({
+              // Reverify-specific tombstone — bypasses the general
+              // handler's historical-archive guard, because the
+              // probe has already proved the message is CURRENTLY
+              // in Deleted Items (not Archive).  Preserves the
+              // RESOLVED/SUPPRESSED early return, userDismissedAt
+              // preservation, DELETE-loop guard, and
+              // statusBeforeSuppression capture.
+              await completeOutlookDetectedDelete({
                 emailMessageId: r.emailId,
                 clubId: args.clubId,
               });
@@ -230,10 +345,12 @@ export async function reverifyWorkIntakeEmails(args: {
               break;
             }
             case "DELETED": {
-              // 404 — the message is gone entirely.  Treat as a
-              // tombstone (same as a Deleted Items move, from
-              // Spectre's perspective: the user cannot see it).
-              await applyTombstone({
+              // 404 — the message is gone entirely.  Same reverify-
+              // specific tombstone path as PRESENT_DELETED_ITEMS:
+              // Graph confirms the message cannot be the result of
+              // an archive, so the historical-archive guard would
+              // be wrong here too.
+              await completeOutlookDetectedDelete({
                 emailMessageId: r.emailId,
                 clubId: args.clubId,
               });

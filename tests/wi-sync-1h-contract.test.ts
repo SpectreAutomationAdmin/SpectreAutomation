@@ -44,22 +44,40 @@ describe("WI-SYNC-1h §1 · refresh handler calls Graph for folder presence", ()
   });
 });
 
-describe("WI-SYNC-1h §2 · reverify inherits sweep semantics", () => {
-  it("imports classifyProbe + applyTombstone from reconciliation.ts", () => {
+describe("WI-SYNC-1h §2 · reverify shares classification + bypasses historical-archive guard", () => {
+  it("imports classifyProbe from reconciliation.ts", () => {
     expect(REVERIFY).toMatch(
-      /import\s*\{\s*applyTombstone,\s*classifyProbe\s*\}\s*from\s*"\.\/reconciliation"/,
+      /import\s*\{\s*classifyProbe\s*\}\s*from\s*"\.\/reconciliation"/,
     );
   });
-  it("applyTombstone is exported from reconciliation.ts", () => {
-    expect(RECONCILE).toMatch(/export async function applyTombstone\(args:/);
-  });
-  it("acts on PRESENT_DELETED_ITEMS by calling applyTombstone", () => {
+  it("acts on PRESENT_DELETED_ITEMS via completeOutlookDetectedDelete (bypasses archive guard)", () => {
     expect(REVERIFY).toMatch(
-      /case "PRESENT_DELETED_ITEMS":[\s\S]*?applyTombstone\(/,
+      /case "PRESENT_DELETED_ITEMS":[\s\S]*?completeOutlookDetectedDelete\(/,
     );
   });
-  it("acts on DELETED (Graph 404) by calling applyTombstone", () => {
-    expect(REVERIFY).toMatch(/case "DELETED":[\s\S]*?applyTombstone\(/);
+  it("acts on DELETED (Graph 404) via completeOutlookDetectedDelete", () => {
+    expect(REVERIFY).toMatch(/case "DELETED":[\s\S]*?completeOutlookDetectedDelete\(/);
+  });
+  it("completeOutlookDetectedDelete does NOT consult outlookArchiveMutation", () => {
+    // The archive guard is the exact thing we're bypassing — if
+    // this test ever fails, the reverify tombstone is back under
+    // the historical-archive guard and the WI-SYNC-1h regression
+    // is live again.
+    const fn = REVERIFY.match(/async function completeOutlookDetectedDelete\([\s\S]*?^}/m);
+    expect(fn).toBeTruthy();
+    expect(fn![0]).not.toMatch(/outlookArchiveMutation/);
+  });
+  it("reverify module consults outlookDeleteMutation for loop prevention", () => {
+    expect(REVERIFY).toMatch(/outlookDeleteMutation\.findFirst/);
+    expect(REVERIFY).toMatch(/EVIDENCE_DELETE_RECONCILED/);
+  });
+  it("reverify module preserves RESOLVED/SUPPRESSED early return + userDismissedAt", () => {
+    expect(REVERIFY).toMatch(/status === "RESOLVED" \|\| link\.workIntakeItem\.status === "SUPPRESSED"/);
+    expect(REVERIFY).toMatch(/link\.workIntakeItem\.userDismissedAt/);
+  });
+  it("reverify module captures statusBeforeSuppression + writes EVIDENCE_DELETED", () => {
+    expect(REVERIFY).toMatch(/statusBeforeSuppression:\s*captureBefore/);
+    expect(REVERIFY).toMatch(/action:\s*"EVIDENCE_DELETED"/);
   });
   it("acts on PRESENT_INBOX by updating isRead only when it changed", () => {
     expect(REVERIFY).toMatch(
@@ -104,11 +122,12 @@ describe("WI-SYNC-1h §5 · no WI duplication", () => {
     expect(REVERIFY).not.toMatch(/workIntakeItem\.create/);
     expect(REVERIFY).not.toMatch(/upsertEmailIntake/);
   });
-  it("reverify only reads from workIntakeItem (findMany + select)", () => {
-    // The only workIntakeItem reference should be the read.
-    const refs = REVERIFY.match(/prisma\.workIntakeItem\./g) ?? [];
-    expect(refs.length).toBe(1);
+  it("reverify reads WIs + updates existing ones; never creates new ones", () => {
+    // The suppression transaction legitimately calls
+    // workIntakeItem.update, but the module must never call
+    // workIntakeItem.create.
     expect(REVERIFY).toMatch(/prisma\.workIntakeItem\.findMany/);
+    expect(REVERIFY).not.toMatch(/prisma\.workIntakeItem\.create/);
   });
 });
 
