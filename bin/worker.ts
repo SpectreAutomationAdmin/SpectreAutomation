@@ -16,6 +16,7 @@ import { logger } from "../src/lib/observability/logger";
 import { tickAutoSync } from "../src/lib/mailbox/auto-sync-scheduler";
 import { tickReconciliationSweep } from "../src/lib/mailbox/reconciliation-scheduler";
 import { tickSubscriptionMaintenance } from "../src/lib/mailbox/subscription-scheduler";
+import { tickActiveReverify } from "../src/lib/mailbox/active-reverify-scheduler";
 import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
 
 const queues = process.argv.slice(2);
@@ -50,6 +51,14 @@ async function main() {
       // 5 min).  Feature-gated; collapses to zero work when
       // MAILBOX_INTEGRATION_ENABLED is false.
       await tickSubscriptionMaintenance();
+      // WI-SYNC-1i (2026-10-19) — automatic active-WI reverify tick.
+      // Enqueues MAILBOX_ACTIVE_REVERIFY jobs for every connected
+      // mailbox with at least one active email-backed WI.  Closes
+      // the automatic-convergence gap left by Microsoft Graph's
+      // unreliable Inbox-delta `@removed` channel.  Default cadence
+      // 60 s; feature-gated; time-bucketed idempotency; one job per
+      // mailbox per bucket.
+      await tickActiveReverify();
       // Payroll-3D-3B Slice 3 (2026-09-06) — periodic sweep of
       // manager-relevant pay periods → enqueue ensure jobs so the
       // approval WI obligation always exists even if inline

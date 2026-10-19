@@ -186,6 +186,11 @@ export interface ReverifyResult {
 export async function reverifyWorkIntakeEmails(args: {
   clubId: string;
   callerUserId: string;
+  /** When set, restricts the scan to WIs whose PRIMARY email lives on
+   *  this mailbox connection — used by the WI-SYNC-1i automatic
+   *  per-mailbox scheduler so each tick only probes its own mailbox's
+   *  messages (no cross-mailbox fan-out). */
+  mailboxConnectionId?: string;
   limit?: number;
 }): Promise<ReverifyResult> {
   const limit = Math.min(100, Math.max(1, args.limit ?? 50));
@@ -204,7 +209,14 @@ export async function reverifyWorkIntakeEmails(args: {
     where: {
       clubId: args.clubId,
       status: { in: ["OPEN", "IN_PROGRESS", "DEFERRED", "INFORMATIONAL"] },
-      emailOrigins: { some: { role: "PRIMARY" } },
+      emailOrigins: args.mailboxConnectionId
+        ? {
+            some: {
+              role: "PRIMARY",
+              emailMessage: { mailboxConnectionId: args.mailboxConnectionId },
+            },
+          }
+        : { some: { role: "PRIMARY" } },
     },
     select: {
       id: true,

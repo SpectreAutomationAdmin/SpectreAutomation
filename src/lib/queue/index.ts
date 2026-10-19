@@ -45,6 +45,14 @@ export type JobKind =
   // verified PRESENT_INBOX but the local DB transaction failed.
   // Handler calls completeRestoreMutation (idempotent).
   | "MAILBOX_RESTORE_COMPLETION"
+  // WI-SYNC-1i (2026-10-19) — Automatic active-WI reverify.  The
+  // active-reverify scheduler enqueues one job per connected
+  // mailbox per 60-s bucket; the handler probes each active
+  // email-backed WI's current folder via probeMessage +
+  // classifyProbe + completeOutlookDetectedDelete.  Closes the
+  // automatic-convergence gap left by Microsoft Graph's unreliable
+  // Inbox-delta `@removed` channel.
+  | "MAILBOX_ACTIVE_REVERIFY"
   // Sprint 3 · Checkpoint 15P-7 — post-commit Outlook archive of
   // the source email after an AP invoice is successfully posted.
   // Idempotent per invoiceId: rerunning with the same payload is a

@@ -295,6 +295,58 @@ registerHandler<{
   return result;
 });
 
+// WI-SYNC-1i (2026-10-19) — MAILBOX_ACTIVE_REVERIFY.
+//
+// Automatic per-mailbox reverify of active email-backed Work
+// Intake items.  Enqueued by active-reverify-scheduler.ts every
+// 60 s per connected mailbox.  Handler delegates to the shared
+// reverifyWorkIntakeEmails service (also used by the manual Feed
+// Sync refresh), scoped to the mailbox via mailboxConnectionId
+// so each tick's Graph work is bounded + non-overlapping.
+registerHandler<{
+  mailboxConnectionId: string;
+  callerUserId: string | null;
+}>("MAILBOX_ACTIVE_REVERIFY", async ({ payload }) => {
+  const mcId = payload?.mailboxConnectionId;
+  if (typeof mcId !== "string" || mcId.length === 0) {
+    throw new Error("MAILBOX_ACTIVE_REVERIFY payload missing mailboxConnectionId");
+  }
+  const { prisma } = await import("@/lib/prisma");
+  const mbx = await prisma.mailboxConnection.findUnique({
+    where: { id: mcId },
+    select: { id: true, clubId: true, userId: true, status: true },
+  });
+  if (!mbx) {
+    throw new Error(
+      `MAILBOX_ACTIVE_REVERIFY: mailboxConnectionId ${mcId} not found`,
+    );
+  }
+  if (mbx.status !== "CONNECTED") {
+    logger.info("mailbox.active-reverify.skipped_not_connected", {
+      mailboxConnectionIdTail: mbx.id.slice(-6),
+      status: mbx.status,
+    });
+    return { outcome: "SKIPPED", reason: "not_connected" };
+  }
+  const { reverifyWorkIntakeEmails } = await import("../mailbox/reverify-active");
+  const summary = await reverifyWorkIntakeEmails({
+    clubId: mbx.clubId,
+    callerUserId: payload?.callerUserId ?? mbx.userId,
+    mailboxConnectionId: mbx.id,
+    limit: 50,
+  });
+  return {
+    outcome: "COMPLETED",
+    reverifiedCount: summary.reverifiedCount,
+    tombstonedCount: summary.tombstonedCount,
+    isReadUpdatedCount: summary.isReadUpdatedCount,
+    archivePreservedCount: summary.archivePreservedCount,
+    otherFolderCount: summary.otherFolderCount,
+    deletedCount: summary.deletedCount,
+    errors: summary.errors,
+  };
+});
+
 // WI-SYNC-1g (2026-10-18) — MAILBOX_RESTORE_COMPLETION.
 //
 // Partial-failure recovery for Spectre→Outlook restore.  Enqueued
@@ -437,4 +489,5 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_RECONCILIATION_HEARTBEAT: "IMPLEMENTED",
   MAILBOX_MARK_READ: "IMPLEMENTED",
   MAILBOX_RESTORE_COMPLETION: "IMPLEMENTED",
+  MAILBOX_ACTIVE_REVERIFY: "IMPLEMENTED",
 } as const;
