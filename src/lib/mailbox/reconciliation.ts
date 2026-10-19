@@ -665,7 +665,12 @@ export function classifyProbe(args: {
   };
 }
 
-async function applyTombstone(args: {
+// WI-SYNC-1h (2026-10-18) — exported so the manual-refresh reverify
+// loop can tombstone an active-WI email after a direct Graph probe
+// finds it in Deleted Items.  Mirrors the main sweep's apply path
+// so the Spectre-initiated delete loop prevention + archive-vs-delete
+// semantics are inherited unchanged.
+export async function applyTombstone(args: {
   emailMessageId: string;
   clubId: string;
 }): Promise<void> {
