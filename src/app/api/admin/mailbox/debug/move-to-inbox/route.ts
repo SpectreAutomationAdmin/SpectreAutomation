@@ -24,6 +24,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { isMailboxIntegrationEnabled } from "@/lib/env";
 import { getMicrosoftDelegatedProvider } from "@/lib/integrations/microsoft-graph-delegated";
 import { getFreshDelegatedAccessToken } from "@/lib/mailbox/connect";
+import { restoreOutlookMessageForWorkIntake } from "@/lib/mailbox/restore-message";
 import { audit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       clubId: true,
       graphMessageId: true,
       immutableId: true,
+      softDeletedAt: true,
       mailboxConnectionId: true,
     },
   });
@@ -72,6 +74,40 @@ export async function POST(req: NextRequest) {
   }
   if (email.clubId !== clubId) {
     return NextResponse.json({ error: "cross_tenant" }, { status: 403 });
+  }
+
+  // WI-SYNC-1g — if the email is softDeleted, this is a RESTORE
+  // operation.  Delegate to the hardened restore service so the
+  // Spectre-side state (softDeletedAt + WI status) flips inline
+  // after Graph confirms + probe verifies PRESENT_INBOX.  Falls
+  // back to the raw Graph move for non-softDeleted messages
+  // (e.g. moving from Archive → Inbox without a prior tombstone).
+  if (email.softDeletedAt) {
+    const link = await prisma.emailWorkIntakeOrigin.findFirst({
+      where: { emailMessageId: email.id, role: "PRIMARY" },
+      select: { workIntakeItemId: true },
+    });
+    if (link) {
+      const result = await restoreOutlookMessageForWorkIntake({
+        clubId,
+        workIntakeItemId: link.workIntakeItemId,
+        principal,
+      });
+      const httpStatus = result.status === "SUCCEEDED"
+        ? 200
+        : result.status === "ALREADY_RESTORED"
+          ? 200
+          : result.status === "GRAPH_OK_DB_PENDING"
+            ? 202
+            : result.status === "NOT_APPLICABLE"
+              ? 409
+              : 502;
+      return NextResponse.json(
+        { ok: result.status === "SUCCEEDED", ...result },
+        { status: httpStatus },
+      );
+    }
+    // Fall through to raw Graph move if no PRIMARY WI link exists.
   }
   const mailbox = await prisma.mailboxConnection.findUnique({
     where: { id: email.mailboxConnectionId },

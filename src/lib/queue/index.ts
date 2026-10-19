@@ -40,6 +40,11 @@ export type JobKind =
   | "MAILBOX_RENEW_SUBSCRIPTION"
   | "MAILBOX_ATTACHMENT_FETCH"
   | "MAILBOX_RECONCILIATION_HEARTBEAT"
+  // WI-SYNC-1g (2026-10-18) — Spectre→Outlook restore partial-
+  // failure recovery.  Enqueued when Graph move succeeded + probe
+  // verified PRESENT_INBOX but the local DB transaction failed.
+  // Handler calls completeRestoreMutation (idempotent).
+  | "MAILBOX_RESTORE_COMPLETION"
   // Sprint 3 · Checkpoint 15P-7 — post-commit Outlook archive of
   // the source email after an AP invoice is successfully posted.
   // Idempotent per invoiceId: rerunning with the same payload is a

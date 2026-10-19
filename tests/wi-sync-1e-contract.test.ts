@@ -18,6 +18,13 @@ const RESTORE_ROUTE = readFileSync(
   join(process.cwd(), "src/app/api/work-intake/[id]/restore-email/route.ts"),
   "utf8",
 );
+// WI-SYNC-1g (2026-10-18) — the restore route now delegates to
+// restoreOutlookMessageForWorkIntake.  Behavioural assertions
+// moved from the route to the service file.
+const RESTORE_SERVICE = readFileSync(
+  join(process.cwd(), "src/lib/mailbox/restore-message.ts"),
+  "utf8",
+);
 const DEBUG_ROUTE = readFileSync(
   join(process.cwd(), "src/app/api/admin/mailbox/debug/move-to-inbox/route.ts"),
   "utf8",
@@ -108,43 +115,50 @@ describe("WI-SYNC-1e · EmailIntakeCard integration", () => {
   });
 });
 
-describe("WI-SYNC-1e · user-facing /restore-email route", () => {
-  it("401 unauthenticated / 400 no active club / 403 cross-tenant / 404 feature off / 409 no eligible email / 422 mailbox disconnected / 502 Graph error", () => {
+describe("WI-SYNC-1e · user-facing /restore-email route (behaviour in service)", () => {
+  it("route gates feature flag / auth / active club", () => {
     expect(RESTORE_ROUTE).toMatch(/"unauthenticated"/);
     expect(RESTORE_ROUTE).toMatch(/"no_active_club"/);
-    expect(RESTORE_ROUTE).toMatch(/"cross_tenant"/);
     expect(RESTORE_ROUTE).toMatch(/"mailbox_integration_disabled"/);
-    expect(RESTORE_ROUTE).toMatch(/"no_primary_email_origin"/);
-    expect(RESTORE_ROUTE).toMatch(/"email_not_soft_deleted"/);
-    expect(RESTORE_ROUTE).toMatch(/"mailbox_not_connected"/);
-    expect(RESTORE_ROUTE).toMatch(/"graph_error"/);
   });
-  it("tenant-guards both the WI's clubId and the mailbox's clubId", () => {
-    expect(RESTORE_ROUTE).toMatch(/link\.workIntakeItem\.clubId !== clubId/);
-    expect(RESTORE_ROUTE).toMatch(/mailbox\.clubId !== clubId/);
+  it("WI-SYNC-1g: route is a thin delegator to restoreOutlookMessageForWorkIntake", () => {
+    expect(RESTORE_ROUTE).toMatch(/restoreOutlookMessageForWorkIntake/);
+    // The route must NOT re-implement Graph client logic.
+    expect(RESTORE_ROUTE).not.toMatch(/getMicrosoftDelegatedProvider/);
+    expect(RESTORE_ROUTE).not.toMatch(/getFreshDelegatedAccessToken/);
+    // Routes NEVER mutate db directly — the service owns transactions.
+    expect(RESTORE_ROUTE).not.toMatch(/prisma\./);
   });
-  it("uses the Graph provider moveMessage with destination=inbox + ImmutableId", () => {
-    expect(RESTORE_ROUTE).toMatch(/getMicrosoftDelegatedProvider\(\)\.moveMessage\(/);
-    expect(RESTORE_ROUTE).toMatch(/destinationId:\s*"inbox"/);
-    expect(RESTORE_ROUTE).toMatch(/immutableId \|\| link\.emailMessage\.graphMessageId/);
+  it("service tenant-guards both the WI's clubId and the mailbox's clubId", () => {
+    expect(RESTORE_SERVICE).toMatch(/link\.workIntakeItem\.clubId !== args\.clubId/);
+    expect(RESTORE_SERVICE).toMatch(/mailbox\.clubId !== args\.clubId/);
   });
-  it("writes an audit row — action=work-intake.restore-email", () => {
-    expect(RESTORE_ROUTE).toMatch(/action:\s*"work-intake\.restore-email"/);
+  it("service uses Graph moveMessage with destination=inbox + ImmutableId", () => {
+    expect(RESTORE_SERVICE).toMatch(/provider\.moveMessage\(/);
+    expect(RESTORE_SERVICE).toMatch(/destinationId:\s*INBOX_DESTINATION/);
+    expect(RESTORE_SERVICE).toMatch(/INBOX_DESTINATION\s*=\s*"inbox"/);
+    expect(RESTORE_SERVICE).toMatch(
+      /link\.emailMessage\.immutableId \|\| link\.emailMessage\.graphMessageId/,
+    );
   });
-  it("does NOT clear softDeletedAt or flip WI status in the API handler — delta sync owns the restore", () => {
-    // The handler ONLY does the Graph move + audit; it does not
-    // write to EmailMessage or WorkIntakeItem.
-    expect(RESTORE_ROUTE).not.toMatch(/prisma\.emailMessage\.update/);
-    expect(RESTORE_ROUTE).not.toMatch(/prisma\.workIntakeItem\.update/);
+  it("service writes an audit row — action=work-intake.restore-email (name preserved from 1e)", () => {
+    expect(RESTORE_SERVICE).toMatch(/action:\s*"work-intake\.restore-email"/);
   });
-  it("never touches APInvoice / JournalEntry / Approval / Payment", () => {
+  it("WI-SYNC-1g §1 inversion: service DOES clear softDeletedAt (in-request, not via delta)", () => {
+    // The 1g hardening replaces the "delta owns softDeletedAt" rule.
+    // The service MUST flip softDeletedAt=null inline, in a single
+    // transaction with the mutation=SUCCEEDED update.
+    expect(RESTORE_SERVICE).toMatch(/softDeletedAt:\s*null/);
+    expect(RESTORE_SERVICE).toMatch(/prisma\.\$transaction\(/);
+  });
+  it("service never touches APInvoice / JournalEntry / Approval / Payment", () => {
     for (const forbidden of [
       /prisma\.aPInvoice\./,
       /prisma\.journalEntry\./,
-      /prisma\.approval\./,
-      /prisma\.payment\./,
+      /prisma\.approvalRequest\./,
+      /prisma\.vendorPayment\./,
     ]) {
-      expect(RESTORE_ROUTE).not.toMatch(forbidden);
+      expect(RESTORE_SERVICE).not.toMatch(forbidden);
     }
   });
 });

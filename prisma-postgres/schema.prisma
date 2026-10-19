@@ -10416,6 +10416,46 @@ model OutlookDeleteMutation {
   @@index([mailboxConnectionId, emailMessageId, status])
 }
 
+// WI-SYNC-1g (2026-10-18) — Outlook restore (move-to-Inbox) mutation.
+// Durable record for a Spectre-initiated restore of an Outlook
+// message.  Mirrors OutlookDeleteMutation (WI-SYNC-1c).  Status
+// values:
+//   PENDING                 — row created but Graph call not yet started.
+//   RUNNING                 — Graph moveMessage in-flight.
+//   GRAPH_OK_DB_PENDING     — Graph move succeeded + probe confirmed
+//                             PRESENT_INBOX, but the DB transaction
+//                             (clear softDeletedAt + WI restore) did
+//                             not complete.  The reconciliation sweep
+//                             (and the dedicated recovery job
+//                             enqueued at that point) picks these up
+//                             and completes the DB side idempotently.
+//   SUCCEEDED               — Graph + DB both complete.
+//   RETRYABLE               — Graph transient error (429 / 5xx).
+//   FAILED_TERMINAL         — Graph permanent error (404 / 403).
+model OutlookRestoreMutation {
+  id                         String    @id @default(cuid())
+  clubId                     String
+  workIntakeItemId           String
+  emailMessageId             String
+  originalGraphMessageId     String
+  resultingGraphMessageId    String?
+  originalFolderId           String?
+  destinationFolderId        String?
+  mailboxConnectionId        String
+  triggeredByUserId          String?
+  status                     String    @default("PENDING")
+  attemptCount               Int       @default(0)
+  lastAttemptAt              DateTime?
+  completedAt                DateTime?
+  errorCode                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
+}
+
 // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
 // See prisma-postgres/schema.prisma for full docs; this is the
 // SQLite mirror for dev/test parity.

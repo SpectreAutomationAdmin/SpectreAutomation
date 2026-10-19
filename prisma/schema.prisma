@@ -10648,6 +10648,39 @@ model OutlookDeleteMutation {
   @@index([mailboxConnectionId, emailMessageId, status])
 }
 
+// WI-SYNC-1g (2026-10-18) — Outlook restore (move-to-Inbox) mutation.
+// Mirrors OutlookDeleteMutation.  See prisma-postgres/schema.prisma
+// for the canonical doc block.
+model OutlookRestoreMutation {
+  id                         String    @id @default(cuid())
+  clubId                     String
+  workIntakeItemId           String
+  emailMessageId             String
+  originalGraphMessageId     String
+  resultingGraphMessageId    String?
+  originalFolderId           String?
+  destinationFolderId        String?
+  mailboxConnectionId        String
+  triggeredByUserId          String?
+  // PENDING | RUNNING | GRAPH_OK_DB_PENDING | SUCCEEDED | RETRYABLE | FAILED_TERMINAL
+  // GRAPH_OK_DB_PENDING marks the specific partial-failure the
+  // founder's WI-SYNC-1g directive asks for: Graph move succeeded
+  // + probe confirmed PRESENT_INBOX but the local DB transaction
+  // (clear softDeletedAt + WI restore) failed.  The reconciliation
+  // sweep picks these up and completes the DB side idempotently.
+  status                     String    @default("PENDING")
+  attemptCount               Int       @default(0)
+  lastAttemptAt              DateTime?
+  completedAt                DateTime?
+  errorCode                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
+}
+
 // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
 // See prisma-postgres/schema.prisma for full docs; this is the
 // SQLite mirror for dev/test parity.

@@ -189,6 +189,40 @@ export async function reconcileMailbox(
     );
   }
 
+  // WI-SYNC-1g (2026-10-18) — before the main probe loop, finish
+  // any Spectre→Outlook restore that stalled with Graph succeeded
+  // but DB uncommitted.  These rows carry status
+  // GRAPH_OK_DB_PENDING and are the specific partial-failure the
+  // founder's WI-SYNC-1g §4 asks us to recover.  Idempotent: the
+  // completion function short-circuits if the mutation is already
+  // SUCCEEDED.  Separate from the probe sweep (no Graph call
+  // needed — we already have proof the message is in Inbox from
+  // the probe that ran inside restoreOutlookMessageForWorkIntake).
+  if (!args.dryRun) {
+    const pending = await prisma.outlookRestoreMutation.findMany({
+      where: {
+        clubId: args.clubId,
+        mailboxConnectionId: args.mailboxConnectionId,
+        status: "GRAPH_OK_DB_PENDING",
+      },
+      select: { id: true },
+      take: 50,
+    });
+    if (pending.length > 0) {
+      const { completeRestoreMutation } = await import("./restore-message");
+      for (const row of pending) {
+        try {
+          await completeRestoreMutation({ mutationId: row.id });
+        } catch (err) {
+          logger.warn("mailbox.reconcile.restore_completion_failed", {
+            mutationIdTail: row.id.slice(-6),
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+  }
+
   // WI-SYNC-1b (2026-10-18) — cursor-based advancement for
   // scheduled sweeps.  Scheduled runs (triggerKind
   // RECONCILIATION_SWEEP) walk older messages across successive

@@ -1,25 +1,14 @@
 // WI-SYNC-1e (2026-10-18) — POST /api/work-intake/[id]/restore-email
-//
-// User-facing restore action.  Moves the WI's source email from
-// wherever it currently lives (Deleted Items / Archive / etc.)
-// back to Inbox, triggering the delta sync's isRestore branch on
-// the next tick (which clears softDeletedAt + flips WI back to
-// its pre-suppression status via handleEmailEvidenceRestored).
-//
-// Different from /api/admin/mailbox/debug/move-to-inbox:
-//   - This endpoint is user-authenticated (ordinary founder role).
-//   - It's scoped to a specific WorkIntakeItem (not raw emailId).
-//   - Tenant-guards via the WI's clubId.
-//   - Suitable for Mission Control card button exposure.
+// WI-SYNC-1g (2026-10-18) — now delegates to restoreOutlookMessage-
+//   ForWorkIntake, which inline-flips Spectre state after Graph
+//   confirms the move + probe verifies PRESENT_INBOX.  No longer
+//   relies on a subsequent delta tick to clear softDeletedAt.
 
 import { NextResponse, type NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { isMailboxIntegrationEnabled } from "@/lib/env";
-import { getMicrosoftDelegatedProvider } from "@/lib/integrations/microsoft-graph-delegated";
-import { getFreshDelegatedAccessToken } from "@/lib/mailbox/connect";
-import { audit } from "@/lib/audit";
+import { restoreOutlookMessageForWorkIntake } from "@/lib/mailbox/restore-message";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,71 +33,27 @@ export async function POST(
   if (!clubId) {
     return NextResponse.json({ error: "no_active_club" }, { status: 400 });
   }
-  const link = await prisma.emailWorkIntakeOrigin.findFirst({
-    where: { workIntakeItemId: params.id, role: "PRIMARY" },
-    include: {
-      workIntakeItem: { select: { id: true, clubId: true } },
-      emailMessage: {
-        select: {
-          id: true, clubId: true, graphMessageId: true, immutableId: true,
-          mailboxConnectionId: true, softDeletedAt: true,
-        },
-      },
-    },
+  const result = await restoreOutlookMessageForWorkIntake({
+    clubId,
+    workIntakeItemId: params.id,
+    principal,
   });
-  if (!link) {
-    return NextResponse.json({ error: "no_primary_email_origin" }, { status: 409 });
-  }
-  if (link.workIntakeItem.clubId !== clubId) {
-    return NextResponse.json({ error: "cross_tenant" }, { status: 403 });
-  }
-  if (!link.emailMessage.softDeletedAt) {
-    return NextResponse.json({ error: "email_not_soft_deleted" }, { status: 409 });
-  }
-  const mailbox = await prisma.mailboxConnection.findUnique({
-    where: { id: link.emailMessage.mailboxConnectionId },
-    select: { id: true, clubId: true, userId: true, status: true },
-  });
-  if (!mailbox || mailbox.clubId !== clubId) {
-    return NextResponse.json({ error: "cross_tenant_mailbox" }, { status: 403 });
-  }
-  if (mailbox.status !== "CONNECTED") {
-    return NextResponse.json({ error: "mailbox_not_connected" }, { status: 422 });
-  }
-  const { accessToken } = await getFreshDelegatedAccessToken({
-    mailboxConnectionId: mailbox.id,
-    callerClubId: clubId,
-    callerUserId: principal.id,
-  });
-  const graphId = link.emailMessage.immutableId || link.emailMessage.graphMessageId;
-  try {
-    const result = await getMicrosoftDelegatedProvider().moveMessage({
-      accessToken,
-      graphMessageId: graphId,
-      destinationId: "inbox",
-    });
-    await audit(principal, {
-      action: "work-intake.restore-email",
-      entityType: "WorkIntakeItem",
-      entityId: params.id,
-      clubId,
-      meta: {
-        emailMessageId: link.emailMessage.id,
-        fromGraphId: graphId,
-        toGraphId: result.resultingGraphMessageId,
-        destinationFolderId: result.destinationFolderId,
-      },
-    });
-    return NextResponse.json({
-      ok: true,
-      emailMessageId: link.emailMessage.id,
-      destinationFolderId: result.destinationFolderId,
-    }, { status: 200 });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json(
-      { error: "graph_error", detail: msg },
-      { status: 502 },
-    );
+  // Map service outcomes to HTTP status codes.  WI-SYNC-1g §4
+  // requires that we DO NOT return an unconditional success when
+  // the two systems disagree: GRAPH_OK_DB_PENDING + GRAPH_DESTINATION_UNVERIFIED
+  // both get non-2xx responses that make the state mismatch visible.
+  switch (result.status) {
+    case "SUCCEEDED":
+      return NextResponse.json(result, { status: 200 });
+    case "ALREADY_RESTORED":
+      return NextResponse.json(result, { status: 200 });
+    case "NOT_APPLICABLE":
+      return NextResponse.json(result, { status: 409 });
+    case "GRAPH_ERROR":
+      return NextResponse.json(result, { status: 502 });
+    case "GRAPH_DESTINATION_UNVERIFIED":
+      return NextResponse.json(result, { status: 502 });
+    case "GRAPH_OK_DB_PENDING":
+      return NextResponse.json(result, { status: 202 });
   }
 }

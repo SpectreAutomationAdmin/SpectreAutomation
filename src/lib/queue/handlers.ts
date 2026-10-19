@@ -295,6 +295,28 @@ registerHandler<{
   return result;
 });
 
+// WI-SYNC-1g (2026-10-18) — MAILBOX_RESTORE_COMPLETION.
+//
+// Partial-failure recovery for Spectre→Outlook restore.  Enqueued
+// by restoreOutlookMessageForWorkIntake when Graph move + probe
+// succeeded but the subsequent DB transaction failed, leaving the
+// mutation row in GRAPH_OK_DB_PENDING.  Handler is idempotent —
+// calling completeRestoreMutation twice is safe.
+registerHandler<{ mutationId: string }>(
+  "MAILBOX_RESTORE_COMPLETION",
+  async ({ payload }) => {
+    const mutationId = payload?.mutationId;
+    if (typeof mutationId !== "string" || mutationId.length === 0) {
+      throw new Error("MAILBOX_RESTORE_COMPLETION payload missing mutationId");
+    }
+    const { completeRestoreMutation } = await import(
+      "../mailbox/restore-message"
+    );
+    const result = await completeRestoreMutation({ mutationId });
+    return { outcome: result.ok ? "COMPLETED" : "SKIPPED", detail: result.detail };
+  },
+);
+
 // ---------------------------------------------------------------------------
 // Sprint 3 · Checkpoint 15X continuation (2026-07-29) — AP_DOCUMENT_OCR.
 //
@@ -414,4 +436,5 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_ATTACHMENT_FETCH: "IMPLEMENTED",
   MAILBOX_RECONCILIATION_HEARTBEAT: "IMPLEMENTED",
   MAILBOX_MARK_READ: "IMPLEMENTED",
+  MAILBOX_RESTORE_COMPLETION: "IMPLEMENTED",
 } as const;
