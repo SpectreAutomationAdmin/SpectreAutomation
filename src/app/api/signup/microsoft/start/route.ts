@@ -42,7 +42,14 @@ export async function POST(req: NextRequest) {
   try {
     const { authorizationUrl } = await startMicrosoftAuth({
       registrationId: reg.id,
-      returnPath: `/signup/t/${encodeURIComponent(token)}/status`,
+      // SIGNUP-1E (2026-10-20) — return to /admin, NOT /status.
+      // After the Microsoft callback persists the verified identity,
+      // the admin page's redirect gate (adminVerifiedAt + adminPosition)
+      // determines whether to show the position form (position=null)
+      // or forward to /status (both captured).  Returning directly
+      // to /status would bypass the position form — the role would
+      // never be collected, and status would render "Pending" forever.
+      returnPath: `/signup/t/${encodeURIComponent(token)}/admin`,
     });
     await transitionStep(reg.id, { step: "ADMIN_PENDING" });
     logger.info("signup.microsoft.redirecting", {

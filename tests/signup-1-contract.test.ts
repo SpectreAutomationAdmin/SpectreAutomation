@@ -277,6 +277,49 @@ describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
   });
 });
 
+describe("SIGNUP-1E · Role prompt-submit-persist chain", () => {
+  it("microsoft/start returns to /admin, NOT /status (so the position form renders after callback)", () => {
+    const S = readFileSync(join(process.cwd(), "src/app/api/signup/microsoft/start/route.ts"), "utf8");
+    expect(S).toMatch(/returnPath:\s*`\/signup\/t\/\$\{encodeURIComponent\(token\)\}\/admin`/);
+    expect(S).not.toMatch(/returnPath:\s*`\/signup\/t\/\$\{encodeURIComponent\(token\)\}\/status`/);
+  });
+  it("admin page's redirect gate requires BOTH adminVerifiedAt AND adminPosition", () => {
+    const A = readFileSync(join(process.cwd(), "src/app/signup/t/[token]/admin/page.tsx"), "utf8");
+    expect(A).toMatch(/if \(reg\.adminVerifiedAt && reg\.adminPosition\)/);
+    expect(A).toMatch(/redirect\(`\/signup\/t\/\$\{encodeURIComponent\(params\.token\)\}\/status`\)/);
+  });
+  it("Status page shows the actual role when adminPosition is set; shows 'Pending' only when null", () => {
+    const S = readFileSync(join(process.cwd(), "src/app/signup/t/[token]/status/page.tsx"), "utf8");
+    // The condition — show adminPosition if set; show Pending if null.
+    expect(S).toMatch(/reg\.adminPosition\s*\?\?\s*<em[^>]*>Pending<\/em>/);
+  });
+});
+
+describe("SIGNUP-1E · No sensitive data in logs", () => {
+  it("Resume-email service never passes the resume URL to the logger", () => {
+    const R = readFileSync(join(process.cwd(), "src/lib/signup/resume-email.ts"), "utf8");
+    // Scan all logger.* calls — none may reference the body / url /
+    // token.  We only log masked email + provider message id.
+    const loggerCalls = R.match(/logger\.(info|warn|error)\(([\s\S]*?)\)/g) ?? [];
+    for (const call of loggerCalls) {
+      expect(call, `logger call must not include resumeUrl: ${call}`).not.toMatch(/resumeUrl/);
+      expect(call, `logger call must not include body: ${call}`).not.toMatch(/\bbody\b/);
+      expect(call, `logger call must not include args\\.resumeToken: ${call}`).not.toMatch(/args\.resumeToken/);
+    }
+  });
+  it("Dev email adapter never prints the body (which contains the URL)", () => {
+    const E = readFileSync(join(process.cwd(), "src/lib/integrations/email.ts"), "utf8");
+    // The one console.log in devEmailAdapter is the subject + recipient only.
+    expect(E).toMatch(/console\.log\(`\[dev:email\] → \$\{to\.email[^`]+\| \$\{subject\}`\)/);
+    // No console.* call whose single-line arguments interpolate `body`.
+    const lineByLine = E.split("\n");
+    const consoleLines = lineByLine.filter((l) => /console\.(log|info|warn|error|debug)/.test(l));
+    for (const l of consoleLines) {
+      expect(l, `console line must not reference body: ${l}`).not.toMatch(/\$\{body\}|,\s*body\b/);
+    }
+  });
+});
+
 describe("SIGNUP-1D · Entra redirect-URI readiness check", () => {
   it("env.ts exports signupRedirectUri() with env-override support", () => {
     const E = readFileSync(join(process.cwd(), "src/lib/env.ts"), "utf8");
