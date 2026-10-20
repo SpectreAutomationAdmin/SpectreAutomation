@@ -22,7 +22,17 @@ function buildCsp(nonce: string, isDev: boolean): string {
     "font-src 'self' data:",
     `connect-src 'self' ${TRUSTED_DOMAINS.join(" ")}`.trim(),
     "frame-ancestors 'none'",
-    "form-action 'self'",
+    // SIGNUP-1C (2026-10-20) — allow form submissions that cross-
+    // origin-navigate to Microsoft's organizational identity
+    // platform.  The /api/signup/microsoft/start route returns a
+    // 303 redirect to https://login.microsoftonline.com/organizations
+    // after creating the OAuth transaction row; without this origin
+    // in form-action, the browser silently drops the cross-origin
+    // navigation and the Microsoft sign-in button appears inert.
+    // Only `login.microsoftonline.com` is allowed — not `.live.com`
+    // or `.microsoft.com` — matching Microsoft's organizational
+    // identity-platform endpoint and no other target.
+    "form-action 'self' https://login.microsoftonline.com",
     // Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) — the
     // DocumentPreviewModal renders PDFs into an <iframe src=blob:...>.
     // Chrome's built-in PDF viewer draws the PDF into an <embed>

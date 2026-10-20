@@ -277,6 +277,25 @@ describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
   });
 });
 
+describe("SIGNUP-1C · CSP form-action permits Microsoft identity navigation", () => {
+  it("middleware form-action directive allows https://login.microsoftonline.com", () => {
+    const MW = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
+    // Must include login.microsoftonline.com or the browser silently
+    // drops the 303 cross-origin navigation and the Microsoft button
+    // appears inert.  This is the exact bug SIGNUP-1C fixed.
+    expect(MW).toMatch(/form-action 'self' https:\/\/login\.microsoftonline\.com/);
+  });
+  it("middleware does NOT regress to the bare 'self' form-action", () => {
+    const MW = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
+    expect(MW).not.toMatch(/"form-action 'self'"/);
+  });
+  it("middleware does not accidentally allow personal-account endpoints (login.live.com / login.microsoft.com)", () => {
+    const MW = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
+    expect(MW).not.toMatch(/form-action[^;]*login\.live\.com/);
+    expect(MW).not.toMatch(/form-action[^;]*login\.microsoft\.com\b/);
+  });
+});
+
 describe("SIGNUP-1 · Canada-only launch (data model future-proof)", () => {
   it("createRegistration enum limits country to SUPPORTED_COUNTRIES = ['CA']", () => {
     expect(REG_SRV).toMatch(/export const SUPPORTED_COUNTRIES = \["CA"\] as const/);
