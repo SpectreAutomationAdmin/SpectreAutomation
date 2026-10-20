@@ -219,6 +219,64 @@ describe("SIGNUP-1 · Non-disclosure guards", () => {
   });
 });
 
+describe("SIGNUP-1 §2 (conditional) · Platform email adapter wired", () => {
+  it("resume-email imports selectPlatformEmailAdapter (NOT the hardcoded dev adapter)", () => {
+    const EMAIL = readFileSync(join(process.cwd(), "src/lib/signup/resume-email.ts"), "utf8");
+    expect(EMAIL).toMatch(/selectPlatformEmailAdapter/);
+    expect(EMAIL).not.toMatch(/import\s*\{\s*devEmailAdapter\s*\}/);
+  });
+  it("selectPlatformEmailAdapter is exported from integrations/email.ts", () => {
+    const E = readFileSync(join(process.cwd(), "src/lib/integrations/email.ts"), "utf8");
+    expect(E).toMatch(/export async function selectPlatformEmailAdapter/);
+  });
+  it("Diagnostic endpoint reports mode + effective adapter decision", () => {
+    const D = readFileSync(join(process.cwd(), "src/app/api/admin/signup/debug/status/route.ts"), "utf8");
+    expect(D).toMatch(/microsoft365Configured/);
+    expect(D).toMatch(/smtpConfigured/);
+    expect(D).toMatch(/effectiveAdapter/);
+    // Secrets are read only as boolean coercions (`!!env.X`), never
+    // placed in the response body as raw values.  The ONLY raw env
+    // values that appear in the body are the FROM address (meant to
+    // be visible — not sensitive) and public client-id prefixes.
+    expect(D).toMatch(/microsoft365Configured[\s\S]*?!!env\.MICROSOFT_CLIENT_SECRET/);
+    expect(D).toMatch(/smtpConfigured[\s\S]*?!!env\.SMTP_PORT/);
+    // The actual secret must never be an unwrapped expression.
+    expect(D).not.toMatch(/clientSecret:\s*env\.MICROSOFT_CLIENT_SECRET/);
+    expect(D).not.toMatch(/pass:\s*env\.SMTP_PASS/);
+  });
+});
+
+describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
+  it("Force-verify endpoint gated by SPECTRE_ALLOW_STAGING_DEBUG", () => {
+    const FV = readFileSync(join(process.cwd(), "src/app/api/admin/signup/debug/force-verify/route.ts"), "utf8");
+    expect(FV).toMatch(/SPECTRE_ALLOW_STAGING_DEBUG/);
+    expect(FV).toMatch(/debug_endpoint_disabled/);
+  });
+  it("Force-verify never grants SUPER_ADMIN or writes to User / Club / UserClubRole", () => {
+    const FV = readFileSync(join(process.cwd(), "src/app/api/admin/signup/debug/force-verify/route.ts"), "utf8");
+    expect(FV).not.toMatch(/prisma\.user\./);
+    expect(FV).not.toMatch(/prisma\.club\./);
+    expect(FV).not.toMatch(/prisma\.userClubRole\./);
+    // Code (non-comment) must not reference SUPER_ADMIN as a value.
+    // The doc comment "does NOT grant SUPER_ADMIN" is allowed.
+    expect(FV).not.toMatch(/"SUPER_ADMIN"/);
+    expect(FV).not.toMatch(/roleKey:\s*"CLUB_ADMIN"/);
+  });
+  it("rotateEmailResumeToken overwrites the hash (invalidates the prior token by write)", () => {
+    const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
+    expect(R).toMatch(/async function rotateEmailResumeToken[\s\S]*?emailResumeTokenHash:\s*hash/);
+  });
+  it("resolveRegistrationByToken checks BOTH registration-level expiresAt AND email-token-level expiresAt", () => {
+    const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
+    expect(R).toMatch(/reg\.expiresAt\.getTime\(\) < Date\.now\(\)/);
+    expect(R).toMatch(/reg\.emailResumeTokenExpiresAt\.getTime\(\) < Date\.now\(\)/);
+  });
+  it("Abandoned registrations are inaccessible via token resume", () => {
+    const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
+    expect(R).toMatch(/if \(reg\.status === "ABANDONED"\) return null/);
+  });
+});
+
 describe("SIGNUP-1 · Canada-only launch (data model future-proof)", () => {
   it("createRegistration enum limits country to SUPPORTED_COUNTRIES = ['CA']", () => {
     expect(REG_SRV).toMatch(/export const SUPPORTED_COUNTRIES = \["CA"\] as const/);

@@ -356,6 +356,15 @@ export async function selectEmailAdapter(
   }
 
   // No per-club override — fall back to env-driven mode.
+  return selectPlatformEmailAdapter();
+}
+
+// SIGNUP-1 (2026-10-20) — platform-level adapter selection.  Used
+// by pre-tenant flows (self-service signup resume emails,
+// subscription-authorization emails, etc.) where no clubId exists
+// to pivot off.  Reads EMAIL_DELIVERY_MODE + the matching env vars.
+// Falls back to the console adapter if the mode is not configured.
+export async function selectPlatformEmailAdapter(): Promise<NotificationDeliveryAdapter> {
   if (env.EMAIL_DELIVERY_MODE === "smtp") {
     if (!env.SMTP_HOST || !env.SMTP_PORT || !env.SMTP_FROM) {
       // Misconfigured: explicit failure beats silent fallback.

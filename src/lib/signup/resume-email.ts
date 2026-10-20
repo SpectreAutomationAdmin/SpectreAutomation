@@ -1,25 +1,22 @@
 // SIGNUP-1 (2026-10-19) — Cross-device resume email.
+// SIGNUP-1 §2 hardening (2026-10-20) — platform-level transactional
+// delivery via selectPlatformEmailAdapter.  Uses EMAIL_DELIVERY_MODE
+// + MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET
+// / MICROSOFT_FROM_MAILBOX (microsoft365) OR SMTP_* (smtp) OR
+// AWS_REGION + SES_FROM_ADDRESS (ses).  No club tenant required.
+// Falls back to the dev console adapter when none configured.
 //
 // Delivered to the Microsoft-verified address AFTER successful OAuth
 // callback.  Carries the post-verify emailResumeToken so the applicant
 // can resume on any device / after cookie loss.
 //
-// Delivery:
-//   - Uses the dev email adapter when EMAIL_DELIVERY_MODE is
-//     "console" (the default on staging + local).  The sendResumeEmail
-//     function returns { delivered: boolean; providerMessageId? }
-//     so the OAuth callback can log the outcome without failing the
-//     signup when email cannot be delivered.
-//   - On staging, the dev adapter prints the resume URL to the Fly
-//     log stream — SpectreAdmin can read it there for test purposes.
-//   - A later slice will wire SMTP / SES / Microsoft 365 delegated
-//     delivery; the function signature is stable.
-//
 // NO sensitive data in the email body beyond the resume URL itself.
+// The email body displays no DB ids, no OAuth state, no PKCE
+// verifier, no information about other registrations.
 
 import { env } from "@/lib/env";
 import { logger } from "@/lib/observability/logger";
-import { devEmailAdapter } from "@/lib/integrations/email";
+import { selectPlatformEmailAdapter } from "@/lib/integrations/email";
 
 export async function sendResumeEmail(args: {
   toEmail: string;
@@ -46,10 +43,12 @@ export async function sendResumeEmail(args: {
     "— Spectre",
   ].join("\n");
   try {
-    const res = await devEmailAdapter.send({
-      // SIGNUP-1 has no club yet; the dev adapter accepts a sentinel
-      // clubId.  Production delivery is a later slice; this logs to
-      // the structured log stream on staging.
+    const adapter = await selectPlatformEmailAdapter();
+    const res = await adapter.send({
+      // SIGNUP-1 has no club yet; the platform adapter accepts a
+      // sentinel clubId.  Delivery mode is driven by
+      // EMAIL_DELIVERY_MODE at the env level — microsoft365 / smtp
+      // / ses / console.
       clubId: "signup",
       channel: "EMAIL",
       to: { email: args.toEmail },
