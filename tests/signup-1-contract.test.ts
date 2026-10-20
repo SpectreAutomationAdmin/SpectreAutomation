@@ -277,6 +277,32 @@ describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
   });
 });
 
+describe("SIGNUP-1D · Entra redirect-URI readiness check", () => {
+  it("env.ts exports signupRedirectUri() with env-override support", () => {
+    const E = readFileSync(join(process.cwd(), "src/lib/env.ts"), "utf8");
+    expect(E).toMatch(/export function signupRedirectUri\(\): string/);
+    expect(E).toMatch(/env\.MICROSOFT_SIGNUP_REDIRECT_URI/);
+    expect(E).toMatch(/MICROSOFT_SIGNUP_REDIRECT_URI:\s*z\.string\(\)\.url\(\)\.optional\(\)/);
+  });
+  it("microsoft-oauth service routes through signupRedirectUri()", () => {
+    const O = readFileSync(join(process.cwd(), "src/lib/signup/microsoft-oauth.ts"), "utf8");
+    expect(O).toMatch(/signupRedirectUri/);
+    expect(O).toMatch(/return signupRedirectUri\(\)/);
+  });
+  it("Diagnostic endpoint reports signupRedirectUri + mailboxRedirectUri + readinessNote", () => {
+    const D = readFileSync(join(process.cwd(), "src/app/api/admin/signup/debug/status/route.ts"), "utf8");
+    expect(D).toMatch(/signupRedirectUri:\s*signupRedirectUri\(\)/);
+    expect(D).toMatch(/mailboxRedirectUri:\s*mailboxRedirectUri\(\)/);
+    expect(D).toMatch(/readinessNote/);
+    expect(D).toMatch(/AADSTS50011/);
+  });
+  it("Real-browser regression spec detects AADSTS50011 in the Microsoft page body", () => {
+    const T = readFileSync(join(process.cwd(), "tests/e2e/signup-1c-ms-button-regression.staging.spec.ts"), "utf8");
+    expect(T).toMatch(/AADSTS/);
+    expect(T).toMatch(/page\.content\(\)/);
+  });
+});
+
 describe("SIGNUP-1C · CSP form-action permits Microsoft identity navigation", () => {
   it("middleware form-action directive allows https://login.microsoftonline.com", () => {
     const MW = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");

@@ -137,6 +137,22 @@ runAt(
       /^https:\/\/login\.microsoftonline\.com\/organizations\/oauth2\/v2\.0\/authorize\?/,
     );
 
+    // SIGNUP-1D (2026-10-20) — Microsoft Entra validates the
+    // redirect_uri against the app registration's reply URIs BEFORE
+    // showing the sign-in form.  If the URI isn't registered,
+    // Microsoft renders an error page at the same URL (status 200)
+    // whose body contains the AADSTS50011 error code.  The browser
+    // URL still looks healthy, so page.url() alone can't detect it.
+    // Scrape the page content for the diagnostic.
+    const microsoftBody = await page.content();
+    const errorCodes = Array.from(microsoftBody.matchAll(/AADSTS\d{4,6}/g)).map((m) => m[0]);
+    expect(
+      errorCodes,
+      `Microsoft rejected the request with ${errorCodes.join(", ")}. ` +
+      `Check /api/admin/signup/debug/status for the exact redirect URI ` +
+      `and confirm it is registered on the Entra app (client-id prefix b7f855a6).`,
+    ).toEqual([]);
+
     // ============================================================
     // Step 6 — Verify identity-only scopes
     // ============================================================

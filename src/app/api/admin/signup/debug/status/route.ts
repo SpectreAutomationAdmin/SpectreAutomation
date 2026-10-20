@@ -10,7 +10,7 @@
 // Gated by SPECTRE_ALLOW_STAGING_DEBUG so production never exposes it.
 
 import { NextResponse, type NextRequest } from "next/server";
-import { env } from "@/lib/env";
+import { env, signupRedirectUri, mailboxRedirectUri } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -80,14 +80,22 @@ export async function GET(_req: NextRequest) {
       byStep: byStep.map((r) => ({ step: r.step, count: r._count._all })),
       byOwnership: byOwnership.map((r) => ({ state: r.ownershipVerificationState, count: r._count._all })),
     },
-    // Platform OAuth client-id prefix (first 6 chars) so SpectreAdmin
-    // can verify the signup OAuth client without exposing the secret.
+    // Platform OAuth client-id prefix (first 8 chars) + the exact
+    // redirect URIs Spectre will send to Microsoft.  AADSTS50011
+    // happens when ANY of these URIs isn't registered on the Entra
+    // app with matching client-id.  Operator responsibility: copy
+    // the two `redirectUri` strings into the Entra app registration
+    // under Authentication → Web → Redirect URIs.
     microsoftOAuth: {
       delegatedClientIdPrefix:
         env.MICROSOFT_GRAPH_DELEGATED_CLIENT_ID
           ? env.MICROSOFT_GRAPH_DELEGATED_CLIENT_ID.slice(0, 8)
           : null,
       authorityAudience: env.MICROSOFT_GRAPH_AUTHORITY_AUDIENCE ?? null,
+      signupRedirectUri: signupRedirectUri(),
+      mailboxRedirectUri: mailboxRedirectUri(),
+      readinessNote:
+        "Both signupRedirectUri AND mailboxRedirectUri must be registered on the Entra app whose client-id starts with the prefix above.  AADSTS50011 at Microsoft means the URI Spectre sent is not in that list.",
     },
   }, { status: 200 });
 }

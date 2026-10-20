@@ -131,6 +131,10 @@ const schema = z.object({
   MICROSOFT_GRAPH_REDIRECT_URI: z.string().url().optional(),
   MICROSOFT_GRAPH_WEBHOOK_URL: z.string().url().optional(),
   MICROSOFT_GRAPH_LIFECYCLE_URL: z.string().url().optional(),
+  // SIGNUP-1D (2026-10-20) — optional override for the signup
+  // OAuth redirect URI.  Defaults to
+  // `${APP_URL}/api/signup/microsoft/callback`.
+  MICROSOFT_SIGNUP_REDIRECT_URI: z.string().url().optional(),
 
   // Attachment size cap enforced at Graph fetch time. Real value
   // lives in code (§12 of the Phase A brief); this env override is
@@ -373,6 +377,20 @@ export function isControlledSyncModeActive(): boolean {
 // and future env-var renames touch one place.
 export function mailboxRedirectUri(): string {
   return env.MICROSOFT_GRAPH_REDIRECT_URI ?? `${env.APP_URL}/api/integrations/microsoft/callback`;
+}
+// SIGNUP-1D (2026-10-20) — canonical signup OAuth redirect URI.
+// Env-overridable via MICROSOFT_SIGNUP_REDIRECT_URI for operators
+// that need to register a different path in Entra.  Defaults to
+// `${APP_URL}/api/signup/microsoft/callback` to match the route
+// handler at src/app/api/signup/microsoft/callback/route.ts.
+//
+// Must be registered as a Redirect URI (Web platform) on the Entra
+// application registration whose client-id is Spectre's
+// MICROSOFT_GRAPH_DELEGATED_CLIENT_ID.  AADSTS50011 ("The reply URL
+// specified in the request does not match the reply URLs configured
+// for the application") is the symptom when it's missing.
+export function signupRedirectUri(): string {
+  return env.MICROSOFT_SIGNUP_REDIRECT_URI ?? `${env.APP_URL}/api/signup/microsoft/callback`;
 }
 export function mailboxWebhookUrl(): string {
   return env.MICROSOFT_GRAPH_WEBHOOK_URL ?? `${env.APP_URL}/api/webhooks/microsoft/mail-notifications`;

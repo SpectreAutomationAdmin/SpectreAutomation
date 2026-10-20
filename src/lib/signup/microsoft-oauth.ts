@@ -32,7 +32,7 @@
 // needs the identity claims; the tokens are discarded immediately
 // after the id_token claim validation.
 
-import { env } from "@/lib/env";
+import { env, signupRedirectUri } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/errors";
 import { logger } from "@/lib/observability/logger";
@@ -80,7 +80,12 @@ async function lazyClient(): Promise<MsalConfidentialClient> {
 }
 
 function redirectUri(): string {
-  return `${env.APP_URL}/api/signup/microsoft/callback`;
+  // SIGNUP-1D (2026-10-20) — centralised via signupRedirectUri so
+  // the readiness-check endpoint and this OAuth flow return the
+  // IDENTICAL string.  AADSTS50011 ("reply URL does not match") is
+  // the symptom when this string drifts from Entra's registered
+  // Redirect URIs.
+  return signupRedirectUri();
 }
 
 // --------------------------------------------------------------
