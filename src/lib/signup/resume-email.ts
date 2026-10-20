@@ -34,16 +34,18 @@ export async function sendResumeEmail(args: {
   resumeToken: string;
   legalName: string;
   adminDisplayName: string | null;
-  // SIGNUP-1F (2026-10-20) — the token now belongs to the dedicated
-  // SignupRecoveryLink table.  Links are 24h, single-use, revocable.
-  // The /signup/r/<token> route consumes the link once and issues a
-  // fresh cookie-based session on the clicking browser.
-  ttlHours?: number;
+  // SIGNUP-1F (2026-10-20) — the token belongs to the dedicated
+  // SignupRecoveryLink table.  Links are 30 min, single-use,
+  // revocable.  The /signup/r/<token> route consumes the link once
+  // and issues a fresh cookie-based session on the clicking browser.
+  // The applicant can request another fresh link at any time from
+  // /signup/resume.
+  ttlMinutes?: number;
 }): Promise<{ delivered: boolean; providerMessageId?: string; detail?: string }> {
   const resumeUrl = `${env.APP_URL}/signup/r/${encodeURIComponent(args.resumeToken)}`;
   const subject = "Resume your Spectre registration";
   const greeting = args.adminDisplayName ? `Hi ${args.adminDisplayName.split(" ")[0]},` : "Hi there,";
-  const ttl = args.ttlHours ?? 24;
+  const ttl = args.ttlMinutes ?? 30;
   const body = [
     greeting,
     "",
@@ -53,7 +55,7 @@ export async function sendResumeEmail(args: {
     "",
     resumeUrl,
     "",
-    `This link is single-use and expires in ${ttl} hours. If it expires or you need another one, visit ${env.APP_URL}/signup/resume and we will send a fresh link to your verified email.`,
+    `This link is single-use and expires in ${ttl} minutes. If it expires or you need another one, visit ${env.APP_URL}/signup/resume and we will send a fresh link to your verified email.`,
     "",
     "Next step: your organization's verification will complete, and your subscription authorization will follow in a separate secure email.",
     "",

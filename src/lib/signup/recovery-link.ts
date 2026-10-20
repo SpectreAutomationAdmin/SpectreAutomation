@@ -37,10 +37,13 @@ import { prisma } from "@/lib/prisma";
 import { generateOpaqueToken, sha256HashHex } from "@/lib/auth/pkce";
 import { logger } from "@/lib/observability/logger";
 
-// Default link TTL — 24 hours.  Short enough that a leaked email
-// link is time-boxed; long enough for a next-day click.
+// Default link TTL — 30 minutes (SIGNUP-1F adjustment, 2026-10-20).
+// Short enough that a leaked email link exposes a very narrow window;
+// a fresh single-use link can be requested at any time from
+// /signup/resume, so a 30-min window imposes no real friction on
+// legitimate recovery.  Env override exists for operations.
 const RECOVERY_LINK_TTL_MS = Number(
-  process.env.SIGNUP_RECOVERY_LINK_TTL_MS ?? String(24 * 60 * 60 * 1000),
+  process.env.SIGNUP_RECOVERY_LINK_TTL_MS ?? String(30 * 60 * 1000),
 );
 
 export type RecoveryLinkRevokeReason =

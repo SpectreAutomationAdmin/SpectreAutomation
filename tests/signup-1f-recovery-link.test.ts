@@ -75,9 +75,11 @@ describe("SIGNUP-1F · issueRecoveryLink", () => {
     expect(RECOVERY_LINK).not.toMatch(/data:\s*\{[\s\S]*?token:\s*token/);
   });
 
-  it("sets expiresAt from issuedAt + TTL (default 24h; env override allowed)", () => {
+  it("sets expiresAt from issuedAt + TTL (default 30 min; env override allowed)", () => {
     expect(RECOVERY_LINK).toMatch(/RECOVERY_LINK_TTL_MS\s*=\s*Number\(/);
-    expect(RECOVERY_LINK).toMatch(/24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
+    // SIGNUP-1F adjustment (2026-10-20): default is 30 min, NOT 24h.
+    expect(RECOVERY_LINK).toMatch(/30\s*\*\s*60\s*\*\s*1000/);
+    expect(RECOVERY_LINK).not.toMatch(/24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
     expect(RECOVERY_LINK).toMatch(/SIGNUP_RECOVERY_LINK_TTL_MS/);
     expect(RECOVERY_LINK).toMatch(/expiresAt\s*=\s*new Date\(now\.getTime\(\)\s*\+\s*\(args\.ttlMs\s*\?\?\s*RECOVERY_LINK_TTL_MS\)\)/);
   });
@@ -258,9 +260,12 @@ describe("SIGNUP-1F · Email body + log safety", () => {
     expect(RESUME_EMAIL).not.toMatch(/\/signup\/t\/\$\{encodeURIComponent\(args\.resumeToken\)\}\/status/);
   });
 
-  it("email body includes a human-readable TTL + a pointer to /signup/resume for a fresh link", () => {
-    expect(RESUME_EMAIL).toMatch(/single-use and expires in/);
+  it("email body renders TTL in minutes + points to /signup/resume for a fresh link", () => {
+    expect(RESUME_EMAIL).toMatch(/single-use and expires in\s*\$\{ttl\}\s*minutes/);
+    expect(RESUME_EMAIL).not.toMatch(/single-use and expires in\s*\$\{ttl\}\s*hours/);
     expect(RESUME_EMAIL).toMatch(/\/signup\/resume/);
+    // The default TTL hint passed through is now minutes-shaped.
+    expect(RESUME_EMAIL).toMatch(/args\.ttlMinutes\s*\?\?\s*30/);
   });
 
   it("sendResumeEmail logs mask the recipient and never emit the token", () => {

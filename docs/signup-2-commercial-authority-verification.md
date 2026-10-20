@@ -1,145 +1,191 @@
-# SIGNUP-2 · Commercial-Authority Verification — Requirements
+# SIGNUP-2 · Commercial-Authority Verification — Requirements (v2)
 
-**Status.** Documentation only.  This document is the SIGNUP-1F
-closure artefact for item (3) of the founder's directive — it
-captures the verification requirements that MUST be satisfied
-before SIGNUP-2 executes the $38,000 CAD subscription agreement.
-No code change ships with this document.  Implementation lands in
-SIGNUP-2.
+**Status.** Documentation only.  Supersedes the first revision of
+this document to adopt the founder's delegated-authority model:
+Spectre serves Clubs through many internal purchasing paths —
+Controllers, General Managers, Head Professionals, Directors of
+Finance, Board officers — and the subscription-authorisation
+check must verify **delegated commercial authority**, not
+corporate-officer status.  Implementation lands in SIGNUP-2;
+this doc is the acceptance artefact for item (2) of the SIGNUP-1F
+adjustment directive.
 
-**Context.** SIGNUP-1 collects Club identity + verifies the
-founding administrator via Microsoft OIDC + runs the automated
-ownership classifier.  The classifier is a **preliminary risk
-signal** — it answers "do the Microsoft identity, email domain,
-and website domain line up with the registered legal name?"  It
-does not answer "is this person legally authorised to bind the
-Club to a $38,000 CAD annual commitment?"
-
-The second question is **commercial-authority verification** and
-is the gate between a verified registration and a billable
-subscription.  It applies at the point of subscription
-authorisation, not at registration.
-
-**Scope.** Private golf and country clubs in Canada (launch
-scope).  Future expansion to US and international jurisdictions
-will require locale-specific signatory controls; the structure
-below is designed to accept them additively.
+**Context.** SIGNUP-1 collects Club identity, verifies the
+founding administrator via Microsoft OIDC, and runs the automated
+ownership classifier.  The classifier remains the preliminary
+risk signal.  Commercial-authority verification is a separate,
+later gate that must be satisfied before Spectre issues a signed
+subscription agreement for the $38,000 CAD annual commitment.
 
 ---
 
-## Design principles
+## Core premises
 
-1. **Preserve the automated classifier as the preliminary risk
-   signal.**  Do not replace or diminish it.  Its job is to
-   decide, at registration time, whether the applicant looks
-   plausible.  Commercial-authority verification is a different
-   question, asked at a different moment.
-2. **Do not add manual approval to routine registrations.**  A
-   club whose automated signals all align, whose signatory
-   provides a government ID that matches a corporate-records
-   officer entry, and whose Microsoft tenant matches the
-   website domain, must flow through without a human in the
-   loop.
-3. **Human review only on exception.**  Manual-review workload
-   belongs on the ambiguous cases — mismatched signatory name,
-   signatory not listed as an officer, free-mail Microsoft
-   tenant, duplicate-club signal, high-risk province (none
-   currently flagged).  The commercial-authority verification
-   model MUST surface its decision axis explicitly so manual
-   reviewers see what to adjudicate.
-4. **Attribution-proof the signatory.**  The person who clicks
-   "I authorise $38,000 CAD per year" must be identifiable by
-   name, title, government-issued ID, and corporate-records
-   match.  "Identified by email" is not sufficient for a
-   commercial commitment of this size.
-5. **Audit the authorisation moment.**  The subscription
-   authorisation record must capture: who signed, what they
-   signed, when, from what IP + user agent, against which
-   corporate-records evidence, and a notarised signature trail
-   that would survive a civil dispute over the contract.
-
----
-
-## Required artefacts (collected at SIGNUP-2 time)
-
-### A · Signatory identity
-
-The person authorising the subscription must provide:
-
-- **Full legal name.**  Must match a name present in the
-  Club's corporate-records officer / director list.
-- **Government-issued photo ID.**  Driver's licence, passport,
-  provincial ID card.  Collected via a Spectre-side upload
-  surface (not via email).  Stored encrypted at rest; retained
-  for the duration of the subscription + 7 years for audit
-  (CRA-aligned record retention).
-- **Current title at the Club.**  Must match the corporate-
-  records entry.  Expected roles: General Manager, CFO,
-  Treasurer, Board Chair, Director of Finance, Head
-  Professional (owner-operator clubs), President.  A title
-  not in that list routes to manual review.
-- **Microsoft-verified work email** — already captured in
-  SIGNUP-1.  Must match the Spectre registration's
-  `adminEmail`.
-
-### B · Club commercial-records evidence
-
-- **Jurisdiction + corporate-records lookup.**  For CA
-  clubs: provincial registry (e.g. Ontario Business Registry,
-  BC Registries, Alberta Corporate Registry, Quebec Registraire
-  des entreprises).  Spectre performs the lookup; the
-  applicant provides the business number if applicable.  The
-  result is cached per registration + attached to the
-  authorisation record.
-- **Officer / director list from the registry.**  The
-  signatory's full legal name must appear in the current
-  officer or director list.  If not, routes to manual review.
-- **Operating status.**  Must be ACTIVE / IN GOOD STANDING at
-  the time of authorisation.  Dissolved, inactive, or
-  struck-off entities cannot authorise a subscription.
-- **Address match.**  The registered address on the corporate
-  record must match (fuzzy) the Club address collected on
-  Screen 1 of SIGNUP-1.
-
-### C · Authorisation attestation
-
-At the subscription-authorisation moment the signatory must
-affirm, by clicking a specifically-worded consent surface:
-
-> I, [full legal name], serving as [title] of [legal club name],
-> am authorised by this organisation to enter into the Spectre
-> Automation subscription agreement dated [date].  I confirm
-> that the $38,000 CAD annual subscription amount is accepted on
-> behalf of the organisation and will be paid under the
-> contracted terms.  I acknowledge that this authorisation is
-> recorded, auditable, and may be relied upon by Spectre
-> Automation in any subsequent dispute.
-
-The attestation record stores: signatory name, title, legal
-club name, timestamp, IP, user agent, Microsoft identity oid,
-and the SHA-256 digest of the attestation text (so future
-textual changes do not retroactively alter prior consents).
+1. **Delegated purchasing authority is the norm.**  In most CA
+   private clubs the person who authorises an operating-tool
+   subscription is the Controller or General Manager, not a
+   named director on the corporate registry.  Spectre must
+   accept them without demanding they re-engineer their internal
+   signing authority to match the registry.
+2. **Preserve the automated classifier as the preliminary
+   signal.**  It still answers "do the Microsoft identity,
+   email domain, and website domain line up with the registered
+   legal name?"  Its decision continues to feed SIGNUP-2.  It
+   does NOT answer the authority question.
+3. **Domain ownership ≠ authority to bind.**  Owning
+   `club.golf` or having a `club.golf` Microsoft tenant is a
+   signal, not a mandate.  A Controller with a `club.golf`
+   mailbox is not automatically authorised; a GM at a
+   boutique-partnership club with a shared-domain mailbox is
+   not automatically disqualified.
+4. **Risk-based verification.**  Routine signatories pass with
+   the baseline evidence set.  Elevated-risk signals bring
+   supporting-evidence requirements.  No step is universally
+   mandatory — in particular, **government-issued photo ID is
+   NOT a universal requirement.**  It is reserved for
+   exception paths where the baseline evidence is insufficient
+   or where law requires it.
+5. **Human review only on exception.**  Manual review is for
+   cases the automation cannot resolve, not a universal
+   checkpoint.
 
 ---
 
-## Classifier reuse
+## Who may authorise the subscription
 
-The existing automated classifier
-(`src/lib/signup/org-verification.ts`) continues to run at the
-end of Microsoft identity verification.  Its outputs feed the
-SIGNUP-2 workflow:
+Accepted principal roles (indicative, not exhaustive):
+
+- Controller
+- Director of Finance / VP Finance
+- General Manager / COO / Chief Operating Officer
+- Head Professional (owner-operator Clubs)
+- Treasurer / Board Treasurer
+- Board Chair / President (where SIGNUP-1 ownership classifier
+  signals a Board-direct relationship)
+- Corporate officer / director (traditional registry match —
+  still accepted, now one path among several)
+
+**All require** a verified Microsoft work-or-school identity in
+a tenant whose domain aligns with the Club's registered
+business.  Personal Microsoft accounts are rejected
+(same gate as SIGNUP-1).
+
+**Rejection paths — zero authority, no appeal:**
+
+- Microsoft tenant unaffiliated with the Club.
+- Signatory has an explicit "no authority to procure" record
+  in Spectre internal flags (abuse signal from prior Club).
+- Entity dissolved / inactive / struck-off at authorisation
+  time.
+
+---
+
+## Baseline evidence set — required for every signatory
+
+The baseline is designed so a Controller at a well-formed Club
+passes without producing a government ID.
+
+### B1 · Microsoft-verified organisational identity
+
+Already captured in SIGNUP-1 (identity-only OIDC with
+`/organizations` authority).  Signals:
+
+- Microsoft tenant id (`tid`).
+- Microsoft object id (`oid`).
+- Verified email + display name.
+- Rejection of personal (`MSA`) accounts enforced upstream.
+
+### B2 · Club affiliation signal
+
+The signatory's Microsoft tenant AND email domain must align
+with the Club's registered business via at least ONE of:
+
+- Website-domain alignment (classifier output).
+- Microsoft-tenant-primary-domain alignment with the Club's
+  registered trading name.
+- A pre-existing Spectre record of the signatory at this Club
+  (future: once a Club has one authorised Controller, that
+  signal strengthens subsequent delegations).
+
+### B3 · Role self-declaration
+
+The signatory enters their current title at the Club.  Not
+corroborated by the corporate registry; corroborated by B4
+instead.
+
+### B4 · Explicit contractual authority attestation
+
+The signatory affirms, by clicking a specifically-worded
+consent surface, that they hold the delegated authority to
+bind the Club to the subscription.  The attestation text:
+
+> I, [full name as it appeared in Microsoft], serving as
+> [self-declared title] of [Club legal name], confirm that I
+> hold the authority — whether as a corporate officer, as a
+> designated signing officer, or by written delegation from
+> such an officer — to enter into the Spectre Automation
+> subscription agreement dated [date] on behalf of the Club.
+> I accept, on behalf of the Club, the $38,000 CAD annual
+> subscription amount under the contracted terms.  I
+> acknowledge that this attestation is recorded, auditable,
+> and may be relied upon by Spectre Automation in any
+> subsequent dispute, and that making this attestation
+> without actual authority is a misrepresentation.
+
+The attestation record persists: signatory name, title, Club
+legal name, timestamp, IP, user agent, Microsoft `oid`,
+Microsoft `tid`, and a SHA-256 digest of the exact
+attestation text at that moment (so textual revisions do not
+retroactively alter prior consents).
+
+### B5 · Entity standing
+
+Spectre fetches the Club's corporate-records status at
+authorisation time (jurisdiction-appropriate registry: ON,
+BC, AB, QC in CA launch — Phase 2 covers the SK/MB/NS/NB/NL/PE
+gap jurisdictions).  **Signatory is NOT required to appear
+on the officer list.**  The entity must simply be ACTIVE / IN
+GOOD STANDING at the authorisation moment.
+
+Dissolved or struck-off entities cannot authorise a
+subscription regardless of signatory evidence.
+
+---
+
+## Elevated-risk supporting evidence (exception path)
+
+The baseline above is sufficient for the routine case.  Any
+of the signals below promotes the signatory to an elevated
+path with additional evidence requirements:
+
+| Signal | Evidence added |
+|---|---|
+| Automated classifier returned `NEEDS_MANUAL_REVIEW` or `ESCALATED` | Human reviewer sees full evidence packet; signatory may be asked for ONE additional corroborating artefact (e.g. a Club-branded org-chart extract, an officer-written delegation letter) — Spectre defines the artefact; signatory does not pick. |
+| Microsoft tenant domain mismatched Club trading-name signal, but SIGNUP-1 passed via other alignment | Signatory provides a short written delegation attestation signed by a corporate officer (name + title + attestation that the signatory holds purchasing authority for operating tools up to a specified annual amount). |
+| Signatory self-declares a title not in the standard accepted-role list AND no prior Spectre record exists for this Club | Human reviewer evaluates; may release with no additional artefact or may ask for a delegation letter. |
+| First signatory for a Club with no prior Spectre relationship + classifier flag not green | Government-issued photo ID of the signatory, matched against the Microsoft display-name.  **This is the ONLY path on which gov-ID is mandatory.** |
+| Suspected impersonation or abuse signal (prior Club disputes signatory status; prior strike against the Microsoft `oid`) | Immediate hold.  Human-review-only release. |
+
+The lowest-common-denominator evidence request is the
+elevated-risk path's job — not the baseline's.  **Routine
+registrations never land on the gov-ID path.**
+
+---
+
+## Classifier integration
+
+The ownership classifier output continues to drive the SIGNUP-2
+workflow:
 
 | Classifier decision | SIGNUP-2 default behaviour |
 |---|---|
-| `AUTOMATED_PASSED` | Proceed to A + B + C.  All auto-pass → authorise.  Any A/B/C exception routes to manual review. |
-| `NEEDS_MANUAL_REVIEW` | Hold at a gated state.  Manual reviewer sees classifier signals + awaits A + B + C before releasing. |
-| `ESCALATED` | Hold at a gated state.  SpectreAdmin direct-contact required before any A/B/C collection. |
-| `OVERRIDDEN` | Treated as `AUTOMATED_PASSED` for SIGNUP-2 purposes; the override reason is attached to the authorisation record. |
+| `AUTOMATED_PASSED` | Baseline evidence set only.  Attestation accepted; authorisation proceeds. |
+| `NEEDS_MANUAL_REVIEW` | Hold at a gated state.  Baseline collected; reviewer sees evidence packet; elevated-risk artefact may be requested. |
+| `ESCALATED` | Hold.  SpectreAdmin direct contact required before any artefact collection. |
+| `OVERRIDDEN` | Treated as `AUTOMATED_PASSED` for authority purposes; the override reason is attached to the authorisation record. |
 
-**No automatic manual-review ratchet.**  A clean classifier
-decision + clean A + clean B + accepted C flows through without
-human intervention.  Manual reviewers see only the exception
-cases.
+**No automatic manual-review ratchet.**  Clean classifier +
+clean baseline + accepted attestation flows through.
 
 ---
 
@@ -150,69 +196,75 @@ Three new entities, all created in SIGNUP-2:
 ### `SubscriptionSignatory`
 
 - Keyed by `SignupRegistration.id`.
-- Captures legal name, title, government-ID file reference
-  (encrypted), ID type, ID expiry, upload timestamp.
-- Mirrored into `Club.subscriptionSignatory` when tenant
-  provisioning fires.
+- Fields: self-declared full name, self-declared title,
+  Microsoft `oid`, Microsoft `tid`, verified email, affiliation
+  signal source(s).
+- Government-ID file reference + encryption metadata are
+  **optional columns**, populated only on the elevated-risk
+  gov-ID path.  Mirrored into `Club.subscriptionSignatory` when
+  tenant provisioning fires.
 
-### `CorporateRecordsCheck`
+### `EntityStandingCheck`
 
 - Keyed by `SignupRegistration.id`.
-- Captures jurisdiction, business number, registry lookup
-  payload (JSONB), officer-match outcome
-  (`MATCHED | PARTIAL | NOT_MATCHED`), fetched-at timestamp.
-- Cached for the subscription's lifetime; refreshed annually
-  on renewal.
+- Replaces the previous revision's `CorporateRecordsCheck`.
+- Captures jurisdiction, business number, registry fetch
+  payload, standing (`ACTIVE | NOT_ACTIVE | NOT_FOUND`),
+  fetched-at timestamp.
+- Signatory-vs-officer match is a **soft signal, not a gate**
+  — recorded if the registry returns it, but a `NOT_MATCHED`
+  outcome does not block authorisation under the baseline
+  path.
 
 ### `SubscriptionAuthorisationAttestation`
 
 - Keyed by `SignupRegistration.id`.
-- Captures signatory id, attestation-text SHA-256, timestamp,
-  IP, user agent, Microsoft oid.
-- Immutable; never updated.  Revocation is modelled as a
-  separate record linked to the original.
+- Immutable record: signatory id, attestation text SHA-256,
+  timestamp, IP, user agent, Microsoft `oid`, Microsoft `tid`.
+- Revocation of an attestation is modelled as a separate
+  record linked to the original.
 
 ---
 
 ## Verification outcomes
 
-- **Pass.**  A green on classifier + A + B + C.  SIGNUP-2
-  authorises the subscription, provisions the tenant, and
-  issues the first invoice.
-- **Hold — awaiting applicant.**  Any of A / B / C incomplete.
-  Applicant receives an email (via the SIGNUP-1F recovery-email
-  pipeline) with the specific remaining item.
-- **Hold — awaiting Spectre review.**  Any classifier exception
-  or any A/B/C mismatch beyond the automated-pass path.
-  SpectreAdmin reviewer sees a single consolidated screen with
-  classifier signals + government-ID preview + corporate-records
-  excerpt + the applicant's position + the registered address.
-- **Reject.**  Entity not in good standing, signatory name
-  absent from officer list AND no alternate justification
-  provided, sanctioned-jurisdiction match (reserved; unused
-  in CA launch).
+- **Pass (routine).**  Baseline B1–B5 complete; classifier
+  green; attestation accepted.  Authorise, provision tenant,
+  issue invoice.
+- **Pass (reviewer-released).**  Baseline + one elevated-risk
+  artefact + reviewer release.
+- **Hold — awaiting applicant.**  Any baseline step pending.
+  Applicant receives a fresh single-use recovery email (30 min
+  TTL) with the specific remaining item.
+- **Hold — awaiting Spectre review.**  Classifier
+  `NEEDS_MANUAL_REVIEW` / `ESCALATED` and/or elevated-risk
+  signal requiring reviewer judgement.
+- **Reject.**  Entity not in good standing; Microsoft tenant
+  unaffiliated with the Club; impersonation or abuse signal.
 
 ---
 
 ## Explicit non-requirements (deliberate scope restraints)
 
-The following checks are **NOT** part of SIGNUP-2's
+The following are **NOT** required by SIGNUP-2's
 commercial-authority verification:
 
-- Credit scoring the Club or the signatory.  Spectre is not a
-  lender; the subscription is a commercial service agreement,
-  not credit.
-- Beneficial-owner KYC beyond the officer-list match.  Private
-  clubs rarely have beneficial owners in the FINTRAC sense;
-  the officer-list match is the appropriate control.
-- Automated signature capture via DocuSign / Adobe Sign.  The
-  attestation surface is Spectre-internal; integration with a
-  third-party e-signature vendor is a future enhancement, not
-  a SIGNUP-2 requirement.
-- Credit-card capture at authorisation.  SIGNUP-2 authorises
-  the subscription but does not initiate the first payment —
-  payment collection is a separate flow (ACH / wire /
-  invoiced) governed by the subscription agreement.  No bank
+- Universal government-ID collection.  Reserved for one
+  specific elevated-risk path (see table above).
+- Signatory listed on corporate-records officer / director
+  roster.  Recorded as a soft signal when the registry
+  provides it, never required for the baseline path.
+- Credit scoring of Club or signatory.  Spectre's subscription
+  is a service agreement, not credit.
+- Beneficial-owner KYC.  Private clubs rarely have beneficial
+  owners in the FINTRAC sense; the officer-list match is a
+  soft signal only.
+- Third-party e-signature (DocuSign / Adobe Sign).  Attestation
+  surface is Spectre-internal.
+- Credit-card capture at authorisation.  Payment collection
+  is a separate flow (see
+  [docs/signup-2-payment-architecture.md](signup-2-payment-architecture.md)
+  for the SIGNUP-2 payment-provider assessment).  No bank
   debit is initiated by the registration or authorisation
   steps.
 
@@ -221,35 +273,38 @@ commercial-authority verification:
 ## Interaction with SIGNUP-1F
 
 SIGNUP-1F ships the registration-recovery infrastructure that
-SIGNUP-2 will need to collect A + B + C across devices and
-over several days.  Specifically:
+SIGNUP-2's evidence collection relies on:
 
-- A signatory who starts upload on one device and finishes on
-  another relies on the recovery-link path
-  (`/signup/resume` → fresh single-use link).
-- A signatory whose link expires before upload is complete
-  simply requests a fresh one.
-- Revocation (operator-triggered) is used when a classifier
-  exception is converted to a reject after SIGNUP-2 has
-  already issued a link.
+- The elevated-risk gov-ID upload surface uses the recovery-link
+  flow to resume on a different device.
+- A signatory whose 30-minute link expires requests a fresh one
+  from `/signup/resume`.
+- Revocation is used when a classifier exception is converted
+  to a reject after SIGNUP-2 has already issued a link.
 
 No SIGNUP-1F code change is required to enable SIGNUP-2's
-commercial-authority flow — the infrastructure is in place.
+commercial-authority flow.
 
 ---
 
 ## Open questions deferred to SIGNUP-2 kickoff
 
-1. **Government-ID storage.**  KMS + S3 (reuse the existing
-   AWS tenancy backing Spectre's current infrastructure) vs a
-   dedicated encrypted bucket per jurisdiction.
-2. **Registry API coverage.**  Ontario and BC have modern APIs;
-   Quebec and Alberta require workarounds.  First-pass may rely
-   on manual review for the gap jurisdictions until API
-   coverage is uniform.
-3. **Renewal re-verification.**  Annual re-check of
-   officer-list match is implicit; the frequency of ID
-   re-upload is a founder decision at SIGNUP-2 scoping.
+1. **Reviewer surface design.**  SIGNUP-2 ships a SpectreAdmin
+   evidence-review screen; its exact layout is a scoping item.
+2. **Delegation-letter format.**  For the mismatched-domain
+   elevated path, the acceptable format for the written
+   delegation attestation (free-form PDF vs structured form)
+   is a SIGNUP-2 scoping item.
+3. **Elevated-path gov-ID storage.**  KMS + S3 (reuse Spectre's
+   existing AWS tenancy) with per-file envelope keys; stored
+   only on the specific elevated path, deleted after
+   verification + 90 days.
+4. **Registry API coverage gap.**  Ontario and BC have modern
+   APIs; Quebec and Alberta need workarounds; smaller provinces
+   may require manual registry fetch at launch.
+5. **Renewal re-verification cadence.**  Fresh attestation at
+   each annual renewal is proposed; founder decision at SIGNUP-2
+   scoping.
 
-These are implementation details.  They do not change the
-requirements captured above.
+These are implementation details, not changes to the baseline
+authority model.
