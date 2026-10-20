@@ -13,7 +13,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import "@/components/marketing/web1b.css";
-import "../../signup.css";
+import "@/app/signup/signup.css";
 import { Wordmark } from "@/components/marketing/Wordmark";
 import { StepIndicator } from "@/app/signup/_components/StepIndicator";
 import { resolveRegistrationByToken } from "@/lib/signup/registration";
