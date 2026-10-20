@@ -34,11 +34,19 @@ export async function GET(_req: NextRequest) {
     !!env.SMTP_PORT &&
     !!env.SMTP_FROM;
 
+  // SIGNUP-1 §2 hardening (2026-10-20) — SES now usable at the
+  // platform level via env creds + a verified FROM identity.
+  const sesConfigured =
+    !!env.AWS_REGION &&
+    !!env.SES_FROM_ADDRESS &&
+    !!env.AWS_ACCESS_KEY_ID &&
+    !!env.AWS_SECRET_ACCESS_KEY;
+
   // Which adapter the platform selector WOULD choose right now:
   const effectiveAdapter =
     mode === "microsoft365" ? (microsoft365Configured ? "microsoft365" : "microsoft365_misconfigured_FALLBACK_FAILS")
     : mode === "smtp" ? (smtpConfigured ? "smtp" : "smtp_misconfigured_FALLBACK_FAILS")
-    : mode === "ses" ? "ses_misconfigured_requires_per_club_secrets"
+    : mode === "ses" ? (sesConfigured ? "ses" : "ses_misconfigured_FALLBACK_FAILS")
     : "console";
 
   const byStatus = await prisma.signupRegistration.groupBy({
@@ -59,6 +67,7 @@ export async function GET(_req: NextRequest) {
       mode,
       microsoft365Configured,
       smtpConfigured,
+      sesConfigured,
       fromAddress:
         mode === "microsoft365" ? env.MICROSOFT_FROM_MAILBOX ?? null
         : mode === "smtp" ? env.SMTP_FROM ?? null

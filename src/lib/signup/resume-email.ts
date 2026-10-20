@@ -1,10 +1,21 @@
 // SIGNUP-1 (2026-10-19) — Cross-device resume email.
 // SIGNUP-1 §2 hardening (2026-10-20) — platform-level transactional
-// delivery via selectPlatformEmailAdapter.  Uses EMAIL_DELIVERY_MODE
-// + MICROSOFT_TENANT_ID / MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET
-// / MICROSOFT_FROM_MAILBOX (microsoft365) OR SMTP_* (smtp) OR
-// AWS_REGION + SES_FROM_ADDRESS (ses).  No club tenant required.
-// Falls back to the dev console adapter when none configured.
+// delivery via selectPlatformEmailAdapter.  Uses EMAIL_DELIVERY_MODE:
+//
+//   microsoft365  — needs MICROSOFT_TENANT_ID + MICROSOFT_CLIENT_ID
+//                   + MICROSOFT_CLIENT_SECRET + MICROSOFT_FROM_MAILBOX.
+//                   App registration must have `Mail.Send` application
+//                   permission + admin consent.
+//   smtp          — needs SMTP_HOST + SMTP_PORT + SMTP_FROM (+ optional
+//                   SMTP_USER / SMTP_PASS / SMTP_SECURE).
+//   ses           — reuses the AWS creds Spectre already has
+//                   (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY +
+//                   AWS_REGION) + a verified SES_FROM_ADDRESS.  The
+//                   AWS IAM policy on these creds must include
+//                   `ses:SendEmail` (grant once per account).
+//
+// None of these require a club tenant.  Falls back to the dev
+// console adapter when none configured — logs to the Fly stream.
 //
 // Delivered to the Microsoft-verified address AFTER successful OAuth
 // callback.  Carries the post-verify emailResumeToken so the applicant

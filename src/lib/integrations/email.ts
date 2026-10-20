@@ -404,21 +404,34 @@ export async function selectPlatformEmailAdapter(): Promise<NotificationDelivery
     });
   }
   if (env.EMAIL_DELIVERY_MODE === "ses") {
-    if (!env.AWS_REGION || !env.SES_FROM_ADDRESS) {
+    // SIGNUP-1 §2 hardening (2026-10-20) — platform-level SES now
+    // accepts env credentials (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+    // + AWS_REGION + SES_FROM_ADDRESS).  The per-club IntegrationSetting
+    // path (used by the authenticated club-admin email surface) is
+    // unchanged.  SES_FROM_ADDRESS must be a verified SES identity in
+    // the AWS account that owns the credentials.
+    if (
+      !env.AWS_REGION ||
+      !env.SES_FROM_ADDRESS ||
+      !env.AWS_ACCESS_KEY_ID ||
+      !env.AWS_SECRET_ACCESS_KEY
+    ) {
       return {
         async send() {
-          return { status: "FAILED", failureReason: "EMAIL_DELIVERY_MODE=ses but AWS_REGION/SES_FROM_ADDRESS not set" };
+          return {
+            status: "FAILED",
+            failureReason:
+              "EMAIL_DELIVERY_MODE=ses requires AWS_REGION + SES_FROM_ADDRESS + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY",
+          };
         },
       };
     }
-    // SES needs credentials too; we don't accept them as env in the schema
-    // today — the per-club secret store is the supported source. Returning
-    // a clear error is better than silently logging to console.
-    return {
-      async send() {
-        return { status: "FAILED", failureReason: "SES requires per-club IntegrationSetting with accessKeyId/secretAccessKey secrets" };
-      },
-    };
+    return sesEmailAdapter({
+      region: env.AWS_REGION,
+      fromAddress: env.SES_FROM_ADDRESS,
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    });
   }
   return devEmailAdapter;
 }
