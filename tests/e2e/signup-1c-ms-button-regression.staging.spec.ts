@@ -168,11 +168,17 @@ runAt(
       scopes,
     }));
 
-    // Capture the Microsoft page for the evidence package.
-    await page.screenshot({
-      path: path.join(outDir, "signup-1c-post-click.png"),
-      clip: { x: 0, y: 0, width: 1440, height: 900 },
-    });
+    // Capture the Microsoft page for the evidence package.  Cross-
+    // origin targets occasionally stall font loading from the
+    // Playwright viewpoint — screenshot is best-effort, must not
+    // fail the real assertion that already passed.
+    try {
+      await page.screenshot({
+        path: path.join(outDir, "signup-1c-post-click.png"),
+        clip: { x: 0, y: 0, width: 1440, height: 900 },
+        timeout: 10_000,
+      });
+    } catch { /* non-fatal — assertion above already proved the behaviour */ }
 
     await ctx.close();
   },
