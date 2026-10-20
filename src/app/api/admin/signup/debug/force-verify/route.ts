@@ -49,6 +49,9 @@ export async function POST(req: NextRequest) {
   const syntheticOid = `DEBUG_${Date.now().toString(36)}`;
   const syntheticTid = "DEBUG_tenant_7c0a2d5e";
   const syntheticEmail = "debug.verified@spectre.local";
+  // Intentionally leave adminPosition null so Screen 2 can be
+  // walked in its "post-identity, position-form" state by the
+  // visual-acceptance Playwright.
   await markVerified({
     registrationId: reg.id,
     adminEmail: syntheticEmail,
@@ -57,7 +60,7 @@ export async function POST(req: NextRequest) {
     adminDisplayName: "Debug Admin",
     adminGivenName: "Debug",
     adminSurname: "Admin",
-    adminPosition: "General Manager",
+    adminPosition: null,
   });
   const evidence = await classifyOrganization({
     registrationId: reg.id,

@@ -138,7 +138,9 @@ runAt(
     const emailResumeToken = forceBody.emailResumeToken as string;
     writeFileSync(path.join(outDir, "signup-1b-force-verify.json"), JSON.stringify(forceBody, null, 2));
 
-    // Screen 2 — desktop (post-verify state: position form visible)
+    // Screen 2 — desktop (post-verify state: position form visible,
+    // position still null so the admin page doesn't redirect to
+    // Status yet).
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator('[data-testid="signup-ms-verified"]')).toBeVisible();
     await expect(page.locator('[data-testid="signup-position-form"]')).toBeVisible();
@@ -147,8 +149,26 @@ runAt(
       clip: { x: 0, y: 0, width: 1440, height: 900 },
     });
 
-    // Screen 3 — desktop (status)
-    await page.goto(`${BASE}/signup/t/${encodeURIComponent(token)}/status`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    // ------------------------------------------------------------
+    // Capture mobile Screen 2 verified BEFORE submitting the
+    // position (same registration — position=null state).
+    // ------------------------------------------------------------
+    const mobileEarly = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const mPage2 = await mobileEarly.newPage();
+    await mPage2.goto(`${BASE}/signup/t/${encodeURIComponent(token)}/admin`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await expect(mPage2.locator('[data-testid="signup-ms-verified"]')).toBeVisible();
+    const mobileAdminWidth = await mPage2.evaluate(() => document.documentElement.scrollWidth);
+    expect(mobileAdminWidth, "mobile Screen 2 no horizontal scroll").toBeLessThanOrEqual(390);
+    await mPage2.screenshot({ path: path.join(outDir, "signup-1b-screen2-mobile-verified.png"), fullPage: false });
+    await mobileEarly.close();
+
+    // Submit the position form so Screen 3 shows the complete
+    // happy-path state.
+    await page.locator('[data-testid="signup-select-position"]').selectOption("General Manager");
+    await page.locator('[data-testid="signup-position-submit"]').click();
+    await page.waitForURL(/\/signup\/t\/[A-Za-z0-9_-]+\/status$/, { timeout: 30_000 });
+
+    // Screen 3 — desktop (status, fully complete)
     await expect(page.locator('[data-testid="signup-status-card"]')).toBeVisible();
     await expect(page.locator('[data-testid="signup-status-admin-name"]')).toContainText("Debug Admin");
     await page.screenshot({
@@ -166,13 +186,8 @@ runAt(
     const docWidth = await mPage.evaluate(() => document.documentElement.scrollWidth);
     expect(docWidth, "mobile Screen 1 no horizontal scroll").toBeLessThanOrEqual(390);
     await mPage.screenshot({ path: path.join(outDir, "signup-1b-screen1-mobile.png"), fullPage: false });
-    // Screen 2 mobile — use the verified-admin state so we see the position form on mobile too
-    await mPage.goto(`${BASE}/signup/t/${encodeURIComponent(token)}/admin`, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await expect(mPage.locator('[data-testid="signup-ms-verified"]')).toBeVisible();
-    const docWidth2 = await mPage.evaluate(() => document.documentElement.scrollWidth);
-    expect(docWidth2, "mobile Screen 2 no horizontal scroll").toBeLessThanOrEqual(390);
-    await mPage.screenshot({ path: path.join(outDir, "signup-1b-screen2-mobile-verified.png"), fullPage: false });
-    // Screen 3 mobile
+    // Screen 2 mobile is captured ABOVE (before the position form
+    // is submitted).  Only Screen 3 remains for the mobile set.
     await mPage.goto(`${BASE}/signup/t/${encodeURIComponent(token)}/status`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await expect(mPage.locator('[data-testid="signup-status-card"]')).toBeVisible();
     const docWidth3 = await mPage.evaluate(() => document.documentElement.scrollWidth);
@@ -206,12 +221,14 @@ runAt(
     //     call must NOT re-flip the registration or create a session.
     //     We don't have a real `code`, but we can confirm the state is
     //     consumed on first error-redirect.
-    const msResp = await page.request.post(`${BASE}/api/signup/microsoft/microsoft/start`.replace("microsoft/microsoft/", "microsoft/"), {
+    // Mint a fresh OAuth state transaction by hitting the start
+    // endpoint on the SAME registration.  We don't drive the full
+    // OAuth flow — just need a state value in the DB.
+    await page.request.post(`${BASE}/api/signup/microsoft/start`, {
       form: { token },
       maxRedirects: 0,
       failOnStatusCode: false,
     });
-    void msResp;
     // Pull the most-recently-minted state via ops.
     const latestState = parse<{ state: string | null }>(
       sshExec(`latest-oauth-state ${encodeURIComponent(token)}`),

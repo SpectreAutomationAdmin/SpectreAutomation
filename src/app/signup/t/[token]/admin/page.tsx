@@ -33,7 +33,11 @@ export default async function AdminScreen({
 }) {
   const reg = await resolveRegistrationByToken(params.token);
   if (!reg) notFound();
-  if (reg.step === "ADMIN_VERIFIED" || reg.status === "VERIFIED") {
+  // Only redirect to Status when BOTH Microsoft identity AND
+  // position are captured.  Between the two, Screen 2 renders in
+  // its verified-admin / position-form state so the applicant can
+  // tell us their role at the Club.
+  if (reg.adminVerifiedAt && reg.adminPosition) {
     redirect(`/signup/t/${encodeURIComponent(params.token)}/status`);
   }
 
