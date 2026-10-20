@@ -163,10 +163,19 @@ export async function resolveRegistrationByToken(token: string): Promise<Resolve
     select: SELECT_FIELDS,
   });
   if (!reg) return null;
-  if (reg.expiresAt.getTime() < Date.now()) return null;
+  // SIGNUP-1G (2026-10-20) — the 7-day registration TTL only applies
+  // to DRAFT.  Once Microsoft identity is captured (status transitions
+  // out of DRAFT: VERIFIED / ESCALATED), the registration is "important
+  // information" and must remain recoverable indefinitely until
+  // SIGNUP-2 either activates or operator-rejects it.  The sweeper
+  // already respects this (only sweeps DRAFT rows); this resolver
+  // branch previously filtered them out at read time, which was a
+  // silent-loss bug relative to the founder's lifecycle directive.
+  if (reg.status === "DRAFT" && reg.expiresAt.getTime() < Date.now()) return null;
   if (reg.status === "ABANDONED") return null;
-  // If the match is on emailResumeTokenHash, additionally gate on its
-  // separate (shorter) TTL.
+  // Email-token-level TTL compat (pre-SIGNUP-1F emails only).
+  // Recovery tokens for SIGNUP-1F+ live in SignupRecoveryLink
+  // (30-min TTL) consumed via /signup/r/<token>, not here.
   if (reg.emailResumeTokenHash === hash && reg.emailResumeTokenExpiresAt) {
     if (reg.emailResumeTokenExpiresAt.getTime() < Date.now()) return null;
   }

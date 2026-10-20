@@ -271,13 +271,27 @@ describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
     // Comments may still reference it; the exported function must be gone.
     expect(R).not.toMatch(/export async function rotateEmailResumeToken/);
   });
-  it("resolveRegistrationByToken checks registration-level expiresAt (SIGNUP-1F: recovery tokens live in SignupRecoveryLink; emailResumeTokenHash compat branch remains for in-flight pre-1F emails)", () => {
+  it("SIGNUP-1G · 7-day expiresAt only gates DRAFT, so VERIFIED registrations stay recoverable past 7 days", () => {
     const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
-    expect(R).toMatch(/reg\.expiresAt\.getTime\(\) < Date\.now\(\)/);
+    // The resolver's expiresAt check must be scoped to status==="DRAFT".
+    expect(R).toMatch(/if \(reg\.status === "DRAFT" && reg\.expiresAt\.getTime\(\) < Date\.now\(\)\) return null/);
+    // The bare unconditional-TTL check must be gone.
+    expect(R).not.toMatch(/^\s*if \(reg\.expiresAt\.getTime\(\) < Date\.now\(\)\) return null;\s*$/m);
   });
   it("Abandoned registrations are inaccessible via token resume", () => {
     const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
     expect(R).toMatch(/if \(reg\.status === "ABANDONED"\) return null/);
+  });
+  it("SIGNUP-1G · sweeper only abandons DRAFT (never VERIFIED / ESCALATED)", () => {
+    const S = readFileSync(join(process.cwd(), "src/lib/signup/sweeper.ts"), "utf8");
+    expect(S).toMatch(/status:\s*"DRAFT",\s*expiresAt:\s*\{\s*lt:\s*now\s*\}/);
+    // The sweeper must not have ANY updateMany that sweeps a VERIFIED
+    // or ESCALATED row to ABANDONED.
+    const updates = S.match(/signupRegistration\.updateMany[\s\S]+?\}\)/g) ?? [];
+    for (const u of updates) {
+      expect(u).not.toMatch(/"VERIFIED"/);
+      expect(u).not.toMatch(/"ESCALATED"/);
+    }
   });
 });
 
