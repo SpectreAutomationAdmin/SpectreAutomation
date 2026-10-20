@@ -256,11 +256,55 @@ runAt(
       expect(consumed?.outcome, "4b: OAuth state carries a terminal outcome").toBeTruthy();
     }
 
-    // (c) Expiration — ops command stamps expiresAt in the past, then
-    //     the pre-verify URL (token) resume must 404.
+    // (c) Expiration — SIGNUP-1G semantics:
+    //
+    //     • DRAFT + expired → 404 (unchanged, the swept-abandoned case).
+    //     • VERIFIED + expired → STILL RESOLVES (SIGNUP-1G lifecycle
+    //       fix — the 7-day TTL only sweeps DRAFT; VERIFIED identity
+    //       is "important information" and must remain recoverable
+    //       indefinitely until SIGNUP-2 activates or operator-rejects).
+    //
+    // The current `token` registration is already VERIFIED (position
+    // submitted above).  Stamping expiresAt in the past on this row
+    // must NOT 404 the resolver — the row is now permanent.
     sshExec(`expire-registration ${encodeURIComponent(token)}`);
-    const expiredResp = await page.request.get(`${BASE}/signup/t/${encodeURIComponent(token)}`, { maxRedirects: 0, failOnStatusCode: false });
-    expect(expiredResp.status(), "4c: expired registration token returns 404").toBe(404);
+    const expiredVerifiedResp = await page.request.get(
+      `${BASE}/signup/t/${encodeURIComponent(token)}`,
+      { maxRedirects: 0, failOnStatusCode: false },
+    );
+    expect(
+      expiredVerifiedResp.status(),
+      "4c: VERIFIED+expired registration still resolves (SIGNUP-1G lifecycle fix)",
+    ).toBeGreaterThanOrEqual(300);
+    expect(expiredVerifiedResp.status()).toBeLessThan(400);
+
+    // Separately: a FRESH DRAFT row with past expiresAt must 404.
+    // Mint a new one, expire it, verify 404.
+    const draftUniq = `COND-ACCEPT-DRAFT ${Date.now()}`;
+    const draftStart = await page.request.post(`${BASE}/api/signup/start`, {
+      form: {
+        legalName: draftUniq,
+        country: "CA",
+        provinceState: "ON",
+        addressLine1: "88 Richmond Street W",
+        city: "Toronto",
+        postalCode: "M5H 2L4",
+      },
+      maxRedirects: 0,
+      failOnStatusCode: false,
+    });
+    const draftLoc = draftStart.headers()["location"] ?? "";
+    const draftToken = draftLoc.match(/\/signup\/t\/([A-Za-z0-9_-]+)/)?.[1];
+    expect(draftToken, "fresh DRAFT token minted").toBeTruthy();
+    sshExec(`expire-registration ${encodeURIComponent(draftToken!)}`);
+    const expiredDraftResp = await page.request.get(
+      `${BASE}/signup/t/${encodeURIComponent(draftToken!)}`,
+      { maxRedirects: 0, failOnStatusCode: false },
+    );
+    expect(
+      expiredDraftResp.status(),
+      "4c: DRAFT+expired registration still returns 404 (sweep semantics preserved)",
+    ).toBe(404);
 
     // ============================================================
     // §4 — Tenant isolation preserved
