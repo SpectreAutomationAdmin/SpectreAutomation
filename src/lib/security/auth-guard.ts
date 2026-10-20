@@ -16,7 +16,7 @@ import { prisma } from "../prisma";
 import { logger } from "../observability/logger";
 import { consumeRate } from "./rate-limit";
 
-export type AuthScope = "login" | "password_reset" | "invite_accept" | "apply";
+export type AuthScope = "login" | "password_reset" | "invite_accept" | "apply" | "signup_start" | "signup_microsoft";
 
 export type AuthOutcome = "SUCCESS" | "INVALID_PASSWORD" | "UNKNOWN_USER" | "LOCKED" | "RATE_LIMITED";
 
@@ -29,9 +29,12 @@ export function hashEmail(email: string): string {
 export async function checkAuthRateLimit(scope: AuthScope, email: string, ip: string): Promise<{ allowed: boolean; reason?: string; retryAfterMs?: number }> {
   const emailHash = hashEmail(email);
   // Map scope to rate-limit profile. apply maps to public_application.
+  // SIGNUP-1 scopes reuse the public_application bucket (same risk
+  // profile — unauthenticated submission against a public endpoint).
   const profile = scope === "login" ? "login"
     : scope === "password_reset" ? "password_reset"
     : scope === "invite_accept" ? "login"
+    : scope === "signup_start" || scope === "signup_microsoft" ? "public_application"
     : "public_application";
 
   const ipResult = await consumeRate(profile, `${scope}:ip:${ip}`);

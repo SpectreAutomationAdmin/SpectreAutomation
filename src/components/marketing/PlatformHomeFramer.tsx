@@ -100,8 +100,15 @@ function Hero() {
           </p>
         </W1bReveal>
         <W1bReveal delayMs={240}>
+          {/* SIGNUP-1 (2026-10-19) — Sign Up CTA added alongside the
+              existing Request a Demonstration pill.  Preserves the
+              approved WEB-1B marketing design: identical pill geometry,
+              same cta-row layout, no new tokens. */}
           <div className="w1b-cta-row">
-            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta">
+            <a href="/signup" className="w1b-pill-cta" data-testid="marketing-cta-signup">
+              Sign Up
+            </a>
+            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta w1b-pill-cta--secondary" data-testid="marketing-cta-demo">
               Request a Demonstration
             </a>
             <a href="#mission-control" className="w1b-text-link">Explore Spectre</a>

@@ -10648,6 +10648,70 @@ model OutlookDeleteMutation {
   @@index([mailboxConnectionId, emailMessageId, status])
 }
 
+// SIGNUP-1 (2026-10-19) — self-service registration (SQLite mirror).
+// See prisma-postgres/schema.prisma for the canonical doc block.
+model SignupRegistration {
+  id                          String    @id @default(cuid())
+  resumeTokenHash             String    @unique
+  emailResumeTokenHash        String?   @unique
+  emailResumeTokenExpiresAt   DateTime?
+  legalName                   String
+  legalNameNormalized         String
+  operatingName               String?
+  operatingNameNormalized     String?
+  country                     String
+  provinceState               String
+  addressLine1                String
+  addressLine2                String?
+  city                        String
+  postalCode                  String
+  websiteUrl                  String?
+  adminEmail                  String?
+  adminMicrosoftOid           String?
+  adminMicrosoftTenantId      String?
+  adminDisplayName            String?
+  adminGivenName              String?
+  adminSurname                String?
+  adminPosition               String?
+  adminVerifiedAt             DateTime?
+  step                        String    @default("IDENTITY")
+  status                      String    @default("DRAFT")
+  ownershipVerificationState  String    @default("NOT_STARTED")
+  ownershipAutomatedCheckJson String?
+  ownershipNote               String?
+  startedByIp                 String?
+  startedUserAgent            String?
+  expiresAt                   DateTime
+  completedAt                 DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  microsoftTransactions SignupOAuthTransaction[]
+
+  @@index([status, expiresAt])
+  @@index([adminMicrosoftOid, status])
+  @@index([ownershipVerificationState])
+  @@index([legalNameNormalized])
+  @@index([operatingNameNormalized])
+}
+
+model SignupOAuthTransaction {
+  id             String             @id @default(cuid())
+  state          String             @unique
+  registrationId String
+  registration   SignupRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  pkceVerifier   String
+  nonce          String
+  returnPath     String
+  createdAt      DateTime           @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  outcome        String?
+
+  @@index([registrationId, createdAt])
+  @@index([expiresAt])
+}
+
 // WI-SYNC-1g (2026-10-18) — Outlook restore (move-to-Inbox) mutation.
 // Mirrors OutlookDeleteMutation.  See prisma-postgres/schema.prisma
 // for the canonical doc block.

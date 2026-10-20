@@ -1,0 +1,231 @@
+// SIGNUP-1 (2026-10-19) — contract locks.  Pins the five founder-
+// mandated security invariants:
+//
+//   §1 /api/signup/* NEVER writes to User / Club / UserClubRole /
+//      ClubSubscription.  Super Admin privileges stay unreachable
+//      from the signup flow.
+//   §2 URL/path identifiers are opaque tokens, NOT DB ids.
+//   §3 Microsoft OAuth replay rejection — state consumedAt is set,
+//      replay returns STATE_REPLAY.
+//   §4 Personal Microsoft accounts (idp=MSA) are rejected
+//      server-side even if the authority somehow lets them through.
+//   §5 Duplicate detection surfaces to the review decision WITHOUT
+//      exposing other registrations' details to the applicant.
+//
+// Additional invariants:
+//   §6 Resume tokens are stored as sha-256 hashes, never plaintext.
+//   §7 Microsoft identity scope is identity-only (openid + profile
+//      + email + offline_access) — no Mail / Calendars scopes.
+//   §8 The $38,000 CAD annual price is preserved in commercial copy.
+//   §9 Rate limiting is wired for both signup_start and
+//      signup_microsoft scopes.
+
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const REG_SRV   = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
+const OAUTH_SRV = readFileSync(join(process.cwd(), "src/lib/signup/microsoft-oauth.ts"), "utf8");
+const ORG_SRV   = readFileSync(join(process.cwd(), "src/lib/signup/org-verification.ts"), "utf8");
+const START_RT  = readFileSync(join(process.cwd(), "src/app/api/signup/start/route.ts"), "utf8");
+const MS_START  = readFileSync(join(process.cwd(), "src/app/api/signup/microsoft/start/route.ts"), "utf8");
+const MS_CB     = readFileSync(join(process.cwd(), "src/app/api/signup/microsoft/callback/route.ts"), "utf8");
+const POS_RT    = readFileSync(join(process.cwd(), "src/app/api/signup/admin-position/route.ts"), "utf8");
+const PAGE_ID   = readFileSync(join(process.cwd(), "src/app/signup/page.tsx"), "utf8");
+const FORM_ID   = readFileSync(join(process.cwd(), "src/app/signup/_components/SignupIdentityForm.tsx"), "utf8");
+const PAGE_ADM  = readFileSync(join(process.cwd(), "src/app/signup/t/[token]/admin/page.tsx"), "utf8");
+const PAGE_STA  = readFileSync(join(process.cwd(), "src/app/signup/t/[token]/status/page.tsx"), "utf8");
+const GUARD     = readFileSync(join(process.cwd(), "src/lib/security/auth-guard.ts"), "utf8");
+const SCHEMA_PG = readFileSync(join(process.cwd(), "prisma-postgres/schema.prisma"), "utf8");
+const MARKETING = readFileSync(join(process.cwd(), "src/components/marketing/PlatformHomeFramer.tsx"), "utf8");
+
+// Combined API-code surface for the forbidden-write scan.
+const ALL_API = [START_RT, MS_START, MS_CB, POS_RT, REG_SRV, OAUTH_SRV, ORG_SRV].join("\n\n");
+
+describe("SIGNUP-1 §1 · No User / Club / UserClubRole / ClubSubscription writes", () => {
+  const FORBIDDEN = [
+    /prisma\.user\.create/i,
+    /prisma\.user\.upsert/i,
+    /prisma\.club\.create/i,
+    /prisma\.club\.upsert/i,
+    /prisma\.userClubRole\.create/i,
+    /prisma\.userClubRole\.upsert/i,
+    /prisma\.clubSubscription\.create/i,
+    /prisma\.clubSubscription\.upsert/i,
+    /"SUPER_ADMIN"/i,
+    /roleKey:\s*"CLUB_ADMIN"/i,
+  ];
+  for (const pattern of FORBIDDEN) {
+    it(`no match for ${pattern.source}`, () => {
+      expect(ALL_API).not.toMatch(pattern);
+    });
+  }
+});
+
+describe("SIGNUP-1 §2 · URL identifiers are opaque tokens, not DB ids", () => {
+  it("Screen 1 submits to /api/signup/start (no id in path)", () => {
+    expect(FORM_ID).toMatch(/action="\/api\/signup\/start"/);
+  });
+  it("Resume URL is /signup/t/<token>, not /signup/<id>", () => {
+    expect(START_RT).toMatch(/\/signup\/t\/\$\{encodeURIComponent\(resumeToken\)\}/);
+    // Resume URL path contains the TOKEN, not the DB id.
+    expect(START_RT).not.toMatch(/\/signup\/\$\{registrationId/);
+  });
+  it("Public pages never render the registration DB id to the DOM", () => {
+    expect(PAGE_ADM).not.toMatch(/reg\.id/);
+    expect(PAGE_STA).not.toMatch(/reg\.id/);
+  });
+  it("Public page lookups go through resolveRegistrationByToken, never findUnique(id)", () => {
+    expect(PAGE_ADM).toMatch(/resolveRegistrationByToken/);
+    expect(PAGE_STA).toMatch(/resolveRegistrationByToken/);
+    expect(PAGE_ADM).not.toMatch(/signupRegistration\.findUnique/);
+    expect(PAGE_STA).not.toMatch(/signupRegistration\.findUnique/);
+  });
+});
+
+describe("SIGNUP-1 §3 · OAuth replay rejection", () => {
+  it("state is unique in the schema", () => {
+    expect(SCHEMA_PG).toMatch(/model\s+SignupOAuthTransaction\s*\{[\s\S]*?state\s+String\s+@unique/);
+  });
+  it("consumedAt is set on first use; replay returns STATE_REPLAY", () => {
+    expect(OAUTH_SRV).toMatch(/if \(tx\.consumedAt\)[\s\S]*?return\s*\{\s*status:\s*"STATE_REPLAY"/);
+  });
+  it("markOutcome persists consumedAt + outcome atomically", () => {
+    expect(OAUTH_SRV).toMatch(/signupOAuthTransaction\.update[\s\S]*?consumedAt:\s*new Date\(\)[\s\S]*?outcome/);
+  });
+});
+
+describe("SIGNUP-1 §4 · Personal Microsoft accounts rejected", () => {
+  it("authority uses /organizations (platform-level rejection)", () => {
+    expect(OAUTH_SRV).toMatch(/authority:[\s\S]*?\/organizations/);
+  });
+  it("server-side rejects claims.idp === 'MSA' explicitly", () => {
+    expect(OAUTH_SRV).toMatch(/claims\.idp === "MSA"/);
+    expect(OAUTH_SRV).toMatch(/PERSONAL_ACCOUNT_REJECTED/);
+  });
+  it("Microsoft callback shows a non-disclosing error message for personal accounts", () => {
+    expect(MS_CB).toMatch(/PERSONAL_ACCOUNT_REJECTED/);
+    expect(MS_CB).toMatch(/work-or-school/i);
+  });
+});
+
+describe("SIGNUP-1 §5 · Duplicate detection WITHOUT applicant disclosure", () => {
+  it("no global uniqueness on legalName / operatingName / websiteUrl", () => {
+    // The SignupRegistration block must NOT declare @unique on these columns.
+    const regBlock = SCHEMA_PG.match(/model\s+SignupRegistration\s*\{[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(regBlock).toMatch(/legalName\s+String$/m);
+    expect(regBlock).not.toMatch(/legalName\s+String\s+@unique/);
+    expect(regBlock).not.toMatch(/operatingName\s+String\?\s+@unique/);
+    expect(regBlock).not.toMatch(/websiteUrl\s+String\?\s+@unique/);
+  });
+  it("classifier returns counts, not ids or details", () => {
+    expect(ORG_SRV).toMatch(/duplicateSignals:[\s\S]*?normalizedLegalNameMatches:\s*number/);
+    // The decision object MUST NOT expose other registrations' ids.
+    const decisionBlock = ORG_SRV.match(/export interface OrgSignalEvidence[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(decisionBlock).not.toMatch(/registrationId:\s*string/);
+  });
+  it("applicant-facing status copy never mentions duplicates / other registrations", () => {
+    expect(PAGE_STA).not.toMatch(/duplicate/i);
+    expect(PAGE_STA).not.toMatch(/another\s+registration/i);
+  });
+  it("Status page's non-disclosure path for NEEDS_MANUAL_REVIEW is generic", () => {
+    const review = PAGE_STA.match(/NEEDS_MANUAL_REVIEW[\s\S]*?;/)?.[0] ?? "";
+    expect(review).toMatch(/review/i);
+    expect(review).not.toMatch(/duplicate/i);
+    expect(review).not.toMatch(/conflict/i);
+    expect(review).not.toMatch(/other\s+applicant/i);
+  });
+});
+
+describe("SIGNUP-1 §6 · Resume tokens are sha-256-hashed", () => {
+  it("Schema stores *_resumeTokenHash, never *_resumeToken plaintext", () => {
+    const regBlock = SCHEMA_PG.match(/model\s+SignupRegistration\s*\{[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(regBlock).toMatch(/resumeTokenHash\s+String\s+@unique/);
+    expect(regBlock).toMatch(/emailResumeTokenHash\s+String\?\s+@unique/);
+    expect(regBlock).not.toMatch(/resumeToken\s+String[^H]/);
+  });
+  it("createRegistration hashes the token before persisting", () => {
+    // Variable form: resumeTokenHash computed from sha256HashHex(resumeToken) above the create call.
+    expect(REG_SRV).toMatch(/const resumeTokenHash = sha256HashHex\(resumeToken\)/);
+  });
+  it("resolveRegistrationByToken compares via sha256HashHex, not raw equality", () => {
+    expect(REG_SRV).toMatch(/const hash = sha256HashHex\(token\)/);
+    expect(REG_SRV).toMatch(/resumeTokenHash:\s*hash/);
+    expect(REG_SRV).toMatch(/emailResumeTokenHash:\s*hash/);
+  });
+});
+
+describe("SIGNUP-1 §7 · Microsoft identity scope is identity-only", () => {
+  it("Scope list = openid + profile + email + offline_access — no Mail / Calendars", () => {
+    expect(OAUTH_SRV).toMatch(/IDENTITY_SCOPES = \["openid",\s*"profile",\s*"email",\s*"offline_access"\]/);
+    expect(OAUTH_SRV).not.toMatch(/"Mail\.Read"/);
+    expect(OAUTH_SRV).not.toMatch(/"Mail\.ReadWrite"/);
+    expect(OAUTH_SRV).not.toMatch(/"Mail\.Send"/);
+    expect(OAUTH_SRV).not.toMatch(/"Calendars\.Read"/);
+  });
+});
+
+describe("SIGNUP-1 §8 · Commercial copy preserves $38,000 CAD annual", () => {
+  it("Screen 1 lede mentions $38,000 CAD", () => {
+    expect(PAGE_ID).toMatch(/\$38,000\s*CAD/);
+  });
+  it("Status screen mentions $38,000 CAD annually", () => {
+    expect(PAGE_STA).toMatch(/\$38,000\s*CAD/);
+    expect(PAGE_STA).toMatch(/annually/i);
+  });
+  it("Neither screen initiates payment / stores banking info in SIGNUP-1", () => {
+    expect(PAGE_ID).not.toMatch(/stripe/i);
+    expect(PAGE_STA).not.toMatch(/stripe/i);
+    expect(PAGE_ID).not.toMatch(/card\s+number/i);
+    expect(PAGE_STA).not.toMatch(/card\s+number/i);
+  });
+});
+
+describe("SIGNUP-1 §9 · Rate limiting", () => {
+  it("auth-guard enumerates signup_start + signup_microsoft scopes", () => {
+    expect(GUARD).toMatch(/"signup_start"/);
+    expect(GUARD).toMatch(/"signup_microsoft"/);
+  });
+  it("Each handler calls checkAuthRateLimit before any DB write", () => {
+    expect(START_RT).toMatch(/checkAuthRateLimit\(\s*"signup_start"/);
+    expect(MS_START).toMatch(/checkAuthRateLimit\(\s*"signup_microsoft"/);
+  });
+});
+
+describe("SIGNUP-1 · Marketing CTA wiring", () => {
+  it("Sign Up pill added alongside Request a Demonstration", () => {
+    expect(MARKETING).toMatch(/data-testid="marketing-cta-signup"/);
+    expect(MARKETING).toMatch(/data-testid="marketing-cta-demo"/);
+    expect(MARKETING).toMatch(/href="\/signup"/);
+    expect(MARKETING).toMatch(/Request a Demonstration/);
+  });
+});
+
+describe("SIGNUP-1 · Admin boundary explicit in copy", () => {
+  it("Status screen tells the user they'll get Club-level admin, not platform SUPER_ADMIN", () => {
+    expect(PAGE_STA).toMatch(/Club-level administrator/i);
+    expect(PAGE_STA).not.toMatch(/SUPER_ADMIN/);
+  });
+});
+
+describe("SIGNUP-1 · Non-disclosure guards", () => {
+  it("[token] resumes via next/navigation.notFound() on unknown token (no disclosure)", () => {
+    const RESUME = readFileSync(join(process.cwd(), "src/app/signup/t/[token]/page.tsx"), "utf8");
+    expect(RESUME).toMatch(/if \(!reg\) notFound\(\)/);
+  });
+  it("Admin + status pages call notFound() on unknown/expired token", () => {
+    expect(PAGE_ADM).toMatch(/if \(!reg\) notFound\(\)/);
+    expect(PAGE_STA).toMatch(/if \(!reg\) notFound\(\)/);
+  });
+});
+
+describe("SIGNUP-1 · Canada-only launch (data model future-proof)", () => {
+  it("createRegistration enum limits country to SUPPORTED_COUNTRIES = ['CA']", () => {
+    expect(REG_SRV).toMatch(/export const SUPPORTED_COUNTRIES = \["CA"\] as const/);
+    expect(REG_SRV).toMatch(/country:\s*z\.enum\(SUPPORTED_COUNTRIES\)/);
+  });
+  it("country column is a string (not an enum) — future expansion safe", () => {
+    const regBlock = SCHEMA_PG.match(/model\s+SignupRegistration\s*\{[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(regBlock).toMatch(/country\s+String$/m);
+  });
+});

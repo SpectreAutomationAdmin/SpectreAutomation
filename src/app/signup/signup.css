@@ -1,0 +1,251 @@
+/* SIGNUP-1 (2026-10-19) — scoped styles for the self-service
+   signup funnel.  Builds on the approved WEB-1B marketing design
+   system (web1b.css) + the auth-page chrome (auth.css); only adds
+   layout glue the funnel specifically needs.  Does NOT redefine
+   any approved tokens. */
+
+.signup-shell {
+  min-height: 100vh;
+  background: var(--w1b-ground, #f6f3ea);
+  color: var(--w1b-ink, #0f2117);
+  padding: 32px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.signup-header {
+  width: 100%;
+  max-width: 980px;
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 48px;
+}
+.signup-logo-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.signup-stage {
+  width: 100%;
+  max-width: 640px;
+}
+
+.signup-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--w1b-dim, #67715f);
+  margin-bottom: 12px;
+}
+
+.signup-display {
+  font-family: var(--w1b-serif, "GT Alpina Trial Fine", "Playfair Display", serif);
+  font-size: 44px;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  margin: 0 0 16px;
+  color: var(--w1b-ink, #0f2117);
+}
+
+.signup-lede {
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--w1b-dim, #4a5547);
+  margin: 0 0 32px;
+  max-width: 56ch;
+}
+
+/* Step indicator */
+.signup-steps {
+  display: flex;
+  gap: 24px;
+  margin: 0 0 32px;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.signup-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--w1b-dim, #67715f);
+}
+.signup-step-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #e4e0d2;
+  color: #67715f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+}
+.signup-step[data-state="current"] .signup-step-dot {
+  background: var(--w1b-forest, #1f3a26);
+  color: var(--w1b-ground, #f6f3ea);
+}
+.signup-step[data-state="done"] .signup-step-dot {
+  background: var(--w1b-gold, #a98849);
+  color: var(--w1b-ground, #f6f3ea);
+}
+.signup-step[data-state="current"] { color: var(--w1b-ink, #0f2117); font-weight: 600; }
+.signup-step[data-state="done"] { color: var(--w1b-forest, #1f3a26); }
+
+/* Resume banner */
+.signup-resume-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  background: #ece8d7;
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+.signup-resume-banner p { margin: 0; font-size: 14px; color: var(--w1b-ink, #0f2117); }
+.signup-resume-or { color: var(--w1b-dim, #67715f); font-size: 13px; }
+
+/* Error / status */
+.signup-error {
+  padding: 12px 16px;
+  background: #f3dede;
+  border: 1px solid #c58080;
+  border-radius: 6px;
+  color: #6b1818;
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+.signup-notice {
+  padding: 12px 16px;
+  background: #e4ecdf;
+  border: 1px solid #7fa06a;
+  border-radius: 6px;
+  color: #284018;
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+/* Form chrome — mirrors .auth-form shape but inline */
+.signup-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 20px;
+  margin-top: 24px;
+}
+.signup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.signup-field.span-2 { grid-column: 1 / -1; }
+.signup-field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--w1b-ink, #0f2117);
+}
+.signup-field .signup-hint {
+  font-size: 12px;
+  color: var(--w1b-dim, #67715f);
+  margin-top: 2px;
+}
+.signup-field input,
+.signup-field select {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid #cfc9b6;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--w1b-ink, #0f2117);
+  transition: border-color 0.15s;
+}
+.signup-field input:focus,
+.signup-field select:focus {
+  outline: none;
+  border-color: var(--w1b-forest, #1f3a26);
+  box-shadow: 0 0 0 2px rgba(31, 58, 38, 0.15);
+}
+.signup-field input[aria-invalid="true"],
+.signup-field select[aria-invalid="true"] {
+  border-color: #c58080;
+}
+
+.signup-submit {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* Status screen chrome */
+.signup-status-card {
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e2dcc8;
+  padding: 32px;
+  margin-top: 16px;
+}
+.signup-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #ece8d7;
+  gap: 16px;
+}
+.signup-status-row:last-child { border-bottom: 0; }
+.signup-status-label {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--w1b-dim, #67715f);
+}
+.signup-status-value { font-size: 15px; color: var(--w1b-ink, #0f2117); }
+.signup-status-value.muted { color: var(--w1b-dim, #67715f); font-style: italic; }
+
+.signup-foot {
+  margin-top: 48px;
+  padding-top: 24px;
+  border-top: 1px solid #e4e0d2;
+  color: var(--w1b-dim, #67715f);
+  font-size: 13px;
+}
+.signup-foot p { margin: 4px 0; }
+.signup-security-note { font-size: 12px; }
+
+/* Microsoft sign-in button — matches .w1b-pill-cta geometry */
+.signup-ms-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: var(--w1b-forest, #1f3a26);
+  color: var(--w1b-ground, #f6f3ea);
+  border: none;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+}
+.signup-ms-button:hover { background: #163020; }
+.signup-ms-button[disabled] { opacity: 0.6; cursor: not-allowed; }
+.signup-ms-logo {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .signup-display { font-size: 32px; }
+  .signup-form { grid-template-columns: 1fr; }
+  .signup-field.span-2 { grid-column: 1; }
+  .signup-shell { padding: 24px 16px 32px; }
+}

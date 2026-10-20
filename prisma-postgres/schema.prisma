@@ -10416,6 +10416,130 @@ model OutlookDeleteMutation {
   @@index([mailboxConnectionId, emailMessageId, status])
 }
 
+// SIGNUP-1 (2026-10-19) — Self-service club registration.
+//
+// Pre-authenticated prospective club.  No FK to User or Club; those
+// relations are created ONLY by SIGNUP-2 (subscription authorization)
+// and SIGNUP-3 (tenant provisioning) under separate, reviewed slices.
+// SIGNUP-1 never grants Super Admin privileges — the founding admin
+// becomes CLUB_ADMIN on their tenant AT provisioning time, never
+// before.
+//
+// Resume credentials:
+//   - resumeTokenHash           — sha-256 of a 32-byte random token
+//                                 delivered via HTTPOnly cookie AND
+//                                 carried in the URL path /signup/t/<token>.
+//   - emailResumeTokenHash      — second token, generated on Microsoft
+//                                 verification and emailed to the
+//                                 verified address.  Enables resume
+//                                 from any device after step 2.
+//
+// Duplicate detection:  no global uniqueness on legalName / operatingName.
+// Potential duplicates are surfaced to the organization verification
+// workflow via ownershipAutomatedCheckJson; the status endpoint never
+// discloses details of another applicant's registration.
+model SignupRegistration {
+  id                          String    @id @default(cuid())
+  // Sha-256 of the pre-verify URL+cookie token.
+  resumeTokenHash             String    @unique
+  // Sha-256 of the post-verify email-delivered token (null until
+  // Microsoft verification completes).
+  emailResumeTokenHash        String?   @unique
+  emailResumeTokenExpiresAt   DateTime?
+
+  // Screen 1 — Club Identity (ISO-3166-1 alpha-2; "CA" for launch,
+  // data model is country-agnostic for future geographic expansion).
+  legalName                   String
+  // Normalised lower-case form for cross-DB-safe duplicate-signal
+  // scans.  NOT unique (per founder amendment) — multiple clubs may
+  // legitimately share pieces of a name; duplicate signals surface
+  // via org verification, not hard-blocks.  Indexed for scan speed.
+  legalNameNormalized         String
+  operatingName               String?
+  operatingNameNormalized     String?
+  country                     String
+  provinceState               String
+  addressLine1                String
+  addressLine2                String?
+  city                        String
+  postalCode                  String
+  websiteUrl                  String?
+
+  // Screen 2 — Founding Administrator identity.  All populated by the
+  // Microsoft OIDC callback; never trusted from form input.
+  adminEmail                  String?
+  adminMicrosoftOid           String?   // Azure AD object id (verified)
+  adminMicrosoftTenantId      String?   // Azure AD tenant id (verified)
+  adminDisplayName            String?
+  adminGivenName              String?
+  adminSurname                String?
+  // Position/title is user-entered (Screen 2 form, after Microsoft
+  // verification).  Non-security-critical display metadata.
+  adminPosition               String?
+  adminVerifiedAt             DateTime?
+
+  // Lifecycle:
+  //   step   = where the user is in the funnel.
+  //            IDENTITY        — Screen 1 submitted; awaiting admin auth.
+  //            ADMIN_PENDING   — redirected to Microsoft; awaiting callback.
+  //            ADMIN_VERIFIED  — Microsoft identity + position captured.
+  //            PAYMENT_PENDING — SIGNUP-2 territory (not written by SIGNUP-1).
+  //   status = overall registration state.  DRAFT | VERIFIED | ABANDONED | ESCALATED.
+  step                        String    @default("IDENTITY")
+  status                      String    @default("DRAFT")
+
+  // Organization verification — automated-first; manual review only
+  // on exceptions.  State values:
+  //   NOT_STARTED           — identity step not yet complete.
+  //   AUTOMATED_PASSED      — website domain / Microsoft tenant / email
+  //                           domain alignment signals passed.
+  //   NEEDS_MANUAL_REVIEW   — ambiguous signals OR potential-duplicate hit.
+  //   ESCALATED             — SpectreAdmin flagged for direct contact.
+  //   OVERRIDDEN            — SpectreAdmin manually approved despite
+  //                           ambiguous signals.
+  ownershipVerificationState  String    @default("NOT_STARTED")
+  ownershipAutomatedCheckJson String?   // Structured signal evidence.
+  ownershipNote               String?
+
+  // Correlation + expiry.
+  startedByIp                 String?
+  startedUserAgent            String?
+  expiresAt                   DateTime
+  completedAt                 DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  microsoftTransactions SignupOAuthTransaction[]
+
+  @@index([status, expiresAt])
+  @@index([adminMicrosoftOid, status])
+  @@index([ownershipVerificationState])
+  @@index([legalNameNormalized])
+  @@index([operatingNameNormalized])
+}
+
+// SIGNUP-1 — OAuth state for the Microsoft identity-only round-trip.
+// Separate from MailboxOAuthTransaction because the signup flow does
+// NOT require (and must not have) FKs to User / Club.
+model SignupOAuthTransaction {
+  id             String             @id @default(cuid())
+  state          String             @unique
+  registrationId String
+  registration   SignupRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  pkceVerifier   String
+  nonce          String
+  returnPath     String // "/signup/t/<token>/status" — allowlisted
+  createdAt      DateTime           @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  // SUCCESS | DENIED | STATE_UNKNOWN | NONCE_MISMATCH |
+  // PERSONAL_ACCOUNT_REJECTED | EXPIRED | CALLBACK_ERROR
+  outcome        String?
+
+  @@index([registrationId, createdAt])
+  @@index([expiresAt])
+}
+
 // WI-SYNC-1g (2026-10-18) — Outlook restore (move-to-Inbox) mutation.
 // Durable record for a Spectre-initiated restore of an Outlook
 // message.  Mirrors OutlookDeleteMutation (WI-SYNC-1c).  Status

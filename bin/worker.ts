@@ -17,6 +17,7 @@ import { tickAutoSync } from "../src/lib/mailbox/auto-sync-scheduler";
 import { tickReconciliationSweep } from "../src/lib/mailbox/reconciliation-scheduler";
 import { tickSubscriptionMaintenance } from "../src/lib/mailbox/subscription-scheduler";
 import { tickActiveReverify } from "../src/lib/mailbox/active-reverify-scheduler";
+import { tickSignupSweep } from "../src/lib/signup/sweeper";
 import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
 
 const queues = process.argv.slice(2);
@@ -59,6 +60,11 @@ async function main() {
       // 60 s; feature-gated; time-bucketed idempotency; one job per
       // mailbox per bucket.
       await tickActiveReverify();
+      // SIGNUP-1 (2026-10-19) — expired-registration sweep.  Default
+      // cadence 15 min.  Marks expired DRAFT SignupRegistration rows
+      // as ABANDONED and consumes expired SignupOAuthTransaction
+      // rows.  Bounded + idempotent.
+      await tickSignupSweep();
       // Payroll-3D-3B Slice 3 (2026-09-06) — periodic sweep of
       // manager-relevant pay periods → enqueue ensure jobs so the
       // approval WI obligation always exists even if inline

@@ -178,6 +178,25 @@
 }
 .spectre-web1b .w1b-pill-cta:hover,
 .spectre-web1b .w1b-nav-cta:hover { transform: translateY(-1px); background: #FFFFFF; }
+/* SIGNUP-1 (2026-10-19) — ghost variant of the primary pill, used
+   when two CTAs sit side-by-side (Sign Up primary, Request a
+   Demonstration secondary).  Preserves pill geometry; only inverts
+   the fill vs stroke. */
+.spectre-web1b .w1b-pill-cta--secondary {
+  background: transparent;
+  color: var(--w1b-white);
+  border-color: var(--w1b-white);
+}
+.spectre-web1b .w1b-pill-cta--secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.spectre-web1b .w1b-cream .w1b-pill-cta--secondary {
+  color: var(--w1b-ink);
+  border-color: var(--w1b-ink);
+}
+.spectre-web1b .w1b-cream .w1b-pill-cta--secondary:hover {
+  background: rgba(15, 33, 23, 0.06);
+}
 .spectre-web1b .w1b-text-link {
   color: var(--w1b-white);
   font-family: var(--w1b-sans);
