@@ -3,9 +3,11 @@
 // Responsibilities:
 //   • createRegistration({...identity})  — Screen 1 submit.
 //   • resolveRegistrationByToken(token)  — resume + status endpoints.
-//   • rotateEmailResumeToken(registrationId) — called after successful
-//     Microsoft verification; produces the cross-device recovery
-//     credential that is emailed to the verified address.
+//   • rotateResumeToken(registrationId) — SIGNUP-1F: called by the
+//     /signup/r/<recoveryToken> consume route so the clicking browser
+//     establishes a fresh session.  Email recovery credentials now
+//     live in the dedicated SignupRecoveryLink table (short-lived,
+//     single-use, revocable).  See src/lib/signup/recovery-link.ts.
 //   • transitionStep / markStatus / markExpired / markCompleted.
 //
 // Security invariants:
@@ -172,23 +174,28 @@ export async function resolveRegistrationByToken(token: string): Promise<Resolve
 }
 
 /**
- * After successful Microsoft identity verification, rotate the
- * email-delivered resume token.  Returns the plaintext token so the
- * caller can place it in the recovery email.
+ * SIGNUP-1F (2026-10-20) — Rotate the persistent browser-session
+ * resumeToken.  Called by the recovery-link consume path so the
+ * clicking browser receives a fresh HTTPOnly cookie after consuming
+ * an email recovery link on a new device.
  *
- * Idempotent per call — produces a FRESH token each time (any prior
- * emailed link stops working).
+ * The old browser's cookie becomes stale after this call; the old
+ * browser can recover with a fresh email link via /signup/resume.
+ * This is intentional — recovery links are the authoritative
+ * cross-device credential surface.
+ *
+ * Returns the plaintext resume token so the caller can set the
+ * HTTPOnly cookie + redirect to /signup/t/<token>/status.
  */
-export async function rotateEmailResumeToken(registrationId: string): Promise<string> {
+export async function rotateResumeToken(registrationId: string): Promise<string> {
   const token = generateOpaqueToken(32);
   const hash = sha256HashHex(token);
-  const expiresAt = new Date(Date.now() + EMAIL_RESUME_TOKEN_TTL_MS);
   await prisma.signupRegistration.update({
     where: { id: registrationId },
-    data: {
-      emailResumeTokenHash: hash,
-      emailResumeTokenExpiresAt: expiresAt,
-    },
+    data: { resumeTokenHash: hash },
+  });
+  logger.info("signup.resume_token.rotated", {
+    registrationIdTail: registrationId.slice(-6),
   });
   return token;
 }

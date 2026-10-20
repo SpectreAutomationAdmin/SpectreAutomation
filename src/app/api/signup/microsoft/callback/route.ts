@@ -19,9 +19,9 @@ import {
 } from "@/lib/signup/microsoft-oauth";
 import {
   markVerified,
-  rotateEmailResumeToken,
   _unsafe_findById,
 } from "@/lib/signup/registration";
+import { issueRecoveryLink } from "@/lib/signup/recovery-link";
 import { classifyOrganization, recordOrganizationDecision } from "@/lib/signup/org-verification";
 import { sendResumeEmail } from "@/lib/signup/resume-email";
 import { env } from "@/lib/env";
@@ -100,13 +100,21 @@ export async function GET(req: NextRequest) {
           detail: e instanceof Error ? e.message : String(e),
         });
       }
-      // Rotate the email-recovery token + deliver.
-      let emailResumeToken: string | null = null;
+      // SIGNUP-1F (2026-10-20) — issue a fresh recovery link in the
+      // dedicated SignupRecoveryLink table.  Any still-active prior
+      // links are auto-superseded.  Short-lived (24h), single-use,
+      // revocable.  The plaintext token leaves this function exactly
+      // once — placed in the email body, never logged.
       try {
-        emailResumeToken = await rotateEmailResumeToken(outcome.registrationId);
+        const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+        const { token: recoveryToken } = await issueRecoveryLink({
+          registrationId: outcome.registrationId,
+          toEmail: outcome.identity.email,
+          issuedByIp: ip,
+        });
         await sendResumeEmail({
           toEmail: outcome.identity.email,
-          resumeToken: emailResumeToken,
+          resumeToken: recoveryToken,
           legalName: reg.legalName,
           adminDisplayName: outcome.identity.displayName,
         });

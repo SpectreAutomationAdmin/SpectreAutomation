@@ -16,7 +16,7 @@ import { prisma } from "../prisma";
 import { logger } from "../observability/logger";
 import { consumeRate } from "./rate-limit";
 
-export type AuthScope = "login" | "password_reset" | "invite_accept" | "apply" | "signup_start" | "signup_microsoft";
+export type AuthScope = "login" | "password_reset" | "invite_accept" | "apply" | "signup_start" | "signup_microsoft" | "signup_recovery_consume" | "signup_recovery_request";
 
 export type AuthOutcome = "SUCCESS" | "INVALID_PASSWORD" | "UNKNOWN_USER" | "LOCKED" | "RATE_LIMITED";
 

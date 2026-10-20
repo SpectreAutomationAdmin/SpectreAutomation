@@ -20,8 +20,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   resolveRegistrationByToken,
   markVerified,
-  rotateEmailResumeToken,
 } from "@/lib/signup/registration";
+import { issueRecoveryLink } from "@/lib/signup/recovery-link";
 import {
   classifyOrganization,
   recordOrganizationDecision,
@@ -71,11 +71,21 @@ export async function POST(req: NextRequest) {
     operatingName: reg.operatingName,
   });
   await recordOrganizationDecision(reg.id, evidence);
-  const emailToken = await rotateEmailResumeToken(reg.id);
+  // SIGNUP-1F (2026-10-20) — issue via the dedicated recovery-link
+  // table.  Returned to the Playwright caller so cross-browser
+  // acceptance can simulate a real email click without an inbox.
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const { token: emailToken, linkId, expiresAt } = await issueRecoveryLink({
+    registrationId: reg.id,
+    toEmail: syntheticEmail,
+    issuedByIp: ip,
+  });
   return NextResponse.json({
     ok: true,
     verifiedAt: new Date().toISOString(),
     emailResumeToken: emailToken,
+    recoveryLinkIdTail: linkId.slice(-6),
+    recoveryLinkExpiresAt: expiresAt.toISOString(),
     ownership: evidence.decision,
     reasons: evidence.reasons,
   }, { status: 200 });

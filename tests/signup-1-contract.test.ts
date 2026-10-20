@@ -262,14 +262,18 @@ describe("SIGNUP-1 §4 (conditional) · Security invariants", () => {
     expect(FV).not.toMatch(/"SUPER_ADMIN"/);
     expect(FV).not.toMatch(/roleKey:\s*"CLUB_ADMIN"/);
   });
-  it("rotateEmailResumeToken overwrites the hash (invalidates the prior token by write)", () => {
+  it("rotateResumeToken writes a fresh hash to resumeTokenHash (SIGNUP-1F: used by /signup/r consume)", () => {
     const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
-    expect(R).toMatch(/async function rotateEmailResumeToken[\s\S]*?emailResumeTokenHash:\s*hash/);
+    expect(R).toMatch(/async function rotateResumeToken[\s\S]*?resumeTokenHash:\s*hash/);
   });
-  it("resolveRegistrationByToken checks BOTH registration-level expiresAt AND email-token-level expiresAt", () => {
+  it("SIGNUP-1F · rotateEmailResumeToken is removed in favour of the dedicated SignupRecoveryLink table", () => {
+    const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
+    // Comments may still reference it; the exported function must be gone.
+    expect(R).not.toMatch(/export async function rotateEmailResumeToken/);
+  });
+  it("resolveRegistrationByToken checks registration-level expiresAt (SIGNUP-1F: recovery tokens live in SignupRecoveryLink; emailResumeTokenHash compat branch remains for in-flight pre-1F emails)", () => {
     const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");
     expect(R).toMatch(/reg\.expiresAt\.getTime\(\) < Date\.now\(\)/);
-    expect(R).toMatch(/reg\.emailResumeTokenExpiresAt\.getTime\(\) < Date\.now\(\)/);
   });
   it("Abandoned registrations are inaccessible via token resume", () => {
     const R = readFileSync(join(process.cwd(), "src/lib/signup/registration.ts"), "utf8");

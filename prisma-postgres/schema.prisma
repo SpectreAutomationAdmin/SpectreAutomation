@@ -10510,12 +10510,53 @@ model SignupRegistration {
   updatedAt                   DateTime  @updatedAt
 
   microsoftTransactions SignupOAuthTransaction[]
+  recoveryLinks         SignupRecoveryLink[]
 
   @@index([status, expiresAt])
   @@index([adminMicrosoftOid, status])
   @@index([ownershipVerificationState])
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
+}
+
+// SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates
+// email-delivered recovery credentials from the persistent
+// SignupRegistration record.  Each row is short-lived, single-use,
+// and revocable.  A fresh link can be issued at any time without
+// touching the registration row.
+//
+// Lifecycle:
+//   ISSUED    — row exists; consumedAt=null; revokedAt=null;
+//               expiresAt in the future.
+//   CONSUMED  — consumedAt set.  Any subsequent lookup fails.
+//   REVOKED   — revokedAt set.  Operator action; also set when a
+//               fresh link is issued and the old one is still active
+//               (revokeReason="SUPERSEDED").
+//   EXPIRED   — expiresAt < now and consumedAt+revokedAt still null.
+//               Treated as unusable by the resolver.
+//
+// The sha-256 hash is the only credential surface.  The DB id is
+// NEVER emitted in a URL.  Email body contains only the plaintext
+// token embedded in a /signup/r/<token> URL.
+model SignupRecoveryLink {
+  id              String             @id @default(cuid())
+  registrationId  String
+  registration    SignupRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  tokenHash       String             @unique
+  issuedAt        DateTime           @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  revokedAt       DateTime?
+  // Short machine code: SUPERSEDED | ADMIN_REVOKED | ABUSE_SUSPECTED.
+  revokeReason    String?
+  // Mirrors the address the email was sent to.  Useful for operator
+  // triage; not a credential.
+  issuedToEmail   String
+  issuedByIp      String?
+  consumedByIp    String?
+
+  @@index([registrationId, issuedAt])
+  @@index([expiresAt])
 }
 
 // SIGNUP-1 — OAuth state for the Microsoft identity-only round-trip.

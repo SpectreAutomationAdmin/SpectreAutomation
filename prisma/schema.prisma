@@ -10687,12 +10687,36 @@ model SignupRegistration {
   updatedAt                   DateTime  @updatedAt
 
   microsoftTransactions SignupOAuthTransaction[]
+  recoveryLinks         SignupRecoveryLink[]
 
   @@index([status, expiresAt])
   @@index([adminMicrosoftOid, status])
   @@index([ownershipVerificationState])
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
+}
+
+// SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates
+// email-delivered recovery credentials from the persistent
+// SignupRegistration record.  Each row is short-lived, single-use,
+// and revocable.  A fresh link can be issued at any time without
+// touching the registration row.
+model SignupRecoveryLink {
+  id              String             @id @default(cuid())
+  registrationId  String
+  registration    SignupRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  tokenHash       String             @unique
+  issuedAt        DateTime           @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  revokedAt       DateTime?
+  revokeReason    String?
+  issuedToEmail   String
+  issuedByIp      String?
+  consumedByIp    String?
+
+  @@index([registrationId, issuedAt])
+  @@index([expiresAt])
 }
 
 model SignupOAuthTransaction {
