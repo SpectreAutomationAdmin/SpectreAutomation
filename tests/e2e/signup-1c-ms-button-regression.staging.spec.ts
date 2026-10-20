@@ -143,8 +143,19 @@ runAt(
     // Microsoft renders an error page at the same URL (status 200)
     // whose body contains the AADSTS50011 error code.  The browser
     // URL still looks healthy, so page.url() alone can't detect it.
-    // Scrape the page content for the diagnostic.
-    const microsoftBody = await page.content();
+    //
+    // Scrape the page content for the diagnostic.  Microsoft often
+    // runs multi-step client-side navigation after the authorize URL
+    // lands — wait for the DOM to settle before reading content.
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    await page.waitForTimeout(1_500);
+    let microsoftBody = "";
+    for (let i = 0; i < 3; i++) {
+      try {
+        microsoftBody = await page.content();
+        break;
+      } catch { await page.waitForTimeout(1_000); }
+    }
     const errorCodes = Array.from(microsoftBody.matchAll(/AADSTS\d{4,6}/g)).map((m) => m[0]);
     expect(
       errorCodes,
