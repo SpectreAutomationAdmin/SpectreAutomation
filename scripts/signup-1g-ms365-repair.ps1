@@ -401,6 +401,27 @@ if ($Test) {
     Assert-Equal 'no-reply@spectreautomation.com' (Normalize-Email '  no-reply@spectreautomation.com  ') 'normalize-email - trim'
     Assert-Equal '' (Normalize-Email $null) 'normalize-email - null -> empty'
 
+    # --- SIGNUP-1G final review: scope-filter + SP identity assertions ---
+    # Scope filter EXACT equality (not merely non-empty).  These two
+    # tests exercise the logic of the Phase 3 read-back strengthening.
+    $expectedFilter = "PrimarySmtpAddress -eq 'no-reply@spectreautomation.com'"
+    Assert-Equal $false ([string]::IsNullOrWhiteSpace($expectedFilter)) 'scope-filter - expected is non-empty (sanity)'
+    Assert-Equal $true ($expectedFilter -eq "PrimarySmtpAddress -eq 'no-reply@spectreautomation.com'") 'scope-filter - exact match self-check'
+    Assert-Equal $false ($expectedFilter -eq "PrimarySmtpAddress -eq 'other@spectreautomation.com'") 'scope-filter - different value does NOT match'
+    Assert-Equal $false ($expectedFilter -eq "PrimarySmtpAddress -eq 'no-reply@spectreautomation.com' ") 'scope-filter - trailing whitespace does NOT match'
+    Assert-Equal $false ($expectedFilter -eq "Alias -eq 'no-reply'") 'scope-filter - different property does NOT match'
+
+    # SP identity validation (case-fold AppId equality + ObjectId GUID shape).
+    $guidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    $requested = '11111111-2222-3333-4444-555555555555'
+    Assert-Equal $true  ($requested.ToLowerInvariant() -eq '11111111-2222-3333-4444-555555555555'.ToLowerInvariant()) 'sp-id - matching AppId equal case-fold'
+    Assert-Equal $true  ('11111111-2222-3333-4444-555555555555'.ToLowerInvariant() -eq '11111111-2222-3333-4444-555555555555'.ToUpperInvariant().ToLowerInvariant()) 'sp-id - case-fold equal regardless of returned case'
+    Assert-Equal $false ($requested.ToLowerInvariant() -eq '99999999-9999-9999-9999-999999999999'.ToLowerInvariant()) 'sp-id - different AppId does NOT match'
+    Assert-Equal $true  ('66666666-7777-8888-9999-aaaaaaaaaaaa' -match $guidPattern) 'sp-id - well-formed ObjectId matches guid pattern'
+    Assert-Equal $false ('' -match $guidPattern) 'sp-id - empty ObjectId does NOT match guid pattern'
+    Assert-Equal $false ('not-a-guid' -match $guidPattern) 'sp-id - garbage ObjectId does NOT match guid pattern'
+    Assert-Equal $false ('11111111-2222-3333-4444' -match $guidPattern) 'sp-id - truncated ObjectId does NOT match guid pattern'
+
     Say-Section "Self-test summary"
     if ($script:failures -gt 0) {
         Say-Fail "$($script:failures) assertion(s) failed."
@@ -552,11 +573,46 @@ try {
     Say-Info "(NOT the App Registration's Object ID -- those are different GUIDs)."
     exit 4
 }
+if (-not $sp) {
+    Say-Fail "Get-ServicePrincipal returned a null record for AppId '$AppClientId' (fail-closed)."
+    exit 4
+}
+
+# Strengthened SP resolution (SIGNUP-1G final review correction):
+# Verify the record Exchange returned actually corresponds to the AppId
+# we requested, and that its ObjectId is present and well-formed.
+# Fail-closed on either check — do not continue with a bogus SP.
+$returnedAppId = ("$($sp.AppId)").Trim()
+$requestedAppId = $AppClientId.Trim()
+if ([string]::IsNullOrWhiteSpace($returnedAppId)) {
+    Say-Fail "Get-ServicePrincipal returned an SP with no AppId (fail-closed)."
+    exit 4
+}
+# GUIDs are case-insensitive; compare case-fold.
+if ($returnedAppId.ToLowerInvariant() -ne $requestedAppId.ToLowerInvariant()) {
+    Say-Fail "Service principal AppId mismatch (fail-closed)."
+    Say-Info "  Requested AppId : $requestedAppId"
+    Say-Info "  Returned AppId  : $returnedAppId"
+    Say-Info "This typically means Get-ServicePrincipal matched on DisplayName instead of AppId."
+    exit 4
+}
+
+$returnedObjectId = ("$($sp.ObjectId)").Trim()
+$guidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+if ([string]::IsNullOrWhiteSpace($returnedObjectId)) {
+    Say-Fail "Service principal has no ObjectId (fail-closed)."
+    exit 4
+}
+if ($returnedObjectId -notmatch $guidPattern) {
+    Say-Fail "Service principal ObjectId '$returnedObjectId' is not a well-formed GUID (fail-closed)."
+    exit 4
+}
+
 Say-OK "Service principal:"
 Say-Info "  DisplayName : $($sp.DisplayName)"
-Say-Info "  AppId       : $($sp.AppId)"
-Say-Info "  ObjectId    : $($sp.ObjectId)"
-$spObjectId = $sp.ObjectId
+Say-Info "  AppId       : $($sp.AppId)  (verified matches -AppClientId)"
+Say-Info "  ObjectId    : $($sp.ObjectId)  (verified GUID)"
+$spObjectId = $returnedObjectId
 
 # ============================================================================
 # Phase 3 -- Management scope diagnose + idempotent repair.
@@ -639,7 +695,9 @@ if (-not $existingScope) {
     }
 }
 
-# Post-repair verification -- read it back.
+# Post-repair verification -- read it back (SIGNUP-1G final review:
+# strengthened to require EXACT equality against $ExpectedFilter, not
+# merely non-empty).
 if (-not $DryRun) {
     try {
         $existingScope = Get-ManagementScope -Identity $ScopeName -ErrorAction Stop
@@ -647,11 +705,23 @@ if (-not $DryRun) {
         Say-Fail "Get-ManagementScope read-back failed: $($_.Exception.Message)"
         exit 5
     }
-    if ([string]::IsNullOrWhiteSpace($existingScope.RecipientFilter)) {
+    $readBackFilter = "$($existingScope.RecipientFilter)"
+    if ([string]::IsNullOrWhiteSpace($readBackFilter)) {
         Say-Fail "Scope filter is STILL blank after repair.  Aborting."
         exit 5
     }
-    Say-OK "Scope filter confirmed on read-back: $($existingScope.RecipientFilter)"
+    # Strict equality against the expected filter.  A non-empty but
+    # subtly different value (extra whitespace, swapped quotes, a
+    # different property) must NOT be accepted as proof of correct
+    # scoping.
+    if ($readBackFilter -ne $ExpectedFilter) {
+        Say-Fail "Scope filter read-back MISMATCH (fail-closed)."
+        Say-Info "  Expected: $ExpectedFilter"
+        Say-Info "  Actual  : $readBackFilter"
+        Say-Info "The scope was written but its stored filter does not equal the intended value."
+        exit 5
+    }
+    Say-OK "Scope filter confirmed on read-back (exact match): $readBackFilter"
 }
 
 # Phase 3b -- Recipient preview: the filter must match exactly ONE mailbox
