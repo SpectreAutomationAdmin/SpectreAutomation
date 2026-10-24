@@ -1,78 +1,134 @@
 <#
 .SYNOPSIS
-    SIGNUP-1G — Idempotent diagnostic + repair for the Spectre transactional-mail
-    Exchange Online RBAC-for-Applications configuration.
+    SIGNUP-1G -- Idempotent diagnostic + repair for the dedicated
+    Spectre transactional-mail Entra app's Exchange Online
+    RBAC-for-Applications configuration.
 
 .DESCRIPTION
-    Diagnoses the current state of the dedicated "Spectre Transactional Mail"
-    Entra app's authorization to send mail from no-reply@spectreautomation.com
-    via Microsoft Graph.  Repairs idempotently where safe:
+    SCOPE OF THIS SCRIPT.
+    Verifies and repairs the Exchange Online RBAC state for ONE
+    specific Entra service principal, so it can send mail via
+    Microsoft Graph from exactly one shared mailbox and no other.
 
-      - If the "Spectre No-Reply Only" management scope exists but its
-        RecipientRestrictionFilter is blank or wrong, updates it in place
-        (never deletes-and-recreates).
-      - If the "Application Mail.Send" role assignment on the service
-        principal does not yet exist with the correct scope, creates it.
-      - If both already exist and are correct, this script is a no-op
-        beyond the verification.
+    Explicitly NOT in scope:
+      - Microsoft Entra ID API permissions on the Entra app (the
+        operator must manually confirm this list is empty -- a
+        tenant-wide "Mail.Send" grant in Entra bypasses Exchange
+        RBAC).  See the operator runbook section 6.
+      - A live Microsoft Graph send test from the designated
+        mailbox and a live attempt to send from another mailbox.
+        See the operator runbook section 6b and section 6c.
 
-    Verifies with BOTH a positive and a negative Test-ServicePrincipalAuthorization
-    before declaring success.
+    This script's green exit therefore proves ONLY that the
+    Exchange Online RBAC configuration matches intent.  It does
+    not and cannot by itself prove end-to-end security.
 
-    The script:
-      - Does not request, accept, or print any client secret.
-      - Does not change any existing role assignment or management scope that
-        is not strictly the two target resources.
-      - Does not touch Microsoft Entra ID permissions.
-      - Supports -DryRun to show the proposed changes without executing them.
+    DIAGNOSES AND REPAIRS (idempotently):
+      - Management scope exists but has blank/incorrect
+        RecipientRestrictionFilter -> repair in place with
+        Set-ManagementScope.  Never deletes.
+      - Correct scope -> recipient preview must return exactly
+        one mailbox equal to the designated SharedMailbox.
+      - Target role assignment missing -> create with
+        New-ManagementRoleAssignment.
+      - Role assignment that already matches -> no-op.
+
+    BLOCKS (refuses to report success) on:
+      - Any unscoped Mail.Send-granting role assignment on the SP.
+      - Any Mail.Send-granting role assignment with a DIFFERENT
+        scope than the intended one.
+      - Shared mailbox is missing or has the wrong recipient type.
+      - Negative control mailbox cannot be resolved.
+      - Negative test shows the SP CAN send from the control.
+      - Any Exchange query returns an error (fail-closed).
+
+    DRY RUN.
+      -DryRun performs no writes.  Reports every proposed
+      write as "[DRY-RUN WOULD CHANGE]".  Verification runs
+      against CURRENT state only; the summary flags whether a
+      follow-up live run is required to re-verify after writes.
 
 .PARAMETER AppClientId
-    REQUIRED. The Entra app's Application (client) ID.  This is the GUID on
-    the App Registration overview page in Entra admin center.  The script
-    resolves the Service Principal's ObjectId from this.
+    REQUIRED.  The Entra app's Application (client) ID (GUID
+    from the App Registration overview).  The script resolves
+    the Service Principal's ObjectId from this.
 
 .PARAMETER SharedMailbox
-    The mailbox the app is authorized to send from.  Defaults to
-    no-reply@spectreautomation.com.  Must already exist in the tenant.
+    REQUIRED-with-default.  Mailbox the app is authorized to
+    send from.  Default: no-reply@spectreautomation.com.
+    Must already exist as a SharedMailbox in the tenant.
 
 .PARAMETER NegativeControlMailbox
-    A different, real mailbox that the app MUST NOT be able to send from.
-    The negative test asserts InScope=False against this address.  Defaults
-    to admin@spectreautomation.com.
+    REQUIRED-with-default.  A different, real mailbox that
+    MUST NOT be in-scope for this app.  Default:
+    admin@spectreautomation.com.
+    MANDATORY: if this mailbox cannot be resolved, the script
+    exits non-zero.  There is no "skip negative test" path.
 
 .PARAMETER ScopeName
-    The management scope name.  Defaults to "Spectre No-Reply Only".
+    Management scope name.  Default: "Spectre No-Reply Only".
 
 .PARAMETER DryRun
-    If set, prints the proposed changes without executing them.
+    If set, no writes are performed.  See DESCRIPTION.
+
+.PARAMETER Test
+    Self-check mode.  Runs pure-function assertions against
+    synthetic inputs that exercise the failure branches.
+    Does NOT connect to Exchange Online.  Does NOT require any
+    credentials.  Exits 0 on all assertions passing, non-zero
+    with the first failed assertion.
 
 .EXAMPLE
-    .\signup-1g-ms365-repair.ps1 -AppClientId "11111111-2222-3333-4444-555555555555"
+    .\signup-1g-ms365-repair.ps1 -AppClientId '11111111-2222-3333-4444-555555555555'
 
 .EXAMPLE
-    .\signup-1g-ms365-repair.ps1 -AppClientId "..." -NegativeControlMailbox "founder@spectreautomation.com" -DryRun
+    .\signup-1g-ms365-repair.ps1 -AppClientId '...' -DryRun
+
+.EXAMPLE
+    .\signup-1g-ms365-repair.ps1 -Test
 
 .NOTES
     PREREQUISITES:
-      - PowerShell 7+ recommended.  Script runs on Windows PowerShell 5.1 too,
-        but 7+ is more forgiving of module-version mismatches.
+      - PowerShell 7+ strongly preferred.  Script runs on
+        Windows PowerShell 5.1 but 5.1 has copy-paste quirks.
       - ExchangeOnlineManagement module v3.4 or later.
-      - Signed in to Exchange Online as a Global Admin or Exchange Admin
-        (Organization Management role group).
+      - Signed in to Exchange Online as a Global Admin or
+        Exchange Admin (Organization Management role group).
 
     SAFETY:
       - Idempotent.  Safe to rerun.
       - Reads existing state before any write.
-      - Writes only to the two target resources (management scope +
-        role assignment on the ONE service principal).
+      - Writes only to the two target resources: the one
+        management scope + one role assignment on the one SP.
       - No deletion operations.
+      - No secret handling.  The script never reads or prints
+        a client secret.
 
+    EXIT CODES:
+      0  -- All verifications passed.  Exchange RBAC matches
+           intent.  End-to-end security still depends on the
+           operator-side checks (see runbook section 6).
+      2  -- Preflight failure (module missing, Exchange
+           connection failed).
+      3  -- Mailbox validation failure (SharedMailbox missing
+           or wrong recipient type, or negative control
+           mailbox missing).
+      4  -- Service principal not resolvable from AppId.
+      5  -- Scope repair failed (filter still wrong after write)
+           OR scope recipient-preview did not match exactly
+           one target mailbox.
+      6  -- Role-assignment create/query failed.
+      7  -- Positive test failed (intended grant not in scope).
+      8  -- Negative test failed (SP can send from control
+           mailbox) -- SECURITY DEFECT.
+      9  -- Broader grant blocker (unscoped or differently-
+           scoped Mail.Send-granting role assignment on SP).
+     10  -- Self-test assertion failure (-Test mode).
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, HelpMessage = "The Entra app's Application (client) ID (GUID).")]
-    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
+    [Parameter(Mandatory = $false, HelpMessage = "The Entra app's Application (client) ID (GUID).")]
     [string]$AppClientId,
 
     [Parameter(Mandatory = $false)]
@@ -85,19 +141,22 @@ param(
     [string]$ScopeName = 'Spectre No-Reply Only',
 
     [Parameter(Mandatory = $false)]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Test
 )
 
 $ErrorActionPreference = 'Stop'
-# TLS 1.2 — required by Install-Module from PowerShell Gallery on
-# older Windows configurations.  Harmless if already set.
-[Net.ServicePointManager]::SecurityProtocol =
-    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $script:Changes = @()
 function Record-Change([string]$Description) {
     $script:Changes += $Description
-    Write-Host "  [CHANGE] $Description" -ForegroundColor Yellow
+    if ($DryRun) {
+        Write-Host "  [DRY-RUN WOULD CHANGE] $Description" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [CHANGE]              $Description" -ForegroundColor Yellow
+    }
 }
 
 function Say-Section([string]$Title) {
@@ -110,45 +169,310 @@ function Say-Section([string]$Title) {
 function Say-OK([string]$msg)   { Write-Host "  [OK]      $msg" -ForegroundColor Green }
 function Say-Warn([string]$msg) { Write-Host "  [WARN]    $msg" -ForegroundColor Yellow }
 function Say-Fail([string]$msg) { Write-Host "  [FAIL]    $msg" -ForegroundColor Red }
+function Say-Info([string]$msg) { Write-Host "  [INFO]    $msg" }
+
+# ============================================================================
+# Pure functions -- side-effect-free, testable without live tenant.
+# ============================================================================
+
+# Normalize an email address for case-insensitive compare.
+function Normalize-Email([string]$addr) {
+    if ($null -eq $addr) { return '' }
+    return $addr.Trim().ToLowerInvariant()
+}
+
+# Classify a list of role-assignment records (from Get-ManagementRoleAssignment)
+# into: {matching, otherScoped, unscoped, broaderRole} relative to the intended
+# ($Role, $ScopeName) target.  Operates on a hashtable shape so it can be
+# exercised with mock data in -Test mode.
+#
+# Each input record is expected to carry:  Role, CustomResourceScope,
+#   RecipientAdministrativeUnitScope, Name.
+#
+# Mail.Send-granting roles include "Application Mail.Send", "Application Mail
+# Full Access", and "Application Exchange Full Access" -- the latter two confer
+# Mail.Send among other permissions, so a grant of either must also be treated
+# as a Mail.Send grant.
+function Classify-RoleAssignments {
+    param(
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()] $Assignments,
+        [Parameter(Mandatory=$true)][string] $ExpectedScope
+    )
+    $mailSendRoles = @(
+        'Application Mail.Send',
+        'Application Mail Full Access',
+        'Application Exchange Full Access'
+    )
+    $matching = @()
+    $otherScoped = @()
+    $unscoped = @()
+    $broaderRole = @()
+
+    foreach ($a in $Assignments) {
+        if (-not ($mailSendRoles -contains $a.Role)) { continue }
+
+        $scope = $a.CustomResourceScope
+        $auScope = $a.RecipientAdministrativeUnitScope
+        $isScoped = -not ([string]::IsNullOrWhiteSpace($scope)) -or `
+                    -not ([string]::IsNullOrWhiteSpace($auScope))
+
+        # Any Mail.Send grant via a BROADER role is a blocker regardless of
+        # scope -- the role carries extra permissions Spectre's app does not need.
+        if ($a.Role -ne 'Application Mail.Send') {
+            $broaderRole += $a
+            continue
+        }
+
+        if (-not $isScoped) {
+            $unscoped += $a
+        }
+        elseif ($scope -eq $ExpectedScope) {
+            $matching += $a
+        }
+        else {
+            $otherScoped += $a
+        }
+    }
+    return [pscustomobject]@{
+        Matching    = $matching
+        OtherScoped = $otherScoped
+        Unscoped    = $unscoped
+        BroaderRole = $broaderRole
+    }
+}
+
+# Decide the positive/negative verdict from a Test-ServicePrincipalAuthorization
+# result set.  Positive: at least one Mail.Send-conferring row has
+# InScope=True AND AllowedResourceScope = ExpectedScope.  Negative:
+# NO Mail.Send-conferring row has InScope=True.
+function Evaluate-AuthorizationResult {
+    param(
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()] $AuthRows,
+        [Parameter(Mandatory=$true)][string] $ExpectedScope,
+        [Parameter(Mandatory=$true)][ValidateSet('Positive','Negative')] [string] $Mode
+    )
+    # Rows that confer Mail.Send either directly (GrantedPermissions
+    # contains "Mail.Send") or via a broader role.  We filter on
+    # GrantedPermissions since Test-ServicePrincipalAuthorization returns
+    # the resolved permission list rather than the raw role name alone.
+    $relevant = @($AuthRows | Where-Object {
+        $gp = $_.GrantedPermissions
+        if ($null -eq $gp) { return $false }
+        # GrantedPermissions in the live cmdlet is a semicolon-separated
+        # string in some module versions and an array in others -- handle both.
+        if ($gp -is [string]) { return ($gp -split '[,; ]') -contains 'Mail.Send' }
+        return $gp -contains 'Mail.Send'
+    })
+
+    if ($Mode -eq 'Positive') {
+        $good = @($relevant | Where-Object {
+            $_.InScope -eq $true -and $_.AllowedResourceScope -eq $ExpectedScope
+        })
+        $wrongScope = @($relevant | Where-Object {
+            $_.InScope -eq $true -and $_.AllowedResourceScope -ne $ExpectedScope
+        })
+        return [pscustomobject]@{
+            Pass        = ($good.Count -ge 1)
+            Matching    = $good
+            WrongScope  = $wrongScope
+            Relevant    = $relevant
+        }
+    }
+    else {
+        # Negative -- nothing may be InScope.
+        $leaks = @($relevant | Where-Object { $_.InScope -eq $true })
+        return [pscustomobject]@{
+            Pass        = ($leaks.Count -eq 0)
+            Leaks       = $leaks
+            Relevant    = $relevant
+        }
+    }
+}
+
+# ============================================================================
+# -Test mode -- mocked failure-path assertions, no tenant required.
+# ============================================================================
+if ($Test) {
+    $failures = 0
+    function Assert-Equal($expected, $actual, $label) {
+        if ($expected -ne $actual) {
+            Say-Fail "  Assert '$label' -- expected [$expected], actual [$actual]"
+            $script:failures++
+        } else {
+            Say-OK "  Assert '$label'"
+        }
+    }
+
+    Say-Section "-Test - pure-function assertions"
+
+    # --- Classify-RoleAssignments -------------------------------------------
+
+    # Empty input -> everything zero.
+    $r = Classify-RoleAssignments -Assignments @() -ExpectedScope 'Scope-A'
+    Assert-Equal 0 $r.Matching.Count    'empty -> Matching=0'
+    Assert-Equal 0 $r.OtherScoped.Count 'empty -> OtherScoped=0'
+    Assert-Equal 0 $r.Unscoped.Count    'empty -> Unscoped=0'
+    Assert-Equal 0 $r.BroaderRole.Count 'empty -> BroaderRole=0'
+
+    # Correctly scoped assignment.
+    $r = Classify-RoleAssignments -Assignments @(
+        [pscustomobject]@{ Role='Application Mail.Send'; CustomResourceScope='Scope-A';
+                           RecipientAdministrativeUnitScope=$null; Name='rc-1' }
+    ) -ExpectedScope 'Scope-A'
+    Assert-Equal 1 $r.Matching.Count    'scoped-correctly -> Matching=1'
+    Assert-Equal 0 $r.OtherScoped.Count 'scoped-correctly -> OtherScoped=0'
+
+    # Differently scoped.
+    $r = Classify-RoleAssignments -Assignments @(
+        [pscustomobject]@{ Role='Application Mail.Send'; CustomResourceScope='Scope-OTHER';
+                           RecipientAdministrativeUnitScope=$null; Name='rc-2' }
+    ) -ExpectedScope 'Scope-A'
+    Assert-Equal 0 $r.Matching.Count    'differently-scoped -> Matching=0'
+    Assert-Equal 1 $r.OtherScoped.Count 'differently-scoped -> OtherScoped=1'
+
+    # Unscoped (both scope fields empty).
+    $r = Classify-RoleAssignments -Assignments @(
+        [pscustomobject]@{ Role='Application Mail.Send'; CustomResourceScope='';
+                           RecipientAdministrativeUnitScope=''; Name='rc-3' }
+    ) -ExpectedScope 'Scope-A'
+    Assert-Equal 1 $r.Unscoped.Count    'unscoped -> Unscoped=1'
+
+    # Broader role (Mail Full Access).
+    $r = Classify-RoleAssignments -Assignments @(
+        [pscustomobject]@{ Role='Application Mail Full Access'; CustomResourceScope='Scope-A';
+                           RecipientAdministrativeUnitScope=$null; Name='rc-4' }
+    ) -ExpectedScope 'Scope-A'
+    Assert-Equal 1 $r.BroaderRole.Count 'broader-role -> BroaderRole=1'
+    Assert-Equal 0 $r.Matching.Count    'broader-role -> Matching=0  (not treated as satisfying intent)'
+
+    # Non-Mail.Send role -> ignored.
+    $r = Classify-RoleAssignments -Assignments @(
+        [pscustomobject]@{ Role='Application Calendars.Read'; CustomResourceScope='Scope-A';
+                           RecipientAdministrativeUnitScope=$null; Name='rc-5' }
+    ) -ExpectedScope 'Scope-A'
+    Assert-Equal 0 $r.Matching.Count    'unrelated-role -> Matching=0'
+    Assert-Equal 0 $r.BroaderRole.Count 'unrelated-role -> BroaderRole=0'
+
+    # --- Evaluate-AuthorizationResult ---------------------------------------
+
+    # Positive -- scope-matching row present.
+    $pv = Evaluate-AuthorizationResult -Mode Positive -ExpectedScope 'Scope-A' -AuthRows @(
+        [pscustomobject]@{ RoleName='Application Mail.Send'; GrantedPermissions=@('Mail.Send');
+                           AllowedResourceScope='Scope-A'; InScope=$true }
+    )
+    Assert-Equal $true $pv.Pass 'positive -> matching scope passes'
+
+    # Positive -- row present but wrong scope.
+    $pv = Evaluate-AuthorizationResult -Mode Positive -ExpectedScope 'Scope-A' -AuthRows @(
+        [pscustomobject]@{ RoleName='Application Mail.Send'; GrantedPermissions=@('Mail.Send');
+                           AllowedResourceScope='Scope-ELSEWHERE'; InScope=$true }
+    )
+    Assert-Equal $false $pv.Pass 'positive -> wrong-scope match does NOT pass'
+    Assert-Equal 1 $pv.WrongScope.Count 'positive -> wrong-scope captured'
+
+    # Negative -- leaks present.
+    $nv = Evaluate-AuthorizationResult -Mode Negative -ExpectedScope 'Scope-A' -AuthRows @(
+        [pscustomobject]@{ RoleName='Application Mail.Send'; GrantedPermissions=@('Mail.Send');
+                           AllowedResourceScope='Scope-ELSEWHERE'; InScope=$true }
+    )
+    Assert-Equal $false $nv.Pass 'negative -> any InScope leak fails'
+    Assert-Equal 1 $nv.Leaks.Count 'negative -> leak captured'
+
+    # Negative -- no Mail.Send row at all.
+    $nv = Evaluate-AuthorizationResult -Mode Negative -ExpectedScope 'Scope-A' -AuthRows @()
+    Assert-Equal $true $nv.Pass 'negative -> no rows passes'
+
+    # Negative -- row present but InScope=false.
+    $nv = Evaluate-AuthorizationResult -Mode Negative -ExpectedScope 'Scope-A' -AuthRows @(
+        [pscustomobject]@{ RoleName='Application Mail.Send'; GrantedPermissions=@('Mail.Send');
+                           AllowedResourceScope='Scope-A'; InScope=$false }
+    )
+    Assert-Equal $true $nv.Pass 'negative -> out-of-scope row passes'
+
+    # GrantedPermissions as semicolon-separated string.
+    $nv = Evaluate-AuthorizationResult -Mode Negative -ExpectedScope 'Scope-A' -AuthRows @(
+        [pscustomobject]@{ RoleName='Application Mail.Send'; GrantedPermissions='Mail.Send;Mail.Read';
+                           AllowedResourceScope='Scope-A'; InScope=$true }
+    )
+    Assert-Equal $false $nv.Pass 'negative -> semi-colon-string GrantedPermissions still parsed'
+
+    # Normalize-Email.
+    Assert-Equal 'no-reply@spectreautomation.com' (Normalize-Email 'NO-REPLY@SpectreAutomation.COM') 'normalize-email - case fold'
+    Assert-Equal 'no-reply@spectreautomation.com' (Normalize-Email '  no-reply@spectreautomation.com  ') 'normalize-email - trim'
+    Assert-Equal '' (Normalize-Email $null) 'normalize-email - null -> empty'
+
+    Say-Section "Self-test summary"
+    if ($script:failures -gt 0) {
+        Say-Fail "$($script:failures) assertion(s) failed."
+        exit 10
+    }
+    Say-OK "All assertions passed."
+    exit 0
+}
+
+# ============================================================================
+# Live run begins here -- requires -AppClientId.
+# ============================================================================
+if ([string]::IsNullOrWhiteSpace($AppClientId)) {
+    Say-Fail "-AppClientId is required for a live run.  (Use -Test to run the self-check without a tenant.)"
+    exit 2
+}
+if ($AppClientId -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+    Say-Fail "-AppClientId must be a GUID."
+    exit 2
+}
+
+if ($DryRun) {
+    Write-Host ""
+    Write-Host "========================================================================" -ForegroundColor Yellow
+    Write-Host " DRY RUN MODE -- no writes will be performed.  Verification runs against" -ForegroundColor Yellow
+    Write-Host " CURRENT state.  Follow-up live run required if any changes are listed." -ForegroundColor Yellow
+    Write-Host "========================================================================" -ForegroundColor Yellow
+}
+
+# TLS 1.2 -- required by Install-Module on older Windows configurations.
+# Harmless if already set.
+[Net.ServicePointManager]::SecurityProtocol =
+    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $ExpectedFilter = "PrimarySmtpAddress -eq '$SharedMailbox'"
 
 # ============================================================================
-# Phase 0 — Preflight
+# Phase 0 -- Preflight
 # ============================================================================
-Say-Section "Phase 0 — Preflight"
-
-Write-Host "  PowerShell version: $($PSVersionTable.PSVersion)"
+Say-Section "Phase 0 -- Preflight"
+Say-Info "PowerShell version: $($PSVersionTable.PSVersion)"
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Say-Warn "Running on Windows PowerShell $($PSVersionTable.PSVersion).  PowerShell 7+ is recommended for the ExchangeOnlineManagement module.  Continuing."
+    Say-Warn "Running on Windows PowerShell $($PSVersionTable.PSVersion).  PowerShell 7+ is preferred."
 }
 
-Write-Host "  Checking ExchangeOnlineManagement module…"
+Say-Info "Checking ExchangeOnlineManagement module..."
 $module = Get-Module -ListAvailable -Name ExchangeOnlineManagement |
     Sort-Object Version -Descending |
     Select-Object -First 1
 if (-not $module) {
     Say-Fail "ExchangeOnlineManagement module not installed."
-    Write-Host "    Install with: Install-Module -Name ExchangeOnlineManagement -MinimumVersion 3.4.0 -Scope CurrentUser"
+    Say-Info "Install with: Install-Module -Name ExchangeOnlineManagement -MinimumVersion 3.4.0 -Scope CurrentUser"
     exit 2
 }
 if ($module.Version -lt [version]'3.4.0') {
     Say-Fail "ExchangeOnlineManagement v$($module.Version) is older than the required 3.4.0."
-    Write-Host "    Update with: Update-Module -Name ExchangeOnlineManagement -Force"
+    Say-Info "Update with: Update-Module -Name ExchangeOnlineManagement -Force"
     exit 2
 }
 Say-OK "ExchangeOnlineManagement v$($module.Version)"
 Import-Module ExchangeOnlineManagement -ErrorAction Stop
 
-Write-Host "  Checking Exchange Online connection…"
+Say-Info "Checking Exchange Online connection..."
 $connected = $false
+$connInfo = $null
 try {
     $connInfo = Get-ConnectionInformation -ErrorAction Stop
     if ($connInfo -and $connInfo.State -eq 'Connected') { $connected = $true }
 } catch { $connected = $false }
 
 if (-not $connected) {
-    Write-Host "  Not connected.  Running Connect-ExchangeOnline…"
+    Say-Info "Not connected.  Running Connect-ExchangeOnline..."
     try {
         Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
         Say-OK "Connected to Exchange Online"
@@ -161,224 +485,351 @@ if (-not $connected) {
 }
 
 # ============================================================================
-# Phase 1 — Verify shared mailbox exists
+# Phase 1 -- Shared mailbox validation (identity + type)
 # ============================================================================
-Say-Section "Phase 1 — Shared mailbox verification"
+Say-Section "Phase 1 -- Shared mailbox validation"
 
+$mbx = $null
 try {
-    $mbx = Get-EXOMailbox -Identity $SharedMailbox -ErrorAction Stop
-    Say-OK "Shared mailbox found: $($mbx.PrimarySmtpAddress) (type=$($mbx.RecipientTypeDetails))"
+    $mbx = Get-EXOMailbox -Identity $SharedMailbox -ErrorAction Stop -Properties RecipientTypeDetails,PrimarySmtpAddress
 } catch {
-    Say-Fail "Shared mailbox '$SharedMailbox' not found: $($_.Exception.Message)"
-    Write-Host "    Create it under Microsoft 365 admin → Teams & groups → Shared mailboxes."
+    Say-Fail "SharedMailbox '$SharedMailbox' not found: $($_.Exception.Message)"
+    Say-Info "Create it under Microsoft 365 admin -> Teams & groups -> Shared mailboxes."
     exit 3
 }
 
-try {
-    $neg = Get-EXOMailbox -Identity $NegativeControlMailbox -ErrorAction Stop
-    Say-OK "Negative control mailbox found: $($neg.PrimarySmtpAddress)"
-} catch {
-    Say-Warn "Negative control mailbox '$NegativeControlMailbox' not found.  Skipping negative-control test."
-    $neg = $null
+$actualAddr = Normalize-Email $mbx.PrimarySmtpAddress
+$expectedAddr = Normalize-Email $SharedMailbox
+if ($actualAddr -ne $expectedAddr) {
+    Say-Fail "Mailbox PrimarySmtpAddress mismatch: resolved '$($mbx.PrimarySmtpAddress)', expected '$SharedMailbox'."
+    exit 3
 }
+Say-OK "PrimarySmtpAddress = $($mbx.PrimarySmtpAddress)"
+
+if ($mbx.RecipientTypeDetails -ne 'SharedMailbox') {
+    Say-Fail "Mailbox RecipientTypeDetails = '$($mbx.RecipientTypeDetails)' -- expected 'SharedMailbox'."
+    Say-Info "The transactional sender MUST be a shared mailbox (unlicensed, send-only)."
+    exit 3
+}
+Say-OK "RecipientTypeDetails = SharedMailbox"
 
 # ============================================================================
-# Phase 2 — Resolve the Service Principal from the AppId
+# Phase 1b -- MANDATORY negative control mailbox resolution.
 # ============================================================================
-Say-Section "Phase 2 — Service principal resolution"
+$neg = $null
+try {
+    $neg = Get-EXOMailbox -Identity $NegativeControlMailbox -ErrorAction Stop -Properties PrimarySmtpAddress
+} catch {
+    Say-Fail "Negative control mailbox '$NegativeControlMailbox' could not be resolved: $($_.Exception.Message)"
+    Say-Info "The negative test is MANDATORY.  Supply a different, real mailbox with -NegativeControlMailbox."
+    exit 3
+}
+if (-not $neg -or -not $neg.PrimarySmtpAddress) {
+    Say-Fail "Negative control mailbox resolved to a null record."
+    exit 3
+}
+if ((Normalize-Email $neg.PrimarySmtpAddress) -eq (Normalize-Email $SharedMailbox)) {
+    Say-Fail "NegativeControlMailbox resolves to the SAME address as SharedMailbox."
+    Say-Info "The negative test is meaningless when the two addresses are the same."
+    exit 3
+}
+Say-OK "Negative control mailbox: $($neg.PrimarySmtpAddress)"
+
+# ============================================================================
+# Phase 2 -- Resolve the Service Principal by AppId.
+# ============================================================================
+Say-Section "Phase 2 -- Service principal resolution"
 
 $sp = $null
 try {
-    # Resolve by AppId — avoids the "did you use the App Registration
-    # ObjectId or the Enterprise Application ObjectId?" trap entirely.
     $sp = Get-ServicePrincipal -Identity $AppClientId -ErrorAction Stop
 } catch {
-    Say-Fail "Service principal with AppId '$AppClientId' not found in Exchange."
-    Write-Host "    This typically means the ServicePrincipal pointer wasn't created yet."
-    Write-Host "    Fix: run"
-    Write-Host "      New-ServicePrincipal -AppId <AppClientId> -ObjectId <Enterprise App Object ID> -DisplayName 'Spectre Transactional Mail'"
-    Write-Host "    The Enterprise App Object ID comes from Entra → Enterprise applications → the app → Object ID"
-    Write-Host "    (NOT the App Registration's Object ID — those are different GUIDs)."
+    Say-Fail "Service principal with AppId '$AppClientId' not found in Exchange: $($_.Exception.Message)"
+    Say-Info "This usually means the ServicePrincipal pointer wasn't created yet."
+    Say-Info "Fix: run (one time, from a connected Exchange session)"
+    Say-Info "  New-ServicePrincipal @{ AppId = '<AppClientId>'; ObjectId = '<Enterprise App Object ID>'; DisplayName = 'Spectre Transactional Mail' }"
+    Say-Info "The Enterprise App Object ID comes from Entra -> Enterprise applications -> the app -> Object ID"
+    Say-Info "(NOT the App Registration's Object ID -- those are different GUIDs)."
     exit 4
 }
-
 Say-OK "Service principal:"
-Write-Host "    DisplayName : $($sp.DisplayName)"
-Write-Host "    AppId       : $($sp.AppId)"
-Write-Host "    ObjectId    : $($sp.ObjectId)"
-
+Say-Info "  DisplayName : $($sp.DisplayName)"
+Say-Info "  AppId       : $($sp.AppId)"
+Say-Info "  ObjectId    : $($sp.ObjectId)"
 $spObjectId = $sp.ObjectId
 
 # ============================================================================
-# Phase 3 — Inspect / repair the management scope
+# Phase 3 -- Management scope diagnose + idempotent repair.
 # ============================================================================
-Say-Section "Phase 3 — Management scope"
+Say-Section "Phase 3 -- Management scope"
 
 $existingScope = $null
 try {
     $existingScope = Get-ManagementScope -Identity $ScopeName -ErrorAction Stop
 } catch {
-    $existingScope = $null
+    # Not-found is NOT an error for this cmdlet in most module versions, but
+    # if an actual error occurred we fail-closed rather than assume missing.
+    $msg = $_.Exception.Message
+    if ($msg -match 'couldn' + "'" + 't be found|does not exist|not found' ) {
+        $existingScope = $null
+    } else {
+        Say-Fail "Get-ManagementScope '$ScopeName' threw an unexpected error (fail-closed): $msg"
+        exit 5
+    }
 }
 
 if (-not $existingScope) {
-    Say-Warn "Management scope '$ScopeName' does not exist.  Will create it with the correct filter."
+    Say-Warn "Management scope '$ScopeName' does not exist."
     Record-Change "Create ManagementScope '$ScopeName' with filter: $ExpectedFilter"
     if (-not $DryRun) {
-        $existingScope = New-ManagementScope `
-            -Name $ScopeName `
-            -RecipientRestrictionFilter $ExpectedFilter `
-            -ErrorAction Stop
-        Say-OK "Created scope"
+        $createParams = @{
+            Name                      = $ScopeName
+            RecipientRestrictionFilter = $ExpectedFilter
+            ErrorAction                = 'Stop'
+        }
+        try {
+            $existingScope = New-ManagementScope @createParams
+            Say-OK "Scope created."
+        } catch {
+            Say-Fail "New-ManagementScope failed: $($_.Exception.Message)"
+            exit 5
+        }
     }
 } else {
     $currentFilter = $existingScope.RecipientFilter
-    Write-Host "    Current RecipientFilter: '$currentFilter'"
+    Say-Info "Current RecipientFilter: '$currentFilter'"
     if ([string]::IsNullOrWhiteSpace($currentFilter)) {
-        Say-Warn "Scope filter is BLANK — this is the SIGNUP-1G defect reported by the founder."
+        Say-Warn "Scope filter is BLANK (observed state -- matches a failure mode the founder reported)."
         Record-Change "Set RecipientRestrictionFilter on '$ScopeName' to: $ExpectedFilter"
         if (-not $DryRun) {
-            Set-ManagementScope -Identity $ScopeName -RecipientRestrictionFilter $ExpectedFilter -ErrorAction Stop
-            Say-OK "Scope filter updated"
+            $setParams = @{
+                Identity                   = $ScopeName
+                RecipientRestrictionFilter = $ExpectedFilter
+                ErrorAction                = 'Stop'
+            }
+            try {
+                Set-ManagementScope @setParams
+                Say-OK "Scope filter updated."
+            } catch {
+                Say-Fail "Set-ManagementScope failed: $($_.Exception.Message)"
+                exit 5
+            }
         }
     } elseif ($currentFilter -ne $ExpectedFilter) {
         Say-Warn "Scope filter is set but does not match expected value."
-        Write-Host "      Expected: $ExpectedFilter"
-        Write-Host "      Actual  : $currentFilter"
+        Say-Info "  Expected: $ExpectedFilter"
+        Say-Info "  Actual  : $currentFilter"
         Record-Change "Overwrite RecipientRestrictionFilter on '$ScopeName' to: $ExpectedFilter"
         if (-not $DryRun) {
-            Set-ManagementScope -Identity $ScopeName -RecipientRestrictionFilter $ExpectedFilter -ErrorAction Stop
-            Say-OK "Scope filter updated"
+            $setParams = @{
+                Identity                   = $ScopeName
+                RecipientRestrictionFilter = $ExpectedFilter
+                ErrorAction                = 'Stop'
+            }
+            try {
+                Set-ManagementScope @setParams
+                Say-OK "Scope filter updated."
+            } catch {
+                Say-Fail "Set-ManagementScope failed: $($_.Exception.Message)"
+                exit 5
+            }
         }
     } else {
-        Say-OK "Scope filter is already correct — no change needed"
+        Say-OK "Scope filter is already correct -- no change needed."
     }
 }
 
-# Confirm it took, unless we're in DryRun.
+# Post-repair verification -- read it back.
 if (-not $DryRun) {
-    $existingScope = Get-ManagementScope -Identity $ScopeName
-    if ([string]::IsNullOrWhiteSpace($existingScope.RecipientFilter)) {
-        Say-Fail "Scope filter is STILL blank after Set-ManagementScope.  Aborting."
+    try {
+        $existingScope = Get-ManagementScope -Identity $ScopeName -ErrorAction Stop
+    } catch {
+        Say-Fail "Get-ManagementScope read-back failed: $($_.Exception.Message)"
         exit 5
     }
-    Say-OK "Scope filter confirmed: $($existingScope.RecipientFilter)"
+    if ([string]::IsNullOrWhiteSpace($existingScope.RecipientFilter)) {
+        Say-Fail "Scope filter is STILL blank after repair.  Aborting."
+        exit 5
+    }
+    Say-OK "Scope filter confirmed on read-back: $($existingScope.RecipientFilter)"
 }
 
-# ============================================================================
-# Phase 4 — Inspect / repair the role assignment
-# ============================================================================
-Say-Section "Phase 4 — Role assignment"
-
-$existingAssignments = @()
-try {
-    # Enumerate every role assignment attached to this SP.
-    $existingAssignments = Get-ManagementRoleAssignment -RoleAssignee $spObjectId -ErrorAction Stop |
-        Where-Object { $_.Role -eq 'Application Mail.Send' }
-} catch {
-    $existingAssignments = @()
-}
-
-$matching = $existingAssignments | Where-Object {
-    $_.CustomResourceScope -eq $ScopeName
-}
-
-$otherScoped = $existingAssignments | Where-Object {
-    $_.CustomResourceScope -ne $ScopeName -and -not [string]::IsNullOrEmpty($_.CustomResourceScope)
-}
-$unscoped = $existingAssignments | Where-Object {
-    [string]::IsNullOrEmpty($_.CustomResourceScope) -and `
-    [string]::IsNullOrEmpty($_.RecipientAdministrativeUnitScope)
-}
-
-if ($matching) {
-    Say-OK "Role assignment already exists with the correct scope:"
-    Write-Host "    Name: $($matching.Name)"
-    Write-Host "    Role: $($matching.Role)"
-    Write-Host "    CustomResourceScope: $($matching.CustomResourceScope)"
+# Phase 3b -- Recipient preview: the filter must match exactly ONE mailbox
+# and that mailbox must be the SharedMailbox.  Even in dry-run we evaluate
+# the CURRENT filter (which may be blank or wrong, and the preview will say so).
+Say-Info "Running Get-Recipient preview against the scope filter..."
+$previewFilter = if ($DryRun -and ([string]::IsNullOrWhiteSpace($existingScope.RecipientFilter))) {
+    $null
 } else {
-    Say-Warn "No existing 'Application Mail.Send' role assignment on this SP with scope '$ScopeName'."
+    $existingScope.RecipientFilter
+}
+
+if ([string]::IsNullOrWhiteSpace($previewFilter)) {
+    if ($DryRun) {
+        Say-Warn "Dry-run and current filter is blank.  Preview check is deferred until the live run writes the filter."
+    } else {
+        Say-Fail "Scope filter is blank -- refuse to continue."
+        exit 5
+    }
+} else {
+    try {
+        $preview = @(Get-Recipient -RecipientPreviewFilter $previewFilter -ResultSize Unlimited -ErrorAction Stop)
+    } catch {
+        Say-Fail "Get-Recipient preview failed (fail-closed): $($_.Exception.Message)"
+        exit 5
+    }
+    if ($preview.Count -ne 1) {
+        Say-Fail "Scope recipient-preview returned $($preview.Count) recipients -- expected exactly 1."
+        if ($preview.Count -gt 0) {
+            foreach ($p in $preview) { Say-Info "  - $($p.PrimarySmtpAddress) ($($p.RecipientTypeDetails))" }
+        }
+        exit 5
+    }
+    if ((Normalize-Email $preview[0].PrimarySmtpAddress) -ne (Normalize-Email $SharedMailbox)) {
+        Say-Fail "Scope preview returned '$($preview[0].PrimarySmtpAddress)' -- expected '$SharedMailbox'."
+        exit 5
+    }
+    Say-OK "Scope recipient-preview matches exactly one mailbox: $($preview[0].PrimarySmtpAddress)."
+}
+
+# ============================================================================
+# Phase 4 -- Role assignment diagnose + idempotent repair.
+# ============================================================================
+Say-Section "Phase 4 -- Role assignment"
+
+$existingAssignments = $null
+try {
+    $existingAssignments = @(Get-ManagementRoleAssignment -RoleAssignee $spObjectId -ErrorAction Stop)
+} catch {
+    # Fail-closed: an error here is NOT proof that no assignments exist.
+    Say-Fail "Get-ManagementRoleAssignment failed (fail-closed; cannot assume no existing grants): $($_.Exception.Message)"
+    exit 6
+}
+
+$classified = Classify-RoleAssignments -Assignments $existingAssignments -ExpectedScope $ScopeName
+
+# Report classification.
+if ($classified.Matching.Count -gt 0) {
+    Say-OK "Found $($classified.Matching.Count) matching assignment(s) (role='Application Mail.Send', scope='$ScopeName')."
+    foreach ($a in $classified.Matching) { Say-Info "  - $($a.Name)" }
+} else {
+    Say-Warn "No matching 'Application Mail.Send' assignment with scope '$ScopeName'."
+}
+
+if ($classified.OtherScoped.Count -gt 0) {
+    Say-Fail "BLOCKER -- $($classified.OtherScoped.Count) 'Application Mail.Send' assignment(s) with a DIFFERENT scope exist on this SP:"
+    foreach ($a in $classified.OtherScoped) {
+        Say-Info "  - $($a.Name)  (CustomResourceScope='$($a.CustomResourceScope)')"
+    }
+    Say-Info "Review each.  Remove via: Remove-ManagementRoleAssignment -Identity '<name>' -Confirm:`$false"
+}
+if ($classified.Unscoped.Count -gt 0) {
+    Say-Fail "BLOCKER -- $($classified.Unscoped.Count) UNSCOPED 'Application Mail.Send' assignment(s) exist on this SP."
+    foreach ($a in $classified.Unscoped) {
+        Say-Info "  - $($a.Name)"
+    }
+    Say-Info "An unscoped Mail.Send grant lets the app send tenant-wide.  Remove each manually."
+}
+if ($classified.BroaderRole.Count -gt 0) {
+    Say-Fail "BLOCKER -- $($classified.BroaderRole.Count) broader-role assignment(s) that confer Mail.Send exist on this SP:"
+    foreach ($a in $classified.BroaderRole) {
+        Say-Info "  - $($a.Name)  (Role='$($a.Role)')"
+    }
+    Say-Info "These roles grant Mail.Send among OTHER permissions beyond what Spectre needs.  Remove each manually."
+}
+
+$broaderGrantBlock = ($classified.OtherScoped.Count -gt 0) -or
+                     ($classified.Unscoped.Count -gt 0) -or
+                     ($classified.BroaderRole.Count -gt 0)
+
+if ($classified.Matching.Count -eq 0 -and -not $broaderGrantBlock) {
     Record-Change "Create ManagementRoleAssignment: App=$spObjectId, Role='Application Mail.Send', CustomResourceScope='$ScopeName'"
     if (-not $DryRun) {
+        $assignParams = @{
+            App                 = $spObjectId
+            Role                = 'Application Mail.Send'
+            CustomResourceScope = $ScopeName
+            ErrorAction         = 'Stop'
+        }
         try {
-            # Use -App with the ObjectId (not AppId) — matches Microsoft's documented example.
-            New-ManagementRoleAssignment `
-                -App $spObjectId `
-                -Role 'Application Mail.Send' `
-                -CustomResourceScope $ScopeName `
-                -ErrorAction Stop | Out-Null
-            Say-OK "Role assignment created"
+            New-ManagementRoleAssignment @assignParams | Out-Null
+            Say-OK "Role assignment created."
         } catch {
             Say-Fail "New-ManagementRoleAssignment failed: $($_.Exception.Message)"
-            Write-Host "    Common causes:"
-            Write-Host "      - You are signed in as a user without DelegatingOrgWide for 'Application Mail.Send'."
-            Write-Host "        Fix: sign in as a Global Admin or an Exchange Admin."
-            Write-Host "      - The ExchangeOnlineManagement module is older than v3.4."
-            Write-Host "        Fix: Update-Module -Name ExchangeOnlineManagement -Force"
+            Say-Info "  Common causes:"
+            Say-Info "    - Not signed in with sufficient delegation rights."
+            Say-Info "      Fix: sign in as a Global Admin or an Exchange Admin."
+            Say-Info "    - Module older than v3.4 or App parameter unresolved."
+            Say-Info "      Fix: Update-Module -Name ExchangeOnlineManagement -Force"
             exit 6
         }
     }
-}
-
-if ($otherScoped) {
-    Say-Warn "This SP has 'Application Mail.Send' assignments with DIFFERENT scopes (listed; not changed by this script):"
-    foreach ($a in $otherScoped) {
-        Write-Host "      - $($a.Name) → CustomResourceScope=$($a.CustomResourceScope)"
-    }
-    Say-Warn "Review those manually.  They may widen the effective send authority."
-}
-
-if ($unscoped) {
-    Say-Fail "This SP has UNSCOPED 'Application Mail.Send' role assignments.  These bypass the scoping and let the app send tenant-wide."
-    foreach ($a in $unscoped) {
-        Write-Host "      - $($a.Name) (REMOVE this manually with: Remove-ManagementRoleAssignment -Identity '$($a.Name)')"
-    }
-    Say-Fail "Script will NOT auto-remove unscoped assignments — operator must review each.  Negative test will FAIL until these are cleaned up."
+} elseif ($classified.Matching.Count -eq 0 -and $broaderGrantBlock) {
+    Say-Warn "Not creating the correct assignment while broader grants exist -- resolve those first."
 }
 
 # ============================================================================
-# Phase 5 — Verification (positive + negative)
+# Phase 5 -- Authorization verification (positive + negative, mandatory).
 # ============================================================================
-Say-Section "Phase 5 — Authorization verification"
+Say-Section "Phase 5 -- Authorization verification"
 
-Write-Host "  Positive test — $SharedMailbox should be IN scope:"
+if ($DryRun -and $classified.Matching.Count -eq 0) {
+    Say-Warn "Dry-run: no matching assignment is in place yet, so a positive Test-ServicePrincipalAuthorization will fail by design.  Rerun without -DryRun to apply the changes above and re-verify."
+}
+
+Say-Info "Positive test -- $SharedMailbox should be IN scope:"
 try {
-    $pos = Test-ServicePrincipalAuthorization -Identity $spObjectId -Resource $SharedMailbox -ErrorAction Stop |
-        Where-Object { $_.RoleName -eq 'Application Mail.Send' } |
-        Select-Object -First 1
-    if ($pos -and $pos.InScope -eq $true) {
-        Say-OK "InScope = True  (role=$($pos.RoleName), scope=$($pos.AllowedResourceScope))"
-    } else {
-        Say-Fail "POSITIVE TEST FAILED — Spectre's app cannot send from the designated mailbox."
-        Write-Host "    Full output:"
-        $pos | Format-List | Out-String | Write-Host
-        exit 7
-    }
+    $posRows = @(Test-ServicePrincipalAuthorization -Identity $spObjectId -Resource $SharedMailbox -ErrorAction Stop)
 } catch {
-    Say-Fail "Test-ServicePrincipalAuthorization (positive) threw: $($_.Exception.Message)"
+    Say-Fail "Test-ServicePrincipalAuthorization (positive) threw (fail-closed): $($_.Exception.Message)"
     exit 7
 }
-
-if ($neg) {
-    Write-Host "  Negative test — $NegativeControlMailbox should NOT be in scope:"
-    try {
-        $negRes = Test-ServicePrincipalAuthorization -Identity $spObjectId -Resource $NegativeControlMailbox -ErrorAction Stop |
-            Where-Object { $_.RoleName -eq 'Application Mail.Send' } |
-            Select-Object -First 1
-        if ($negRes -and $negRes.InScope -eq $false) {
-            Say-OK "InScope = False  (role=$($negRes.RoleName), scope=$($negRes.AllowedResourceScope))"
-        } else {
-            Say-Fail "NEGATIVE TEST FAILED — Spectre's app can send from a mailbox OTHER than the designated one."
-            Write-Host "    This is a security defect.  Likely cause: an unscoped Mail.Send assignment or an"
-            Write-Host "    unscoped Microsoft Graph application-permission in Entra ID.  See Phase 4 warnings."
-            Write-Host "    Full output:"
-            $negRes | Format-List | Out-String | Write-Host
-            exit 8
-        }
-    } catch {
-        Say-Fail "Test-ServicePrincipalAuthorization (negative) threw: $($_.Exception.Message)"
-        exit 8
+$posVerdict = Evaluate-AuthorizationResult -AuthRows $posRows -ExpectedScope $ScopeName -Mode Positive
+if ($posVerdict.Pass) {
+    Say-OK "Positive test: at least one Mail.Send row InScope=True AND AllowedResourceScope='$ScopeName'."
+    foreach ($r in $posVerdict.Matching) {
+        Say-Info "  matched: role='$($r.RoleName)' scope='$($r.AllowedResourceScope)'"
     }
+} else {
+    Say-Fail "Positive test FAILED -- intended scoped grant not in effect."
+    if ($posVerdict.WrongScope.Count -gt 0) {
+        Say-Info "  Mail.Send rows in-scope for a DIFFERENT scope (also a config defect):"
+        foreach ($r in $posVerdict.WrongScope) {
+            Say-Info "    role='$($r.RoleName)' scope='$($r.AllowedResourceScope)'"
+        }
+    }
+    if (-not $DryRun) { exit 7 }
+}
+
+Say-Info "Negative test -- $NegativeControlMailbox should NOT be in scope:"
+try {
+    $negRows = @(Test-ServicePrincipalAuthorization -Identity $spObjectId -Resource $NegativeControlMailbox -ErrorAction Stop)
+} catch {
+    Say-Fail "Test-ServicePrincipalAuthorization (negative) threw (fail-closed): $($_.Exception.Message)"
+    exit 8
+}
+$negVerdict = Evaluate-AuthorizationResult -AuthRows $negRows -ExpectedScope $ScopeName -Mode Negative
+if ($negVerdict.Pass) {
+    Say-OK "Negative test: no Mail.Send row has InScope=True against $NegativeControlMailbox."
+} else {
+    Say-Fail "Negative test FAILED -- SP can send from $NegativeControlMailbox."
+    Say-Info "  Leaking rows:"
+    foreach ($r in $negVerdict.Leaks) {
+        Say-Info "    role='$($r.RoleName)' scope='$($r.AllowedResourceScope)'"
+    }
+    Say-Info "Likely cause: an unscoped / differently-scoped assignment flagged in Phase 4,"
+    Say-Info "OR a tenant-wide Mail.Send application permission on the Entra app."
+    if (-not $DryRun) { exit 8 }
+}
+
+# Having passed positive + negative, if Phase 4 still has broader grants
+# flagged, we refuse to report overall success.
+if ($broaderGrantBlock) {
+    Say-Section "Phase 5b -- Broader-grant block"
+    Say-Fail "Positive + negative tests passed for this specific SharedMailbox / NegativeControlMailbox pair, BUT broader Mail.Send grants on this SP (listed in Phase 4) have not been reviewed."
+    Say-Info "The negative test only covers the mailbox you supplied.  Other mailboxes could be reachable via the broader grants."
+    Say-Info "Resolve the Phase 4 blockers before declaring Exchange RBAC verified."
+    if (-not $DryRun) { exit 9 }
 }
 
 # ============================================================================
@@ -386,32 +837,51 @@ if ($neg) {
 # ============================================================================
 Say-Section "Summary"
 
-if ($script:Changes.Count -eq 0) {
-    Say-OK "No changes made.  Configuration was already correct."
-} else {
-    if ($DryRun) {
-        Write-Host "  DRY RUN — the following changes WOULD be made:" -ForegroundColor Yellow
+if ($DryRun) {
+    Write-Host "  Mode: DRY RUN -- no writes performed." -ForegroundColor Yellow
+    if ($script:Changes.Count -gt 0) {
+        Write-Host "  Proposed changes:" -ForegroundColor Yellow
+        foreach ($c in $script:Changes) { Write-Host "    - $c" }
+        Write-Host ""
+        Write-Host "  Re-verification required: rerun WITHOUT -DryRun to apply, then re-verify." -ForegroundColor Yellow
     } else {
-        Write-Host "  Changes applied:" -ForegroundColor Yellow
+        Write-Host "  No proposed changes.  Existing state (as read) already matches intent."
     }
-    foreach ($c in $script:Changes) {
-        Write-Host "    • $c"
-    }
+    exit 0
 }
 
-Say-OK "RBAC configuration verified end-to-end."
+if ($script:Changes.Count -eq 0) {
+    Say-OK "No changes made.  Exchange Online RBAC configuration was already correct."
+} else {
+    Write-Host "  Changes applied:" -ForegroundColor Yellow
+    foreach ($c in $script:Changes) { Write-Host "    - $c" }
+}
+
+Say-OK "Exchange Online RBAC configuration verified for the ($SharedMailbox, $NegativeControlMailbox) pair."
 Write-Host ""
-Write-Host "Next steps (operator):"
-Write-Host "  1. Confirm Entra ID → App Registrations → 'Spectre Transactional Mail' → API permissions is EMPTY."
-Write-Host "     (If 'Mail.Send' application permission is listed there, remove it — otherwise it bypasses this scope.)"
-Write-Host "  2. Run: flyctl secrets set EMAIL_DELIVERY_MODE=microsoft365 \\"
-Write-Host "         MICROSOFT_TENANT_ID=<tenant-id> \\"
-Write-Host "         MICROSOFT_CLIENT_ID=$AppClientId \\"
-Write-Host "         MICROSOFT_CLIENT_SECRET=<secret from your password manager> \\"
-Write-Host "         MICROSOFT_FROM_MAILBOX=$SharedMailbox \\"
-Write-Host "         --app spectre-staging"
-Write-Host "  3. Verify end-to-end with:"
-Write-Host "         curl https://staging.spectreautomation.com/api/admin/signup/debug/status | jq .email"
-Write-Host "     expecting effectiveAdapter=microsoft365."
+Write-Host "  SCOPE OF THIS VERIFICATION:"
+Write-Host "    - The scope's RecipientRestrictionFilter matches exactly one mailbox."
+Write-Host "    - 'Application Mail.Send' is granted ONLY within '$ScopeName' on this SP."
+Write-Host "    - The SP cannot send from $NegativeControlMailbox."
+Write-Host ""
+Write-Host "  NOT verified by this script (operator must verify separately):"
+Write-Host "    1. Entra ID -> App registrations -> 'Spectre Transactional Mail' -> API permissions is EMPTY."
+Write-Host "       (If 'Mail.Send' application permission is listed, remove it -- it bypasses Exchange RBAC.)"
+Write-Host "    2. A real Microsoft Graph send from the designated mailbox succeeds."
+Write-Host "    3. A real Microsoft Graph send attempt from a DIFFERENT mailbox is refused (HTTP 403)."
+Write-Host "    See the operator runbook phase 6 for the end-to-end verification steps."
+Write-Host ""
+Write-Host "  To activate Spectre's email path, next-up operator steps (in PowerShell):"
+Write-Host '    $sec    = Read-Host -AsSecureString ''Paste the Spectre Transactional Mail client secret'''
+Write-Host '    $plain  = [System.Net.NetworkCredential]::new('''', $sec).Password'
+Write-Host '    $kv     = @('
+Write-Host '        ''EMAIL_DELIVERY_MODE=microsoft365'','
+Write-Host "        ""MICROSOFT_TENANT_ID=<Directory tenant ID>"","
+Write-Host "        ""MICROSOFT_CLIENT_ID=$AppClientId"","
+Write-Host '        "MICROSOFT_CLIENT_SECRET=$plain",'
+Write-Host "        'MICROSOFT_FROM_MAILBOX=$SharedMailbox'"
+Write-Host '    )'
+Write-Host '    & flyctl secrets set @kv --app spectre-staging'
+Write-Host '    Remove-Variable sec, plain -Force'
 Write-Host ""
 exit 0

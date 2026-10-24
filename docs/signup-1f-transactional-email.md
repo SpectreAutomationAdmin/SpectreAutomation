@@ -1,29 +1,40 @@
-# Transactional Email — Operator Setup Guide (v4)
+# Transactional Email — Operator Setup Guide (v5)
 
 **Audience.** The founder, or any Spectre operator with Microsoft 365
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v4 (2026-10-24).  SIGNUP-1G.  Supersedes v3.  Key
-changes from v3:
+**Revision.** v5 (2026-10-24).  SIGNUP-1G, post-review.  Supersedes v4.
+Key changes from v4:
 
-- **PowerShell commands converted from backtick-continuation to
-  splatting** — the v3 line-continuations fail silently on copy-paste
-  into Windows PowerShell when any invisible trailing whitespace
-  follows a backtick, producing exactly the "blank
-  RecipientRestrictionFilter" symptom the founder observed.
-- **Service-principal lookup now by AppId**, not Enterprise App
-  Object ID — removes the common "which ObjectId do I paste?" trap.
-- **A single idempotent repair script**
-  ([scripts/signup-1g-ms365-repair.ps1](../scripts/signup-1g-ms365-repair.ps1))
-  replaces step-by-step PowerShell.  Runs preflight, diagnoses current
-  state, repairs idempotently, and runs positive + negative
-  verification before exiting.  Safe to rerun any number of times.
-- **"Leave Entra API permissions empty" warning** promoted to the
-  critical-step list — a Mail.Send permission granted in Entra
-  ID bypasses the Exchange scope entirely.
-- **PowerShell version guidance** — PowerShell 7+ strongly
-  preferred; 5.1 technically works but fragile for RBAC commands.
+- **Repair script hardened** per the ten-point review.  Negative
+  control is mandatory; broader-role grants block acceptance;
+  every role assignment is evaluated (no "first match wins");
+  scope repair now runs a Get-Recipient preview to prove the filter
+  matches exactly one mailbox; mailbox identity + SharedMailbox
+  type are both asserted; all Exchange queries fail-closed on
+  error; `-DryRun` performs zero writes and clearly flags when
+  re-verification will be required after a live apply; a `-Test`
+  mode runs 24 pure-function assertions against mocked inputs
+  without any tenant connection.
+- **Script explicitly does NOT claim end-to-end security
+  verification.**  Exchange Online RBAC is one of three gates;
+  the operator must independently confirm (a) Entra API permissions
+  is empty on the new app, (b) a real Microsoft Graph send from
+  the designated mailbox succeeds, (c) a real Graph send attempt
+  from a different mailbox is refused.
+- **Fly `flyctl` commands rewritten for Windows PowerShell.**  The
+  v4 bash-style `\` continuations do not work in Windows PowerShell;
+  v5 uses array-splatting with `Read-Host -AsSecureString` so the
+  secret value never enters the shell history, a file, or a log.
+- **Root-cause framing is hypothesis vs evidence.**  The blank
+  `RecipientRestrictionFilter` state is confirmed evidence; the
+  backtick-continuation attribution is a plausible hypothesis
+  consistent with it, not proof.  The repair path works regardless
+  of which hypothesis caused the state.
+- **Script and runbook are ASCII-only** so Windows PowerShell 5.1
+  reading the file as Windows-1252 (its default when no BOM is
+  present) does not produce mojibake that then causes parse errors.
 
 **Goal.** Give Spectre's transactional email code the ability to send
 mail **only** from one dedicated mailbox:
@@ -157,7 +168,28 @@ Expected: a table row showing DisplayName, ObjectId, AppId.
 
 ### 4.3 · Run the repair script
 
-From the Spectre repo root:
+Before running against a live tenant, run the pure-function
+self-check (no credentials, no connection, no writes):
+
+```powershell
+.\scripts\signup-1g-ms365-repair.ps1 -Test
+```
+
+Expected: `All assertions passed.` (24 assertions across role-
+classification + authorization-verdict + email normalization).
+
+Then run against the tenant.  Start with `-DryRun` to preview:
+
+```powershell
+.\scripts\signup-1g-ms365-repair.ps1 -AppClientId '<Application (client) ID from Phase 2>' -DryRun
+```
+
+The dry run performs ZERO writes.  It reports proposed changes
+as `[DRY-RUN WOULD CHANGE]`.  Verification runs against the
+CURRENT state only — the summary notes if a follow-up live run
+is required to re-verify after writes.
+
+If the proposed changes look right, apply them for real:
 
 ```powershell
 .\scripts\signup-1g-ms365-repair.ps1 -AppClientId '<Application (client) ID from Phase 2>'
@@ -191,47 +223,88 @@ To preview changes without executing them:
 ```
 
 If the script exits with a non-zero code, read the printed
-instructions in the Summary section.  Common exits:
+instructions in the Summary section.  Full exit-code table:
 
 | Exit | Meaning | Fix |
 |---|---|---|
-| 2 | Module missing or old; or Connect-ExchangeOnline failed | Install / update module; sign in as Exchange Admin |
-| 3 | Shared mailbox not found | Complete Phase 1 and wait 2–3 min |
-| 4 | Service principal not found | Complete step 4.2 |
-| 5 | Scope filter still blank after Set-ManagementScope | Open a Microsoft support ticket (unusual) |
-| 6 | New-ManagementRoleAssignment denied | Confirm you're signed in as Exchange Admin; update module |
-| 7 | Positive test failed | Something is still wrong; re-run with -DryRun and inspect |
-| 8 | Negative test failed — SECURITY DEFECT | Remove any unscoped `Application Mail.Send` role assignment on the SP, OR any `Mail.Send` application permission on the Entra app |
+| 0 | Exchange RBAC verified (NOT the full end-to-end acceptance — see "What the repair script does NOT verify" below) | Proceed to Phase 5 |
+| 2 | Preflight failure — missing / stale module, or Connect-ExchangeOnline failed | Install / update module; sign in as Exchange Admin |
+| 3 | Mailbox validation failure — SharedMailbox missing or wrong type, OR negative control mailbox missing | Complete Phase 1 and wait 2-3 min; supply a different `-NegativeControlMailbox` |
+| 4 | Service principal not resolvable from AppId | Complete step 4.2 |
+| 5 | Scope repair failed, OR scope recipient-preview did not match exactly one target mailbox | Check Phase 3 output; if preview returned 0 or 2+ recipients, the filter is wrong |
+| 6 | New-ManagementRoleAssignment denied, OR Get-ManagementRoleAssignment query errored (fail-closed) | Confirm you're signed in as Exchange Admin; update module |
+| 7 | Positive test failed — intended scoped grant not in effect | Re-run; if Phase 4 wrote the assignment this run, wait a minute for the cmdlet-side cache |
+| 8 | Negative test failed — SP CAN send from the control mailbox (SECURITY DEFECT) | See Phase 4 output: remove any unscoped / differently-scoped `Application Mail.Send` role assignment on the SP, OR any `Mail.Send` application permission on the Entra app |
+| 9 | Broader-grant block — unscoped / differently-scoped / broader-role Mail.Send grants exist on the SP | Review each listed assignment and `Remove-ManagementRoleAssignment -Identity '<name>'`; rerun |
+| 10 | `-Test` self-check assertion failure | Something in the script's pure-function logic diverged; do not run against a live tenant |
 
 The script is safe to rerun as many times as you like.  It only
 writes when actual state differs from desired state.
 
 ---
 
-## Phase 5 — Set Fly staging secrets
+## Phase 5 — Set Fly staging secrets (Windows PowerShell)
 
 On the operator workstation with `flyctl` authenticated to the
-Spectre Fly org, run **exactly** this (replace the two `<…>` tokens
-with their real values from Phase 2 + Phase 3):
+Spectre Fly org, run **exactly** this in a PowerShell window.
+The secret is read from a `Read-Host -AsSecureString` prompt and
+never touches shell history, a file, or a log line.
 
-```bash
-flyctl secrets set \
-  EMAIL_DELIVERY_MODE=microsoft365 \
-  MICROSOFT_TENANT_ID='<Directory (tenant) ID from Phase 2>' \
-  MICROSOFT_CLIENT_ID='<Application (client) ID from Phase 2>' \
-  MICROSOFT_CLIENT_SECRET='<secret VALUE from Phase 3 — paste directly from your password manager>' \
-  MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com \
-  --app spectre-staging
+```powershell
+# Fill the two non-secret values in-place; keep them in quotes.
+$tenantId = '<Directory (tenant) ID from Phase 2>'
+$clientId = '<Application (client) ID from Phase 2>'
+
+# Prompt for the client secret.  The characters you type are hidden
+# and never echoed anywhere.  Paste the value from your password
+# manager at the prompt, then press Enter.
+$sec   = Read-Host -AsSecureString 'Paste the Spectre Transactional Mail client secret'
+$plain = [System.Net.NetworkCredential]::new('', $sec).Password
+
+# Array-splatting passes each KEY=VALUE pair to flyctl as a separate
+# argument.  Windows PowerShell handles this cleanly without the
+# bash backslash-continuation that previous versions of this doc used.
+$kv = @(
+    'EMAIL_DELIVERY_MODE=microsoft365',
+    "MICROSOFT_TENANT_ID=$tenantId",
+    "MICROSOFT_CLIENT_ID=$clientId",
+    "MICROSOFT_CLIENT_SECRET=$plain",
+    'MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com'
+)
+& flyctl secrets set @kv --app spectre-staging
+
+# Clear the plaintext from memory and the two variables that held it.
+Remove-Variable sec, plain -Force -ErrorAction SilentlyContinue
+[System.GC]::Collect()
 ```
 
 **Secret-handling rules:**
 
-- Do not type the secret into a shared terminal history that logs
-  commands (`.bash_history`, `~/.zsh_history`).  Prefix the `flyctl`
-  command with a space on bash/zsh with `HISTCONTROL=ignorespace` set
-  to omit it from history, OR run `history -d $(($HISTCMD-1))` after.
-- Do not screenshot the terminal with the secret visible.
+- Do not type the secret value anywhere outside the `Read-Host`
+  prompt above.  In particular, do not type it on the command
+  line, into chat, into a ticket, or into a file.
+- Do not screenshot the terminal with the secret or any state
+  derived from it visible.
 - Do not reuse the secret value for any other service.
+- `Remove-Variable` + `GC.Collect` scrubs the plaintext from
+  the current PowerShell session.  Close the window when done.
+
+**For bash / zsh operators** (not the primary path, provided only
+if PowerShell is unavailable): read the secret into an env var
+without recording it in history, then invoke `flyctl`:
+
+```bash
+# Prefix the next line with a space when HISTCONTROL=ignorespace is set.
+ read -s -p "Paste the client secret: " MS_SECRET; echo
+flyctl secrets set \
+  EMAIL_DELIVERY_MODE=microsoft365 \
+  MICROSOFT_TENANT_ID='<tenant id>' \
+  MICROSOFT_CLIENT_ID='<client id>' \
+  "MICROSOFT_CLIENT_SECRET=$MS_SECRET" \
+  MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com \
+  --app spectre-staging
+unset MS_SECRET
+```
 
 Fly automatically restarts the `spectre-staging` web app on secret
 change.  Expected downtime: < 30 seconds.
@@ -323,44 +396,92 @@ Expected: `10 passed`.
 
 ---
 
-## Why v3 of this runbook failed in practice
+## Why v3 of this runbook failed — observed evidence vs hypotheses
 
-Four defects were observed by the founder running v3:
+**Observed evidence (confirmed by the founder's run):**
 
-1. **The `Spectre No-Reply Only` scope existed but its
-   `RecipientRestrictionFilter` was blank.**  Root cause: v3 used
-   backtick line-continuation across multiple lines
+- The `Spectre No-Reply Only` management scope exists but
+  `RecipientRestrictionFilter` is blank.
+- Attempts to create the scoped `Application Mail.Send` role
+  assignment produced authorization-shaped errors even though
+  effective permissions on the admin account include
+  `DelegatingOrgWide` for both `Application Mail.Send` and
+  `Role Management` through Organization Management.
+
+**Hypotheses consistent with that evidence (not individually
+proven; the fixes work regardless of which actually caused each
+failure):**
+
+1. *Blank filter.*  v3 used backtick line-continuation
    (`New-ManagementScope \`` + newline + `-RecipientRestrictionFilter`).
-   On Windows PowerShell, if any invisible trailing whitespace
-   follows the backtick during copy-paste, the shell treats the
-   backtick as literal and runs each line as a separate command.
-   The first line `New-ManagementScope -Name "..."` succeeds and
-   creates the scope with no filter.  The second line errors but
-   is easy to miss amid other output.  **Fix in v4:** every command
-   now uses splatting (`@params`), which is immune to copy-paste
-   whitespace quirks.
-2. **Role-assignment attempts hit authorization errors.**  Root
-   cause: the operator's effective permissions were correct
-   (`DelegatingOrgWide` for `Application Mail.Send`), but the
-   `-App` parameter was likely populated with the App Registration
-   Object ID (visible on the App registrations page) rather than
-   the Enterprise Application Object ID.  Microsoft returns an
-   authorization-shaped error in that case instead of a cleaner
-   "not found".  **Fix in v4:** the repair script resolves the
-   service principal from the AppId alone — no ObjectId needed
-   at script run time — and the one place that still needs the
-   Enterprise App Object ID (step 4.2) explicitly links to the
-   correct Entra portal location.
-3. **Windows PowerShell 5.1 fragility.**  Default Windows system
-   PowerShell is 5.1, which has an older PowerShellGet, no TLS 1.2
-   enabled by default, and copy-paste quirks around multi-line
-   commands.  **Fix in v4:** the script sets TLS 1.2 at the top of
-   its process; recommends PowerShell 7 but doesn't require it.
-4. **No idempotent repair path.**  v3 told the operator to
-   `New-ManagementScope`, which fails or creates a duplicate on
-   rerun.  **Fix in v4:** the script detects existing resources
-   and uses `Set-ManagementScope` to repair the filter in place,
-   never recreating.
+   Windows PowerShell treats a backtick as literal when any
+   invisible trailing whitespace follows it; the first line runs
+   on its own, creating the scope WITHOUT a filter, and the
+   second line errors to a usually-ignored stream.  Alternative
+   hypothesis: the operator ran a different variant of the
+   command that omitted the filter parameter.  v5 does not rely
+   on either hypothesis — it simply repairs the observed state
+   via `Set-ManagementScope`.
+2. *Role-assignment "authorization error".*  Microsoft returns an
+   authorization-shaped error when `-App <ObjectId>` resolves to
+   no live service principal, which can happen if the operator
+   pasted the App Registration's Object ID instead of the
+   Enterprise Application's Object ID (two different GUIDs).  v5
+   resolves the SP from the AppId alone at script runtime.
+3. *Fragile Windows PowerShell 5.1 defaults.*  No TLS 1.2 on some
+   installations; older PowerShellGet; sensitive copy-paste.  v5
+   sets TLS 1.2 in-process and ships ASCII-only text (so a 5.1
+   session reading the file as Windows-1252 does not produce
+   mojibake that then causes parse errors).
+
+**What v5 fixes regardless of which hypothesis held:**
+
+- Splatting (`@params`) everywhere — immune to copy-paste
+  whitespace quirks.
+- Script resolves SP from AppId; the Enterprise App Object ID is
+  only ever needed one time, at `New-ServicePrincipal`.
+- Idempotent repair: `Set-ManagementScope` on an existing scope
+  with blank/wrong filter; no deletes; safe to rerun.
+- A Get-Recipient preview after any repair asserts that the
+  scope's filter matches EXACTLY ONE mailbox and that mailbox is
+  the SharedMailbox the operator supplied.
+
+---
+
+## What the repair script does NOT verify
+
+Exchange Online RBAC is one of three gates that together bound
+the dedicated app's send authority.  The script only verifies the
+first.  The operator must independently verify the other two
+before declaring SIGNUP-1G accepted.
+
+1. **Entra ID API permissions on the app = empty.**  If the Entra
+   App Registration has a tenant-wide `Mail.Send` application
+   permission with admin consent, that grant exists in addition
+   to any Exchange RBAC and silently defeats the scoping.  Check
+   on each run of this guide via:
+
+   Microsoft Entra admin center -> App registrations -> **Spectre
+   Transactional Mail** -> **API permissions**.  The "Configured
+   permissions" table must be empty.
+
+2. **Real Microsoft Graph positive send.**  After Phase 5 lands
+   the Fly secrets, step 6b in this guide walks a signup through
+   the real UI.  An email must arrive at the Microsoft-verified
+   recipient's inbox within 60 s.  If the token exchange succeeds
+   but the Graph send returns 403, Exchange RBAC propagation is
+   still pending (Microsoft documents 30 min to 2 h cache
+   maintenance after a role change) — wait and retry.
+
+3. **Real Microsoft Graph negative send.**  Temporarily override
+   `MICROSOFT_FROM_MAILBOX` to a different real mailbox in the
+   tenant and attempt a send.  Microsoft Graph must return 403
+   `ErrorAccessDenied: Access to OrganizationFromEmailAddresses
+   is denied`.  Immediately revert `MICROSOFT_FROM_MAILBOX` to
+   `no-reply@spectreautomation.com` after the test.  This is the
+   only gate that proves live-token enforcement; it cannot be
+   bypassed by the RBAC-only verification the repair script
+   performs.
 
 ---
 
