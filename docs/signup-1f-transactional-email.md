@@ -4,8 +4,24 @@
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v5 (2026-10-24).  SIGNUP-1G, post-review.  Supersedes v4.
-Key changes from v4:
+**Revision.** v6 (2026-10-24).  SIGNUP-1G, after Phase 1b
+dry-run fix.  Supersedes v5.  Key change from v5:
+
+- **Negative-control mailbox is now discovered, not assumed.**
+  v5 defaulted `-NegativeControlMailbox` to `admin@spectreautomation.com`.
+  In many Microsoft 365 tenants the Global Admin is an unlicensed
+  service account with NO mailbox — Get-EXOMailbox returns 404.
+  v6 default is now empty; Phase 1b runs a read-only
+  Get-EXOMailbox discovery, excludes the SharedMailbox and
+  system / discovery / group mailboxes, and either auto-selects
+  the single candidate, interactively prompts to pick one from
+  multiple candidates, or exits 3 with a clear message if none
+  are eligible.  The script never creates or modifies a mailbox.
+  The negative test remains mandatory.
+- Operator can still supply `-NegativeControlMailbox '<addr>'`
+  explicitly to skip discovery and go non-interactive.
+
+Earlier v5 changes (preserved):
 
 - **Repair script hardened** per the ten-point review.  Negative
   control is mandatory; broader-role grants block acceptance;
@@ -175,13 +191,36 @@ self-check (no credentials, no connection, no writes):
 .\scripts\signup-1g-ms365-repair.ps1 -Test
 ```
 
-Expected: `All assertions passed.` (24 assertions across role-
-classification + authorization-verdict + email normalization).
+Expected: `All assertions passed.` (44 assertions across role-
+classification, authorization-verdict, email normalization,
+negative-control filter, scope-filter equality, and SP-identity
+validation).
 
-Then run against the tenant.  Start with `-DryRun` to preview:
+Then run against the tenant.  Start with `-DryRun` to preview.
+There are two shapes of this command — pick whichever matches
+your tenant:
+
+**Shape A — the script discovers an eligible negative-control
+mailbox for you (recommended first attempt):**
 
 ```powershell
 .\scripts\signup-1g-ms365-repair.ps1 -AppClientId '<Application (client) ID from Phase 2>' -DryRun
+```
+
+Phase 1b will run a read-only `Get-EXOMailbox` discovery query,
+exclude the SharedMailbox + system / discovery / group
+mailboxes, and either auto-select the single eligible candidate
+or print a numbered list for you to choose from.  The negative
+test is **always** run; the script never skips it.
+
+**Shape B — you supply the negative control explicitly (useful
+on reruns, or in a non-interactive session):**
+
+```powershell
+.\scripts\signup-1g-ms365-repair.ps1 `
+    -AppClientId '<Application (client) ID from Phase 2>' `
+    -NegativeControlMailbox '<a-real-UserMailbox-or-SharedMailbox-other-than-no-reply@>' `
+    -DryRun
 ```
 
 The dry run performs ZERO writes.  It reports proposed changes
@@ -189,7 +228,8 @@ as `[DRY-RUN WOULD CHANGE]`.  Verification runs against the
 CURRENT state only — the summary notes if a follow-up live run
 is required to re-verify after writes.
 
-If the proposed changes look right, apply them for real:
+If the proposed changes look right, apply them for real
+(drop `-DryRun`):
 
 ```powershell
 .\scripts\signup-1g-ms365-repair.ps1 -AppClientId '<Application (client) ID from Phase 2>'

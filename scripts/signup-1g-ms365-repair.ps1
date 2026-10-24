@@ -135,7 +135,7 @@ param(
     [string]$SharedMailbox = 'no-reply@spectreautomation.com',
 
     [Parameter(Mandatory = $false)]
-    [string]$NegativeControlMailbox = 'admin@spectreautomation.com',
+    [string]$NegativeControlMailbox = '',
 
     [Parameter(Mandatory = $false)]
     [string]$ScopeName = 'Spectre No-Reply Only',
@@ -239,6 +239,33 @@ function Classify-RoleAssignments {
         Unscoped    = $unscoped
         BroaderRole = $broaderRole
     }
+}
+
+# Filter a list of mailbox records down to those eligible as the
+# negative-control mailbox.  Eligible = real user or shared mailbox,
+# a resolvable PrimarySmtpAddress, and NOT equal (case-fold) to the
+# supplied SharedMailbox address.  System / discovery / unknown
+# types are excluded.  Pure function; exercised in -Test mode.
+#
+# Each input record is expected to carry:  PrimarySmtpAddress,
+#   RecipientTypeDetails, DisplayName.
+function Select-NegativeControlCandidates {
+    param(
+        [Parameter(Mandatory=$true)][AllowEmptyCollection()] $Mailboxes,
+        [Parameter(Mandatory=$true)][string] $SharedMailbox
+    )
+    $allowedTypes = @('UserMailbox', 'SharedMailbox')
+    $sharedNorm = (Normalize-Email $SharedMailbox)
+    $out = @()
+    foreach ($m in $Mailboxes) {
+        if ($null -eq $m) { continue }
+        if (-not ($allowedTypes -contains $m.RecipientTypeDetails)) { continue }
+        if ([string]::IsNullOrWhiteSpace($m.PrimarySmtpAddress)) { continue }
+        $addr = Normalize-Email $m.PrimarySmtpAddress
+        if ($addr -eq $sharedNorm) { continue }
+        $out += $m
+    }
+    return @($out)
 }
 
 # Decide the positive/negative verdict from a Test-ServicePrincipalAuthorization
@@ -401,6 +428,56 @@ if ($Test) {
     Assert-Equal 'no-reply@spectreautomation.com' (Normalize-Email '  no-reply@spectreautomation.com  ') 'normalize-email - trim'
     Assert-Equal '' (Normalize-Email $null) 'normalize-email - null -> empty'
 
+    # --- Select-NegativeControlCandidates --------------------------------
+    # @(...) wraps the call so a single-item result is not unwrapped
+    # by PowerShell's pipeline-flattening behaviour before .Count is read.
+
+    # Empty input -> zero candidates.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @() -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 0 $c.Count 'neg-ctrl - empty input -> 0 candidates'
+
+    # Only the shared mailbox -> zero candidates.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress='no-reply@spectreautomation.com'; RecipientTypeDetails='SharedMailbox'; DisplayName='No Reply' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 0 $c.Count 'neg-ctrl - only SharedMailbox -> 0 candidates (excluded)'
+
+    # Case-fold exclusion.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress='NO-REPLY@SpectreAutomation.COM'; RecipientTypeDetails='SharedMailbox'; DisplayName='No Reply' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 0 $c.Count 'neg-ctrl - case-fold exclusion of shared mailbox'
+
+    # One eligible user mailbox + the shared mailbox -> one candidate.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress='no-reply@spectreautomation.com'; RecipientTypeDetails='SharedMailbox'; DisplayName='No Reply' }
+        [pscustomobject]@{ PrimarySmtpAddress='founder@spectreautomation.com'; RecipientTypeDetails='UserMailbox'; DisplayName='Founder' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 1 $c.Count 'neg-ctrl - 1 user mailbox + shared -> 1 candidate'
+    Assert-Equal 'founder@spectreautomation.com' $c[0].PrimarySmtpAddress 'neg-ctrl - correct candidate selected'
+
+    # System / discovery mailboxes rejected.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress='disc@spectreautomation.com'; RecipientTypeDetails='DiscoveryMailbox'; DisplayName='Discovery' }
+        [pscustomobject]@{ PrimarySmtpAddress='sys@spectreautomation.com';  RecipientTypeDetails='ArbitrationMailbox'; DisplayName='Sys' }
+        [pscustomobject]@{ PrimarySmtpAddress='group@spectreautomation.com'; RecipientTypeDetails='GroupMailbox'; DisplayName='Group' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 0 $c.Count 'neg-ctrl - system/discovery/group mailboxes rejected'
+
+    # Multi-candidate case.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress='a@x.test'; RecipientTypeDetails='UserMailbox'; DisplayName='A' }
+        [pscustomobject]@{ PrimarySmtpAddress='b@x.test'; RecipientTypeDetails='SharedMailbox'; DisplayName='B' }
+        [pscustomobject]@{ PrimarySmtpAddress='no-reply@spectreautomation.com'; RecipientTypeDetails='SharedMailbox'; DisplayName='No Reply' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 2 $c.Count 'neg-ctrl - 2 eligible candidates'
+
+    # Null address rejected.
+    $c = @(Select-NegativeControlCandidates -Mailboxes @(
+        [pscustomobject]@{ PrimarySmtpAddress=$null; RecipientTypeDetails='UserMailbox'; DisplayName='Null addr' }
+    ) -SharedMailbox 'no-reply@spectreautomation.com')
+    Assert-Equal 0 $c.Count 'neg-ctrl - null PrimarySmtpAddress rejected'
+
     # --- SIGNUP-1G final review: scope-filter + SP identity assertions ---
     # Scope filter EXACT equality (not merely non-empty).  These two
     # tests exercise the logic of the Phase 3 read-back strengthening.
@@ -536,25 +613,118 @@ Say-OK "RecipientTypeDetails = SharedMailbox"
 
 # ============================================================================
 # Phase 1b -- MANDATORY negative control mailbox resolution.
+#
+# SIGNUP-1G correction (dry-run failure #1): the previous version
+# defaulted -NegativeControlMailbox to 'admin@spectreautomation.com'
+# and assumed it was a real mailbox.  Admin accounts in M365 are
+# often unlicensed service accounts with NO mailbox, so Get-EXOMailbox
+# returned 404.  This block now:
+#   1. Uses the operator-supplied -NegativeControlMailbox when
+#      explicitly provided, validating it exists + is a real mailbox
+#      + is NOT the SharedMailbox.
+#   2. Otherwise, discovers eligible mailboxes with a read-only
+#      Get-EXOMailbox query (no writes, no mutations), excludes the
+#      SharedMailbox + system / discovery / group mailboxes, and:
+#         - picks the single candidate automatically if only one exists,
+#         - prompts interactively if multiple exist,
+#         - exits 3 with a clear message if zero exist.
+#   3. Never creates or modifies a mailbox.
 # ============================================================================
+Say-Section "Phase 1b -- Negative control mailbox"
+
 $neg = $null
-try {
-    $neg = Get-EXOMailbox -Identity $NegativeControlMailbox -ErrorAction Stop -Properties PrimarySmtpAddress
-} catch {
-    Say-Fail "Negative control mailbox '$NegativeControlMailbox' could not be resolved: $($_.Exception.Message)"
-    Say-Info "The negative test is MANDATORY.  Supply a different, real mailbox with -NegativeControlMailbox."
-    exit 3
+
+if (-not [string]::IsNullOrWhiteSpace($NegativeControlMailbox)) {
+    # Explicit operator-supplied control.
+    Say-Info "Operator supplied -NegativeControlMailbox = '$NegativeControlMailbox'.  Resolving."
+    try {
+        $neg = Get-EXOMailbox -Identity $NegativeControlMailbox -ErrorAction Stop -Properties PrimarySmtpAddress,RecipientTypeDetails
+    } catch {
+        Say-Fail "Supplied -NegativeControlMailbox '$NegativeControlMailbox' could not be resolved: $($_.Exception.Message)"
+        Say-Info "Supply a different, real mailbox with -NegativeControlMailbox, or omit the flag to discover one."
+        exit 3
+    }
+    if (-not $neg -or -not $neg.PrimarySmtpAddress) {
+        Say-Fail "Supplied -NegativeControlMailbox resolved to a null record (fail-closed)."
+        exit 3
+    }
+    if ((Normalize-Email $neg.PrimarySmtpAddress) -eq (Normalize-Email $SharedMailbox)) {
+        Say-Fail "Supplied -NegativeControlMailbox resolves to the SAME address as -SharedMailbox."
+        Say-Info "The negative test is meaningless when the two addresses are the same."
+        exit 3
+    }
+    $allowedTypes = @('UserMailbox', 'SharedMailbox')
+    if (-not ($allowedTypes -contains $neg.RecipientTypeDetails)) {
+        Say-Fail "Supplied -NegativeControlMailbox RecipientTypeDetails = '$($neg.RecipientTypeDetails)' is not a UserMailbox or SharedMailbox."
+        exit 3
+    }
+    Say-OK "Negative control mailbox (operator-supplied): $($neg.PrimarySmtpAddress) ($($neg.RecipientTypeDetails))"
+} else {
+    # Discovery path -- read-only enumeration.
+    Say-Info "No -NegativeControlMailbox supplied.  Discovering eligible mailboxes (read-only)."
+    $allMailboxes = $null
+    try {
+        $allMailboxes = @(Get-EXOMailbox -ResultSize Unlimited -Properties PrimarySmtpAddress,RecipientTypeDetails,DisplayName -ErrorAction Stop)
+    } catch {
+        Say-Fail "Get-EXOMailbox discovery query failed (fail-closed): $($_.Exception.Message)"
+        exit 3
+    }
+    $candidates = @(Select-NegativeControlCandidates -Mailboxes $allMailboxes -SharedMailbox $SharedMailbox)
+    if ($candidates.Count -eq 0) {
+        Say-Fail "Discovery found ZERO eligible negative-control mailboxes."
+        Say-Info "The tenant contains no UserMailbox or SharedMailbox other than '$SharedMailbox'."
+        Say-Info "The negative test is MANDATORY and cannot be skipped."
+        Say-Info "Create at least one additional licensed user mailbox OR supply -NegativeControlMailbox explicitly."
+        exit 3
+    }
+    if ($candidates.Count -eq 1) {
+        $neg = $candidates[0]
+        Say-OK "Negative control mailbox (auto-selected from one eligible candidate): $($neg.PrimarySmtpAddress) ($($neg.RecipientTypeDetails))"
+    } else {
+        # Multiple candidates -- prompt the operator to choose.
+        Say-Warn "Found $($candidates.Count) eligible mailboxes.  Please select one as the negative control."
+        for ($i = 0; $i -lt $candidates.Count; $i++) {
+            $c = $candidates[$i]
+            $display = if ([string]::IsNullOrWhiteSpace($c.DisplayName)) { '(no display name)' } else { $c.DisplayName }
+            Write-Host ("    [{0}]  {1}  ({2})  --  {3}" -f ($i + 1), $c.PrimarySmtpAddress, $c.RecipientTypeDetails, $display)
+        }
+        Write-Host ""
+        $selection = $null
+        try {
+            $raw = Read-Host "Enter the number of the mailbox to use as the negative control (or paste its full address)"
+        } catch {
+            Say-Fail "Interactive selection is required when multiple candidates exist, but Read-Host failed (non-interactive session?): $($_.Exception.Message)"
+            Say-Info "Rerun with -NegativeControlMailbox '<address>' to pick one non-interactively."
+            exit 3
+        }
+        $raw = "$raw".Trim()
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Say-Fail "No selection entered.  Aborting."
+            exit 3
+        }
+        # Numeric selection?
+        [int]$asInt = 0
+        if ([int]::TryParse($raw, [ref]$asInt) -and $asInt -ge 1 -and $asInt -le $candidates.Count) {
+            $selection = $candidates[$asInt - 1]
+        } else {
+            # Treat as address.
+            $target = Normalize-Email $raw
+            $match = @($candidates | Where-Object { (Normalize-Email $_.PrimarySmtpAddress) -eq $target })
+            if ($match.Count -ne 1) {
+                Say-Fail "Entered value '$raw' did not match any listed candidate (either as a number or an address)."
+                exit 3
+            }
+            $selection = $match[0]
+        }
+        $neg = $selection
+        Say-OK "Negative control mailbox (operator-selected): $($neg.PrimarySmtpAddress) ($($neg.RecipientTypeDetails))"
+    }
 }
-if (-not $neg -or -not $neg.PrimarySmtpAddress) {
-    Say-Fail "Negative control mailbox resolved to a null record."
-    exit 3
-}
-if ((Normalize-Email $neg.PrimarySmtpAddress) -eq (Normalize-Email $SharedMailbox)) {
-    Say-Fail "NegativeControlMailbox resolves to the SAME address as SharedMailbox."
-    Say-Info "The negative test is meaningless when the two addresses are the same."
-    exit 3
-}
-Say-OK "Negative control mailbox: $($neg.PrimarySmtpAddress)"
+
+# $NegativeControlMailbox is used downstream in the authorization
+# test and messages -- make sure it reflects the actual selected
+# mailbox regardless of which branch chose it.
+$NegativeControlMailbox = $neg.PrimarySmtpAddress
 
 # ============================================================================
 # Phase 2 -- Resolve the Service Principal by AppId.
