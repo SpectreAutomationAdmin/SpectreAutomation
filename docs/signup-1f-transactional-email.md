@@ -4,8 +4,42 @@
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v8 (2026-10-24).  SIGNUP-1G Phase D.  Supersedes v7.
-Key change from v7:
+**Revision.** v9 (2026-10-24).  SIGNUP-1G Phase D.1 BOM fix.
+Supersedes v8.  Key change from v8:
+
+- **Stdin encoding fixed for Windows PowerShell 5.1.**  v8's
+  `BaseStream.Write($bytes); StandardInput.Close()` sequence
+  silently wrote a UTF-8 BOM (`EF BB BF`) to the pipe because
+  the Process.StandardInput StreamWriter the framework
+  constructs on PS 5.1 uses UTF-8-with-BOM; its `Close()`
+  flushed the preamble onto the already-written pipe, and
+  flyctl's atomic line parser rejected the import with
+  `"﻿EMAIL_DELIVERY_MODE" is not a valid secret name`.
+  v9 builds the payload via a per-run StreamWriter
+  (`UTF8Encoding $false` -> no preamble) wrapping a
+  MemoryStream, extracts the resulting bytes, writes them to
+  `Process.StandardInput.BaseStream` directly, and closes
+  `BaseStream` -- never `.StandardInput`.  The Process's own
+  StreamWriter is left untouched so its preamble is never
+  flushed.
+- **New `-Test` self-check** builds the payload via the exact
+  same code path and asserts:
+  - first 5 bytes are `45 4D 41 49 4C` (ASCII `EMAIL`),
+  - the sequence `EF BB BF` appears nowhere in the payload,
+  - the five content lines decode exactly as intended,
+  - no `CR` characters inside any content line,
+  - redaction behaves correctly, including with an empty
+    secret parameter.
+  Verified locally: 23/23 assertions pass on Windows
+  PowerShell 5.1.
+- **Pre-flight + post-failure snapshots** of the five target
+  Fly secret names on `spectre-staging` so a partial update is
+  self-evident.  flyctl's `secrets import` is atomic, but
+  recording the before-state and the after-state (on failure)
+  makes the no-partial-update claim auditable rather than
+  axiomatic.
+
+Earlier v8 change (preserved):
 
 - **Fly activation now uses `flyctl secrets import` with stdin.**
   v7 used `flyctl secrets set KEY=VALUE ...` with PowerShell array

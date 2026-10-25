@@ -110,13 +110,11 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-    [string]$TenantId,
+    [Parameter(Mandatory = $false)]
+    [string]$TenantId = '',
 
-    [Parameter(Mandatory = $true)]
-    [ValidatePattern('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')]
-    [string]$AppClientId,
+    [Parameter(Mandatory = $false)]
+    [string]$AppClientId = '',
 
     [Parameter(Mandatory = $false)]
     [string]$FromMailbox = 'no-reply@spectreautomation.com',
@@ -131,7 +129,10 @@ param(
     [switch]$Stage,
 
     [Parameter(Mandatory = $false)]
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Test
 )
 
 $ErrorActionPreference = 'Stop'
@@ -148,18 +149,163 @@ function Say-Fail([string]$m) { Write-Host "  [FAIL]    $m" -ForegroundColor Red
 function Say-Info([string]$m) { Write-Host "  [INFO]    $m" }
 
 # Pure function: redact any occurrence of a known secret in a string.
-# Exercised in -Test mode of signup-1g-ms365-repair.ps1-style tests;
-# here it is used inline on every captured output line.
+# Exercised in -Test mode.  Used inline on every captured output line.
 function Protect-SecretInOutput {
     param(
-        [Parameter(Mandatory=$true)][string]$Text,
-        [Parameter(Mandatory=$true)][string]$Secret
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Secret
     )
-    if ([string]::IsNullOrWhiteSpace($Secret) -or [string]::IsNullOrEmpty($Text)) { return $Text }
+    if ([string]::IsNullOrEmpty($Secret) -or [string]::IsNullOrEmpty($Text)) { return $Text }
     return $Text.Replace($Secret, '<redacted>')
 }
 
+# Pure function: build the stdin byte payload for `flyctl secrets import`
+# using the SAME StreamWriter pattern the live run uses, so -Test
+# proves the on-wire bytes contain no BOM and no accidental
+# whitespace artefacts.  Writes to a MemoryStream and returns the
+# bytes.
+#
+# The trick that keeps this BOM-free on Windows PowerShell 5.1:
+#   - We create our OWN StreamWriter with UTF8Encoding(bomless=$true),
+#     meaning the writer's Preamble is EMPTY, so Flush never emits
+#     EF BB BF.
+#   - We close the StreamWriter via Dispose, which calls Flush
+#     (BOM-free) + closes the underlying stream.
+#   - The subprocess's own Process.StandardInput StreamWriter is
+#     NEVER touched -- including never .Close()d or .Flush()ed,
+#     which on 5.1 WOULD write a UTF-8-with-BOM preamble to the
+#     pipe depending on how the StreamWriter was constructed by
+#     the framework.  The live run closes BaseStream directly
+#     instead.
+function Build-StdinBytes {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Lines
+    )
+    $ms = New-Object System.IO.MemoryStream
+    try {
+        $noBom = New-Object System.Text.UTF8Encoding $false
+        $sw = New-Object System.IO.StreamWriter($ms, $noBom)
+        $sw.NewLine = "`n"
+        foreach ($line in $Lines) {
+            $sw.WriteLine($line)
+        }
+        $sw.Flush()
+        # Return the bytes BEFORE disposing the writer, so the writer
+        # doesn't try to flush its (empty) preamble a second time.
+        $out = $ms.ToArray()
+        $sw.Dispose()
+        return ,$out
+    } finally {
+        $ms.Dispose()
+    }
+}
+
+# ============================================================================
+# -Test mode -- pure-function assertions.  No connections, no secrets.
+# ============================================================================
+if ($Test) {
+    $failures = 0
+    function Assert-Equal($expected, $actual, $label) {
+        if ($expected -ne $actual) {
+            Say-Fail "  Assert '$label' -- expected [$expected], actual [$actual]"
+            $script:failures++
+        } else {
+            Say-OK "  Assert '$label'"
+        }
+    }
+    function Assert-True($condition, $label) {
+        if (-not $condition) {
+            Say-Fail "  Assert '$label' -- condition was false"
+            $script:failures++
+        } else {
+            Say-OK "  Assert '$label'"
+        }
+    }
+
+    Say-Section "-Test -- pure-function assertions"
+
+    # Build the EXACT payload the live run would build, substituting
+    # a dummy secret value so the test is reproducible and secret-free.
+    $kvLines = @(
+        'EMAIL_DELIVERY_MODE=microsoft365',
+        'MICROSOFT_TENANT_ID=11111111-2222-3333-4444-555555555555',
+        'MICROSOFT_CLIENT_ID=66666666-7777-8888-9999-aaaaaaaaaaaa',
+        'MICROSOFT_CLIENT_SECRET=TEST-ONLY-NOT-A-REAL-SECRET',
+        'MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com'
+    )
+    $bytes = Build-StdinBytes -Lines $kvLines
+
+    # Core invariant: first bytes are ASCII 'EMAIL' (45 4D 41 49 4C), NOT
+    # the UTF-8 BOM EF BB BF.
+    Assert-Equal 0x45 $bytes[0] 'first byte is 0x45 (ASCII E)'
+    Assert-Equal 0x4D $bytes[1] 'second byte is 0x4D (ASCII M)'
+    Assert-Equal 0x41 $bytes[2] 'third byte is 0x41 (ASCII A)'
+    Assert-Equal 0x49 $bytes[3] 'fourth byte is 0x49 (ASCII I)'
+    Assert-Equal 0x4C $bytes[4] 'fifth byte is 0x4C (ASCII L)'
+    Assert-True ($bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) 'first three bytes are not the UTF-8 BOM EF BB BF'
+
+    # No BOM sequence anywhere in the payload.
+    $containsBom = $false
+    for ($i = 0; $i -lt $bytes.Length - 2; $i++) {
+        if ($bytes[$i] -eq 0xEF -and $bytes[$i+1] -eq 0xBB -and $bytes[$i+2] -eq 0xBF) {
+            $containsBom = $true
+            break
+        }
+    }
+    Assert-True (-not $containsBom) 'payload contains no EF BB BF sequence anywhere'
+
+    # Line separator is LF (0x0A), not CRLF.  flyctl's parser handles
+    # both but LF is simpler and matches our encoding intent.
+    $noBom = New-Object System.Text.UTF8Encoding $false
+    $decoded = $noBom.GetString($bytes)
+    $decodedLines = $decoded -split "`n"
+    # Trailing newline makes the final split entry an empty string;
+    # expect 5 content lines + 1 trailing empty.
+    Assert-Equal 6 $decodedLines.Count 'exactly 5 content lines + trailing LF (6 split entries)'
+    Assert-Equal 'EMAIL_DELIVERY_MODE=microsoft365' $decodedLines[0] 'line 1 content exact'
+    Assert-Equal 'MICROSOFT_TENANT_ID=11111111-2222-3333-4444-555555555555' $decodedLines[1] 'line 2 content exact'
+    Assert-Equal 'MICROSOFT_CLIENT_ID=66666666-7777-8888-9999-aaaaaaaaaaaa' $decodedLines[2] 'line 3 content exact'
+    Assert-Equal 'MICROSOFT_CLIENT_SECRET=TEST-ONLY-NOT-A-REAL-SECRET' $decodedLines[3] 'line 4 content exact'
+    Assert-Equal 'MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com' $decodedLines[4] 'line 5 content exact'
+    Assert-Equal '' $decodedLines[5] 'final split entry is empty (trailing LF)'
+
+    # No surprise CR characters inside any content line.
+    for ($i = 0; $i -lt 5; $i++) {
+        Assert-True (-not $decodedLines[$i].Contains("`r")) "line $($i+1) contains no CR"
+    }
+
+    # Protect-SecretInOutput redaction.
+    Assert-Equal 'before <redacted> after' (Protect-SecretInOutput -Text 'before SECRETVALUE after' -Secret 'SECRETVALUE') 'redaction replaces secret inline'
+    Assert-Equal 'no secret here' (Protect-SecretInOutput -Text 'no secret here' -Secret 'SECRETVALUE') 'redaction leaves non-matching text untouched'
+    Assert-Equal 'empty secret keeps text' (Protect-SecretInOutput -Text 'empty secret keeps text' -Secret '') 'empty secret returns text unchanged'
+
+    # Scrub ONLY the dummy test values.
+    $bytes = $null
+    $kvLines = $null
+    $decoded = $null
+    $decodedLines = $null
+
+    Say-Section "-Test summary"
+    if ($script:failures -gt 0) {
+        Say-Fail "$($script:failures) assertion(s) failed."
+        exit 10
+    }
+    Say-OK "All assertions passed."
+    exit 0
+}
+
 Say-Section "Phase 0 -- Preflight"
+
+# Validate -TenantId and -AppClientId now (deferred past -Test).
+$guidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+if ([string]::IsNullOrWhiteSpace($TenantId) -or $TenantId -notmatch $guidPattern) {
+    Say-Fail "-TenantId is required for a live run and must be a GUID."
+    exit 2
+}
+if ([string]::IsNullOrWhiteSpace($AppClientId) -or $AppClientId -notmatch $guidPattern) {
+    Say-Fail "-AppClientId is required for a live run and must be a GUID."
+    exit 2
+}
 
 if ($App -ne 'spectre-staging') {
     Say-Fail "Refusing to run against -App '$App'.  This script is staging-only."
@@ -191,6 +337,37 @@ try {
     exit 2
 }
 
+# Snapshot which of the five SIGNUP-1G secrets currently exist on
+# the app, BEFORE we attempt any mutation.  Fly's `secrets import`
+# is atomic (either all five are set together or none are), but
+# recording the before-state lets the operator confirm no partial
+# update happened if the import fails.
+$targetKeys = @('EMAIL_DELIVERY_MODE', 'MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_FROM_MAILBOX')
+Say-Info "Pre-flight: enumerating current secret names on $App (names only, no values)..."
+try {
+    $preList = & $flyctl secrets list --app $App 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Say-Warn "flyctl secrets list exited $LASTEXITCODE (continuing; pre-flight is informational):"
+        $preList | ForEach-Object { Say-Info "  $_" }
+        $script:preSnapshot = @()
+    } else {
+        $script:preSnapshot = @()
+        foreach ($key in $targetKeys) {
+            $hit = $preList | Where-Object { "$_" -match "(^|\s)$([regex]::Escape($key))(\s|$)" }
+            if ($hit) { $script:preSnapshot += $key }
+        }
+        if ($script:preSnapshot.Count -eq 0) {
+            Say-OK "Pre-flight snapshot: NONE of the five SIGNUP-1G keys are currently set."
+        } else {
+            Say-Warn "Pre-flight snapshot: these keys already exist on $App (will be overwritten by import):"
+            foreach ($k in $script:preSnapshot) { Say-Info "  - $k" }
+        }
+    }
+} catch {
+    Say-Warn "Pre-flight secrets list threw: $($_.Exception.Message).  Continuing."
+    $script:preSnapshot = @()
+}
+
 Say-Section "Phase 1 -- Secret entry (interactive, no echo)"
 Write-Host "The Spectre Transactional Mail client secret is required to activate" -ForegroundColor Yellow
 Write-Host "the Microsoft 365 transactional email adapter on Fly staging." -ForegroundColor Yellow
@@ -214,13 +391,32 @@ try {
     Say-OK "Secret captured in session memory."
 
     Say-Section "Phase 2 -- Build the stdin KEY=VALUE payload"
-    $script:kvLines = @(
+    # Build-StdinBytes constructs the payload via a BOM-free
+    # StreamWriter writing to a MemoryStream.  -Test asserts the
+    # resulting bytes have no EF BB BF anywhere.
+    $script:kvLinesArray = @(
         'EMAIL_DELIVERY_MODE=microsoft365',
         "MICROSOFT_TENANT_ID=$TenantId",
         "MICROSOFT_CLIENT_ID=$AppClientId",
         "MICROSOFT_CLIENT_SECRET=$($script:plainSecret)",
         "MICROSOFT_FROM_MAILBOX=$FromMailbox"
-    ) -join "`n"
+    )
+    $script:stdinBytes = Build-StdinBytes -Lines $script:kvLinesArray
+
+    # Sanity-check at run time: payload must not start with the BOM.
+    # (The -Test mode proves this across more cases.)
+    if ($script:stdinBytes.Length -ge 3 -and
+        $script:stdinBytes[0] -eq 0xEF -and
+        $script:stdinBytes[1] -eq 0xBB -and
+        $script:stdinBytes[2] -eq 0xBF) {
+        Say-Fail "stdin payload starts with a UTF-8 BOM (would corrupt the first key).  Aborting before any Fly write."
+        exit 4
+    }
+    Say-OK ("stdin payload: {0} bytes; first bytes {1:X2} {2:X2} {3:X2} {4:X2} {5:X2} (ASCII '{6}')" -f `
+        $script:stdinBytes.Length,
+        $script:stdinBytes[0], $script:stdinBytes[1], $script:stdinBytes[2],
+        $script:stdinBytes[3], $script:stdinBytes[4],
+        [System.Text.Encoding]::ASCII.GetString($script:stdinBytes, 0, 5))
 
     # Print the payload with the secret redacted, so the operator
     # can see what will be imported.
@@ -295,17 +491,23 @@ try {
         Say-OK "Subprocess command line does NOT contain the plaintext secret (self-verified)."
     }
 
-    # Pipe the payload to flyctl's stdin and close.  Write via the
-    # BaseStream directly with UTF-8-no-BOM encoding so flyctl's
-    # line parser doesn't see a BOM at the start of the first key
-    # name (which it would otherwise treat as part of the key).
-    $noBomUtf8 = New-Object System.Text.UTF8Encoding $false
-    $bytes = $noBomUtf8.GetBytes($script:kvLines + "`n")
-    $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-    $proc.StandardInput.BaseStream.Flush()
-    $proc.StandardInput.Close()
-    # Scrub the byte buffer we just wrote.
-    for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 0 }
+    # Pipe the payload to flyctl's stdin.
+    #
+    # CRITICAL: write ONLY to BaseStream, and close ONLY BaseStream.
+    # Do NOT touch Process.StandardInput as a StreamWriter -- its
+    # default .NET-framework-constructed writer uses UTF-8-WITH-BOM
+    # on Windows PowerShell 5.1, and its Close()/Dispose() writes
+    # a 3-byte BOM preamble to the pipe BEFORE we see it.  (That
+    # is the exact Fly import failure the founder reported with
+    # the previous revision of this script.)  Closing BaseStream
+    # directly signals EOF to flyctl without invoking the
+    # framework StreamWriter's flush path.
+    $base = $proc.StandardInput.BaseStream
+    $base.Write($script:stdinBytes, 0, $script:stdinBytes.Length)
+    $base.Flush()
+    $base.Close()
+    # Scrub the byte buffer in-place.
+    for ($i = 0; $i -lt $script:stdinBytes.Length; $i++) { $script:stdinBytes[$i] = 0 }
 
     # Capture + redact outputs.
     $stdout = $proc.StandardOutput.ReadToEnd()
@@ -325,6 +527,31 @@ try {
 
     if ($flyExit -ne 0) {
         Say-Fail "flyctl secrets import exited with code $flyExit."
+        # Snapshot AFTER to prove no partial update.
+        Say-Section "Post-failure snapshot (partial-update check)"
+        try {
+            $postList = & $flyctl secrets list --app $App 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $postKeys = @()
+                foreach ($key in $targetKeys) {
+                    $hit = $postList | Where-Object { "$_" -match "(^|\s)$([regex]::Escape($key))(\s|$)" }
+                    if ($hit) { $postKeys += $key }
+                }
+                $newlyAppeared = @($postKeys | Where-Object { $_ -notin $script:preSnapshot })
+                if ($newlyAppeared.Count -eq 0) {
+                    Say-OK "No new SIGNUP-1G secrets appeared on $App after the failed import.  No partial update."
+                } else {
+                    Say-Fail "PARTIAL UPDATE DETECTED -- these keys appeared on $App despite the import failure:"
+                    foreach ($k in $newlyAppeared) { Say-Info "  - $k" }
+                    Say-Info "Remove via: $flyctl secrets unset $($newlyAppeared -join ' ') --app $App"
+                }
+            } else {
+                Say-Warn "Post-failure secrets list exited $LASTEXITCODE; verify manually: $flyctl secrets list --app $App"
+            }
+        } catch {
+            Say-Warn "Post-failure snapshot threw: $($_.Exception.Message)"
+            Say-Info "Verify manually: $flyctl secrets list --app $App"
+        }
         exit 4
     }
 
@@ -348,9 +575,13 @@ finally {
         $script:plainSecret = ("x" * $script:plainSecret.Length)
         Remove-Variable plainSecret -Scope Script -Force -ErrorAction SilentlyContinue
     }
-    if ($null -ne $script:kvLines) {
-        $script:kvLines = ("x" * $script:kvLines.Length)
-        Remove-Variable kvLines -Scope Script -Force -ErrorAction SilentlyContinue
+    if ($null -ne $script:kvLinesArray) {
+        for ($i = 0; $i -lt $script:kvLinesArray.Length; $i++) { $script:kvLinesArray[$i] = $null }
+        Remove-Variable kvLinesArray -Scope Script -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $script:stdinBytes) {
+        for ($i = 0; $i -lt $script:stdinBytes.Length; $i++) { $script:stdinBytes[$i] = 0 }
+        Remove-Variable stdinBytes -Scope Script -Force -ErrorAction SilentlyContinue
     }
     if (Get-Variable -Name sec -ErrorAction SilentlyContinue) {
         $sec = $null
