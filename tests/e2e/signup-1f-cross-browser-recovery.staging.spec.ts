@@ -82,7 +82,14 @@ runAt(
 
     // ================================================================
     // Browser B — fresh context, no cookies.  Click /signup/r/<token>.
-    // Must consume + rotate + set cookie + redirect to /status.
+    //
+    // SIGNUP-1G repair (2026-10-25): the GET on /signup/r/<token>
+    // now renders a stateless confirmation landing page.  The actual
+    // consume happens when the user clicks the on-page "Continue"
+    // button (POST to /signup/r/<token>/consume).  This defeats
+    // Microsoft Defender Safe Links pre-fetch.
+    //
+    // The landing page is the first stop; the POST is the second.
     // ================================================================
     const ctxB = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const pageB = await ctxB.newPage();
@@ -90,6 +97,9 @@ runAt(
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
+    // Confirmation landing page is rendered -- not a redirect.
+    await expect(pageB.locator('[data-testid="signup-recovery-confirm-form"]'), "Browser B lands on recovery confirmation page").toBeVisible();
+    await pageB.locator('[data-testid="signup-recovery-confirm-submit"]').click();
     await pageB.waitForURL(/\/signup\/t\/[A-Za-z0-9_-]+\/status$/, { timeout: 30_000 });
 
     // Browser B lands on the SAME registration — status card
@@ -112,8 +122,9 @@ runAt(
     });
 
     // ================================================================
-    // Browser C — second click of the SAME link must be rejected
-    // (single-use).  Expected to land on /signup/resume?error=already_used.
+    // Browser C — second attempt on the SAME link must be rejected
+    // (single-use).  Expected: landing page renders (stateless), the
+    // POST then redirects to /signup/resume?error=already_used.
     // ================================================================
     const ctxC = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const pageC = await ctxC.newPage();
@@ -121,6 +132,9 @@ runAt(
       waitUntil: "domcontentloaded",
       timeout: 60_000,
     });
+    // Same landing page -- the GET classifies nothing.
+    await expect(pageC.locator('[data-testid="signup-recovery-confirm-form"]'), "Browser C lands on the same stateless confirmation page").toBeVisible();
+    await pageC.locator('[data-testid="signup-recovery-confirm-submit"]').click();
     await pageC.waitForURL(/\/signup\/resume\?error=already_used/, { timeout: 30_000 });
     const cErrText = await pageC.locator('[data-testid="signup-resume-error"]').innerText();
     expect(cErrText, "the already-used copy renders").toMatch(/already been used/i);

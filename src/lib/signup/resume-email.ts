@@ -36,8 +36,13 @@ export async function sendResumeEmail(args: {
   adminDisplayName: string | null;
   // SIGNUP-1F (2026-10-20) — the token belongs to the dedicated
   // SignupRecoveryLink table.  Links are 30 min, single-use,
-  // revocable.  The /signup/r/<token> route consumes the link once
-  // and issues a fresh cookie-based session on the clicking browser.
+  // revocable.  The /signup/r/<token> URL is a confirmation
+  // LANDING page (SIGNUP-1G repair, 2026-10-25).  The actual
+  // consume happens on a POST to /signup/r/<token>/consume
+  // triggered by the user clicking the on-page "Continue"
+  // button.  This defeats Microsoft Defender Safe Links and
+  // other email-security scanners that would otherwise redeem
+  // the token on their pre-click GET.
   // The applicant can request another fresh link at any time from
   // /signup/resume.
   ttlMinutes?: number;

@@ -21,7 +21,11 @@ import { join } from "node:path";
 const ROOT = process.cwd();
 const RECOVERY_LINK = readFileSync(join(ROOT, "src/lib/signup/recovery-link.ts"), "utf8");
 const CALLBACK = readFileSync(join(ROOT, "src/app/api/signup/microsoft/callback/route.ts"), "utf8");
-const CONSUME_ROUTE = readFileSync(join(ROOT, "src/app/signup/r/[token]/route.ts"), "utf8");
+// SIGNUP-1G defect repair (2026-10-25): the GET-consume route was
+// split into a read-only landing page (GET) and a child POST
+// consume route to defeat email-security scanner pre-fetches.
+const RECOVERY_LANDING = readFileSync(join(ROOT, "src/app/signup/r/[token]/page.tsx"), "utf8");
+const CONSUME_ROUTE = readFileSync(join(ROOT, "src/app/signup/r/[token]/consume/route.ts"), "utf8");
 const RESUME_REQ = readFileSync(join(ROOT, "src/app/api/signup/resume/request/route.ts"), "utf8");
 const RESUME_EMAIL = readFileSync(join(ROOT, "src/lib/signup/resume-email.ts"), "utf8");
 const REGISTRATION = readFileSync(join(ROOT, "src/lib/signup/registration.ts"), "utf8");
@@ -185,7 +189,16 @@ describe("SIGNUP-1F · Microsoft callback issues via the new table", () => {
   });
 });
 
-describe("SIGNUP-1F · /signup/r consume route", () => {
+describe("SIGNUP-1F · /signup/r consume route (POST-only, post-SIGNUP-1G repair)", () => {
+  it("exports ONLY a POST handler — no GET handler on the consume route", () => {
+    // The parent segment's page.tsx is the GET surface.  A GET on
+    // the consume route is impossible (Next.js returns 405).  This
+    // is the invariant that defeats email-security scanner pre-fetches.
+    expect(CONSUME_ROUTE).toMatch(/export async function POST\(/);
+    expect(CONSUME_ROUTE).not.toMatch(/export async function GET\(/);
+    expect(CONSUME_ROUTE).not.toMatch(/export async function HEAD\(/);
+  });
+
   it("rate-limits by IP + token-prefix on the public consume endpoint", () => {
     expect(CONSUME_ROUTE).toMatch(/checkAuthRateLimit\("signup_recovery_consume",\s*token\.slice\(0,\s*8\),\s*ip\s*\?\?\s*"unknown"\)/);
   });
@@ -213,6 +226,51 @@ describe("SIGNUP-1F · /signup/r consume route", () => {
       expect(l).not.toMatch(/req\.url/);
       expect(l).not.toMatch(/params\.token/);
     }
+  });
+});
+
+describe("SIGNUP-1G repair · /signup/r/[token] landing page defeats scanner pre-fetch", () => {
+  it("renders a page.tsx (not a route.ts) at /signup/r/[token]", () => {
+    // The landing-page MUST be a server component (default export
+    // of page.tsx), not a route handler.  A route handler at this
+    // segment would re-introduce the GET-consume defect.
+    expect(RECOVERY_LANDING).toMatch(/export default function RecoveryLinkLandingPage/);
+    expect(RECOVERY_LANDING).not.toMatch(/export async function GET\(/);
+    expect(RECOVERY_LANDING).not.toMatch(/export async function POST\(/);
+  });
+
+  it("the landing page performs ZERO database access -- it is a pure render", () => {
+    // Scanners GET this URL; it must never touch the DB.
+    expect(RECOVERY_LANDING).not.toMatch(/prisma\./);
+    expect(RECOVERY_LANDING).not.toMatch(/consumeRecoveryLink/);
+    expect(RECOVERY_LANDING).not.toMatch(/resolveRegistrationByToken/);
+    expect(RECOVERY_LANDING).not.toMatch(/findRegistrationIdByAdminEmail/);
+    // No logger either — a scanner hit is not a user action.
+    expect(RECOVERY_LANDING).not.toMatch(/logger\./);
+  });
+
+  it("the landing page discloses NO registration identity (no club, email, legal name, or expiry)", () => {
+    expect(RECOVERY_LANDING).not.toMatch(/legalName/);
+    expect(RECOVERY_LANDING).not.toMatch(/adminEmail/);
+    expect(RECOVERY_LANDING).not.toMatch(/adminDisplayName/);
+    expect(RECOVERY_LANDING).not.toMatch(/expiresAt/);
+    expect(RECOVERY_LANDING).not.toMatch(/registrationId/);
+  });
+
+  it("sends search engines / scanners a noindex metadata hint", () => {
+    expect(RECOVERY_LANDING).toMatch(/robots:\s*\{\s*index:\s*false/);
+  });
+
+  it("has a form whose action is the sibling consume POST", () => {
+    expect(RECOVERY_LANDING).toMatch(/method="POST"/);
+    expect(RECOVERY_LANDING).toMatch(/action=\{`\/signup\/r\/\$\{encodeURIComponent\(token\)\}\/consume`\}/);
+    expect(RECOVERY_LANDING).toMatch(/data-testid="signup-recovery-confirm-form"/);
+    expect(RECOVERY_LANDING).toMatch(/data-testid="signup-recovery-confirm-submit"/);
+  });
+
+  it("offers a fresh-link escape hatch in case the user doesn't recognise the request", () => {
+    expect(RECOVERY_LANDING).toMatch(/href="\/signup\/resume"/);
+    expect(RECOVERY_LANDING).toMatch(/data-testid="signup-recovery-request-fresh-link"/);
   });
 });
 

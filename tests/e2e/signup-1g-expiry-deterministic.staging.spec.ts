@@ -129,6 +129,10 @@ runAt(
 
     // ================================================================
     // 4. Fresh browser clicks /signup/r/<token>.  Expect expired.
+    //
+    // SIGNUP-1G repair (2026-10-25): the GET lands on a stateless
+    // confirmation page; the EXPIRED classification only happens
+    // on the POST triggered by clicking "Continue".
     // ================================================================
     const expiredCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const expiredPage = await expiredCtx.newPage();
@@ -136,6 +140,11 @@ runAt(
       `${BASE}/signup/r/${encodeURIComponent(recoveryToken)}`,
       { waitUntil: "domcontentloaded", timeout: 60_000 },
     );
+    await expect(
+      expiredPage.locator('[data-testid="signup-recovery-confirm-form"]'),
+      "Browser lands on confirmation page (even for expired tokens -- stateless GET)",
+    ).toBeVisible();
+    await expiredPage.locator('[data-testid="signup-recovery-confirm-submit"]').click();
     await expiredPage.waitForURL(/\/signup\/resume\?error=expired/, { timeout: 30_000 });
     const errText = await expiredPage.locator('[data-testid="signup-resume-error"]').innerText();
     expect(errText, "expired message rendered").toMatch(/expired/i);

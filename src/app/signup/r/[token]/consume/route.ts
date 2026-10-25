@@ -1,32 +1,21 @@
-// SIGNUP-1F (2026-10-20) — Recovery-link consume route.
+// SIGNUP-1G defect repair (2026-10-25) -- Recovery-link consume route
+// (POST-only).
 //
-// Public GET endpoint invoked by the recipient when they click the
-// recovery link in the email we send after Microsoft identity
-// verification.  The URL path parameter is the plaintext recovery
-// token; its sha-256 hash is looked up in SignupRecoveryLink and
-// consumed atomically.
+// Replaces the former GET-consume route at /signup/r/[token]/route.ts.
+// The parent segment is now a page.tsx landing surface; the consume
+// step is this child segment's POST.  Scanners never POST, so the
+// token is never redeemed by Microsoft Defender Safe Links or any
+// other corporate email-security pre-fetcher.
 //
-// Flow:
-//   1. Hash the path-token.  Call consumeRecoveryLink — this is
-//      single-shot: a second click of the same link returns
-//      ALREADY_CONSUMED.
-//   2. On SUCCESS: rotate the browser-session resumeToken for the
-//      registration (the clicking browser gets a fresh HTTPOnly
-//      cookie; any previously-paired browser's cookie becomes
-//      stale and must request a fresh link to recover).
-//   3. Set the resume cookie + 303-redirect to the status page.
-//   4. On any failure outcome: redirect to /signup/resume with an
-//      error message explaining the specific failure mode (expired
-//      vs already-used vs unknown) — the user can request a fresh
-//      link from there.
+// Everything else is unchanged from SIGNUP-1F:
 //
-// Security:
-//   - Rate-limited (recovery_consume bucket) to prevent token
-//     enumeration via the single-use failure path.
-//   - Zero logging of the plaintext token.
-//   - Zero logging of the full URL.
-//   - 404 for malformed path tokens (not 400 — same shape as a
-//     real not-found).
+//   • consumeRecoveryLink is atomic + race-safe + single-use.
+//   • Rotates the resume cookie on SUCCESS.
+//   • 303-redirects to /signup/t/[newToken]/status on SUCCESS.
+//   • Classifies the exact failure mode in the redirect error code,
+//     without leaking any PII.
+//   • Rate-limited by IP + token-prefix.
+//   • Zero logging of raw tokens or full URLs.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { consumeRecoveryLink } from "@/lib/signup/recovery-link";
@@ -45,7 +34,7 @@ function redirectTo(path: string): NextResponse {
   return NextResponse.redirect(new URL(path, env.APP_URL), { status: 303 });
 }
 
-export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { token: string } }) {
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
   const token = params.token;
   // Shape pre-check — no logging of the token itself.
