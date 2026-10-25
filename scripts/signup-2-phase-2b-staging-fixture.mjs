@@ -144,14 +144,29 @@ async function destroyFixture({ silent = false } = {}) {
   if (!silent) console.log(JSON.stringify({ destroyed: result.count }));
 }
 
+async function verifyFixture() {
+  // Count attestations attached to the fixture oid.  Used by the
+  // Playwright acceptance to prove the fail-closed gate never
+  // persisted a row.
+  const attestations = await prisma.subscriptionAuthorisationAttestation.count({
+    where: { acceptedByMicrosoftOid: FIXTURE_ADMIN_OID },
+  });
+  const registrations = await prisma.signupRegistration.count({
+    where: { adminMicrosoftOid: FIXTURE_ADMIN_OID },
+  });
+  console.log(JSON.stringify({ attestations, registrations }));
+}
+
 async function main() {
   const action = process.argv[2];
   if (action === "create") {
     await createFixture();
   } else if (action === "destroy") {
     await destroyFixture();
+  } else if (action === "verify") {
+    await verifyFixture();
   } else {
-    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy}");
+    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify}");
     process.exit(2);
   }
 }

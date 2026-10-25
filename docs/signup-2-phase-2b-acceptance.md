@@ -7,8 +7,13 @@
 
 ## 1. Commits + Fly release
 
-- Implementation commit: _recorded by the commit that lands with this file_.
-- Fly release: _TBD after DRH-1 completes; recorded here on acceptance._
+- Implementation commit: **sha-07924e9** on branch `staging-deploy/web1b1-framer-fidelity`.
+- Fly release: **spectre-staging v873** (image `registry.fly.io/spectre-staging:sha-07924e911c7e`), deployed 2026-10-25 15:10 UTC.
+- Worker release: **spectre-staging-worker** on `sha-07924e911c7e` (one machine started; all machines on expected tag).
+- Rollback anchor: v872 (`sha-9fbc7fccc94e`) — SIGNUP-2 Phase 2A closure fix.
+- `/api/health` post-deploy: **HTTP 200** · DB ok (13 ms) · queue ok.
+- Migration outcome: **no migration applied** (Phase 2B reuses Phase 2A's schema per founder §6).
+- Log scan result: zero errors / zero warnings in the 60-second window after v873 landed.
 
 ## 2. Scope — in Phase 2B, strictly
 

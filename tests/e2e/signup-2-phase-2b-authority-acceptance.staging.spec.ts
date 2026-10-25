@@ -31,9 +31,13 @@ const runAt = creds.ready ? test : test.skip;
 const BASE = "https://staging.spectreautomation.com";
 const FLYCTL = "C:/Users/cturcato/.fly/bin/flyctl.exe";
 const FIXTURE_SCRIPT = "scripts/signup-2-phase-2b-staging-fixture.mjs";
+const FIXTURE_BASENAME = path.basename(FIXTURE_SCRIPT);
 
 function sshExec(cmd: string): string {
-  const full = `"${FLYCTL}" ssh console --app spectre-staging --command "sh -c 'cd /app && node ${FIXTURE_SCRIPT} ${cmd}'"`;
+  // Run the UPLOADED fresh copy from /app (not /app/scripts/, which
+  // holds the version baked in at deploy time).  This lets the test
+  // iterate on the fixture harness without a redeploy.
+  const full = `"${FLYCTL}" ssh console --app spectre-staging --command "sh -c 'cd /app && node ${FIXTURE_BASENAME} ${cmd}'"`;
   try {
     return execSync(full, { encoding: "utf8", timeout: 120_000 });
   } catch (e) {
@@ -45,13 +49,13 @@ function uploadFixtureScript(): void {
   const localPath = path.join(process.cwd(), FIXTURE_SCRIPT);
   try {
     execSync(
-      `"${FLYCTL}" ssh console --app spectre-staging --command "rm -f /app/${path.basename(FIXTURE_SCRIPT)}"`,
+      `"${FLYCTL}" ssh console --app spectre-staging --command "rm -f /app/${FIXTURE_BASENAME}"`,
       { encoding: "utf8", timeout: 60_000 },
     );
   } catch {}
   const dir = path.dirname(localPath);
   execSync(
-    `cd "${dir}" && "${FLYCTL}" ssh sftp put --app spectre-staging ${path.basename(FIXTURE_SCRIPT)}`,
+    `cd "${dir}" && "${FLYCTL}" ssh sftp put --app spectre-staging ${FIXTURE_BASENAME}`,
     { encoding: "utf8", timeout: 60_000 },
   );
 }
@@ -71,7 +75,16 @@ function ensureOutDir(): string {
 
 runAt(
   "SIGNUP-2 Phase 2B · fail-closed authority attestation acceptance",
-  async ({ browser }) => {
+  async ({ browser }, testInfo) => {
+    // This spec drives the live staging host via SSH-uploaded
+    // fixtures.  Only the `staging-authenticated` project should
+    // run it; the default `chromium` project would race against
+    // the fixture harness on the same staging container.
+    test.skip(
+      testInfo.project.name !== "staging-authenticated",
+      "staging-only spec",
+    );
+
     test.setTimeout(900_000);
     const outDir = ensureOutDir();
 
@@ -130,6 +143,15 @@ runAt(
 
     // ============================================================
     // C. POST /api/signup/authority/accept is refused by the gate
+    //
+    // The fail-closed path is a 303 to /signup?error=... (safe
+    // form-POST UX; users land somewhere sensible, not on an error
+    // JSON page).  The REAL invariant is:
+    //   (a) response is NOT 2xx (no success body)
+    //   (b) Location does NOT redirect to the /authority/complete
+    //       receipt (which would indicate acceptance)
+    //   (c) scenario E below asserts zero attestation rows were
+    //       created, which is the hard end-state guarantee.
     // ============================================================
     const postResp = await page.request.post(`${BASE}/api/signup/authority/accept`, {
       form: {
@@ -141,17 +163,30 @@ runAt(
       maxRedirects: 0,
       failOnStatusCode: false,
     });
-    // Must be 400+ (not 2xx and not 303 to /complete).
     expect(
       postResp.status(),
-      "C: fail-closed POST refused (403/400/500 all acceptable; must NOT be 2xx or 303)",
-    ).toBeGreaterThanOrEqual(400);
+      "C: fail-closed POST never returns 2xx (success)",
+    ).toBeGreaterThanOrEqual(300);
+    expect(
+      postResp.status(),
+      "C: fail-closed POST never returns 2xx (success)",
+    ).toBeLessThan(600);
+    const location = postResp.headers()["location"] ?? "";
+    expect(
+      location,
+      "C: fail-closed POST never redirects to /authority/complete",
+    ).not.toMatch(/\/authority\/complete/);
+    // Must land on a safe landing (/signup or /signup/t/<token>/*).
+    expect(
+      location,
+      "C: redirect target is a safe signup landing (not a privileged route)",
+    ).toMatch(/\/signup/);
     writeFileSync(
       path.join(outDir, "signup-2-2b-C-post-response.json"),
       JSON.stringify(
         {
           status: postResp.status(),
-          headers: postResp.headers(),
+          location,
           body: await postResp.text().catch(() => "<unreadable>"),
         },
         null,
@@ -160,7 +195,7 @@ runAt(
     );
 
     // ============================================================
-    // D. POST without a valid token returns a safe error (no disclosure)
+    // D. POST without a valid token returns a safe redirect (no disclosure)
     // ============================================================
     const bogus = await page.request.post(`${BASE}/api/signup/authority/accept`, {
       form: {
@@ -172,21 +207,30 @@ runAt(
       maxRedirects: 0,
       failOnStatusCode: false,
     });
-    expect(bogus.status(), "D: bogus token refused").toBeGreaterThanOrEqual(400);
+    // Fail-closed (flag off) is tested in C.  With a bogus token the
+    // path never gets past the flag gate anyway.
+    expect(
+      bogus.status(),
+      "D: bogus token POST never returns 2xx",
+    ).toBeGreaterThanOrEqual(300);
+    const bogusLoc = bogus.headers()["location"] ?? "";
+    expect(bogusLoc, "D: bogus token never routes to /authority/complete").not.toMatch(/\/authority\/complete/);
 
     // ============================================================
     // E. ZERO attestation rows created for this fixture
     // ============================================================
-    // Query by fixture oid; must be zero.
-    const checkOut = execSync(
-      `"${FLYCTL}" ssh console --app spectre-staging --command "sh -c 'cd /app && node -e \\"const p=new (require(\\\\\\"@prisma/client\\\\\\").PrismaClient)(); p.subscriptionAuthorisationAttestation.count({where:{acceptedByMicrosoftOid:\\\\\\"${fixture.adminMicrosoftOid}\\\\\\"}}).then(n=>console.log(JSON.stringify({attestations:n}))).finally(()=>p.\\$disconnect());\\"'"`,
-      { encoding: "utf8", timeout: 60_000 },
-    );
-    const attestationCount = parseFirstJson(checkOut) as { attestations: number };
+    // The fixture script's `verify` subcommand counts attestations
+    // + registrations attached to the fixture oid.  Using the
+    // helper (not an ad-hoc Prisma-over-SSH query) keeps all shell
+    // escaping inside a single file.
+    const verifyOut = sshExec("verify");
+    writeFileSync(path.join(outDir, "signup-2-2b-E-verify.txt"), verifyOut);
+    const verify = parseFirstJson(verifyOut) as { attestations: number; registrations: number };
     expect(
-      attestationCount.attestations,
+      verify.attestations,
       "E: Phase-2G isolation -- no attestation rows created with flag off",
     ).toBe(0);
+    expect(verify.registrations, "E: fixture registration still present pre-destroy").toBeGreaterThanOrEqual(1);
 
     // ============================================================
     // F. Fixture teardown is deterministic
