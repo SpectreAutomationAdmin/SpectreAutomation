@@ -148,6 +148,30 @@ export default async function StatusScreen({
           </p>
         </div>
 
+        {/*
+          SIGNUP-2 Phase 2B (2026-10-25) -- "Continue to authorisation"
+          affordance.  Gated by the SPECTRE_SIGNUP_2B_ATTESTATION_LIVE
+          flag.  Legacy and pre-live users see the existing "what
+          happens next" copy and nothing else.  When the flag is "1",
+          the button appears but the attestation page itself ALSO
+          checks the flag + ToS-approved state and only renders the
+          live form if both pass.
+         */}
+        {process.env.SPECTRE_SIGNUP_2B_ATTESTATION_LIVE === "1" && reg.adminVerifiedAt ? (
+          <div
+            className="signup-authority-cta"
+            data-testid="signup-status-authority-cta"
+          >
+            <Link
+              href={`/signup/t/${encodeURIComponent(params.token)}/authority`}
+              className="w1b-pill-cta"
+              data-testid="signup-status-authority-link"
+            >
+              Continue to subscription authorisation
+            </Link>
+          </div>
+        ) : null}
+
         <footer className="signup-foot">
           <p>
             Questions?  <a className="w1b-text-link" href="mailto:hello@spectreautomation.com?subject=Spectre%20Registration">Email the Spectre team</a>.

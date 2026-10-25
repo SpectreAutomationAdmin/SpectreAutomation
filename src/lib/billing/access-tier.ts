@@ -7,10 +7,14 @@
 // SIGNUP-2 subscription flow receive a non-null `accessTier`, and
 // only those Clubs have tier enforcement active.
 //
-// Phase 2A ships the primitive.  No existing route handler calls
-// assertTierAtLeast in Phase 2A; it's wired in starting Phase 2B.
+// SIGNUP-2 Phase 2B (2026-10-25) adds two side-effectful helpers at
+// the bottom of this file: `assertAccessTierForPosting(clubId)` and
+// `assertAccessTierForClubEmail(clubId)`.  They are the ONLY code
+// paths that read ClubSubscription.accessTier in Phase 2B; the
+// posting-guard seam + the selectEmailAdapter seam call them.
 
 import { ForbiddenError } from "@/lib/errors";
+import { prisma } from "@/lib/prisma";
 
 /** The four access tiers. */
 export const ACCESS_TIERS = [
@@ -159,4 +163,72 @@ export function readAccessTier(subscriptionAccessTier: string | null): AccessTie
   // Future code should log + audit this case; Phase 2A does not
   // wire the write path so it cannot occur yet.
   return null;
+}
+
+// =========================================================================
+// SIGNUP-2 Phase 2B (2026-10-25) -- Side-effectful tier gates.
+// =========================================================================
+// These two helpers are the ONLY code paths that read
+// ClubSubscription.accessTier in Phase 2B.  Each is called from
+// exactly one upstream seam:
+//
+//   - assertAccessTierForPosting(clubId) is called from
+//     src/lib/posting-guard/index.ts (both assertPostingAllowed
+//     and assertSensitiveActionAllowed).  Covers 40+ financial
+//     + HR + sensitive-action callers (classifications A + B in
+//     docs/signup-2-phase-2b-capability-matrix.md).
+//
+//   - assertAccessTierForClubEmail(clubId) is called from
+//     src/lib/integrations/email.ts selectEmailAdapter(args).
+//     Covers Club-scoped outbound email (classification C in the
+//     capability matrix) -- the only FULL-tier capability surface
+//     that bypasses posting-guard today.
+//
+// Three PASS conditions (ANY satisfies):
+//   1. No ClubSubscription row for the Club (legacy grandfather).
+//   2. accessTier is null or an unknown string (legacy grandfather).
+//   3. accessTier == "FULL" OR subscriptionStatus == "MANUAL_INVOICE".
+//
+// One FAIL condition: anything else (STAGED, SUSPENDED_READ_ONLY,
+// or a future value we have not whitelisted) -> throw ForbiddenError.
+//
+// Operator override is NOT supported at this layer -- operators
+// use their own code paths that call these guards with
+// operator-elevated principals, and the operator path's audit
+// trail is captured by the posting-guard seam's audit() call
+// (unchanged).
+
+/** Internal shared check used by both outward-facing asserts. */
+async function evaluateAccessTierGate(clubId: string): Promise<{ pass: boolean; detail: string }> {
+  const sub = await prisma.clubSubscription.findUnique({
+    where: { clubId },
+    select: { accessTier: true, subscriptionStatus: true },
+  });
+  if (!sub) return { pass: true, detail: "no-subscription-row" };
+  const tier = readAccessTier(sub.accessTier);
+  if (tier === null) return { pass: true, detail: "legacy-grandfather" };
+  if (tier === "FULL") return { pass: true, detail: "full" };
+  if (sub.subscriptionStatus === "MANUAL_INVOICE") {
+    return { pass: true, detail: "manual-invoice" };
+  }
+  return {
+    pass: false,
+    detail: `tier=${tier} status=${sub.subscriptionStatus ?? "null"}`,
+  };
+}
+
+export async function assertAccessTierForPosting(clubId: string): Promise<void> {
+  const result = await evaluateAccessTierGate(clubId);
+  if (result.pass) return;
+  throw new ForbiddenError(
+    `SIGNUP-2 access-tier: posting-tier action rejected for Club ${clubId} (${result.detail})`,
+  );
+}
+
+export async function assertAccessTierForClubEmail(clubId: string): Promise<void> {
+  const result = await evaluateAccessTierGate(clubId);
+  if (result.pass) return;
+  throw new ForbiddenError(
+    `SIGNUP-2 access-tier: club-outbound-email rejected for Club ${clubId} (${result.detail})`,
+  );
 }

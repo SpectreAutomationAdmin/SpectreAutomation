@@ -19,6 +19,7 @@
 import type { Principal } from "../rbac";
 import { assertNotTraining } from "../training";
 import { assertAllowedAction } from "../support-access";
+import { assertAccessTierForPosting } from "../billing/access-tier";
 
 export async function assertPostingAllowed(
   principal: Principal,
@@ -39,6 +40,14 @@ export async function assertPostingAllowed(
     entityType,
     entityId,
   });
+  // SIGNUP-2 Phase 2B (2026-10-25) -- subscription access-tier gate.
+  // Legacy ClubSubscription rows have accessTier=null, which the
+  // gate treats as grandfathered PASS; existing tenants are
+  // unaffected.  New SIGNUP-2 tenants in STAGED tier (Phase 2G+)
+  // will be refused here with ForbiddenError, preventing posting
+  // on any Phase-2B+ Club that has not reached FULL (or operator-
+  // elected MANUAL_INVOICE).  See docs/signup-2-phase-2b-capability-matrix.md.
+  await assertAccessTierForPosting(clubId);
 }
 
 // Sensitive (non-financial) actions where we want support-readonly to block
@@ -59,6 +68,10 @@ export async function assertSensitiveActionAllowed(
     entityType,
     entityId,
   });
+  // SIGNUP-2 Phase 2B (2026-10-25) -- subscription access-tier gate.
+  // Mirror of the gate in assertPostingAllowed above.  Legacy
+  // ClubSubscription rows have accessTier=null -> grandfathered.
+  await assertAccessTierForPosting(clubId);
 }
 
 // Re-export for ergonomic imports at boundaries.

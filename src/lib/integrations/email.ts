@@ -292,6 +292,16 @@ export async function selectEmailAdapter(
   const clubId = typeof clubIdOrArgs === "string" ? clubIdOrArgs : clubIdOrArgs.clubId;
   const callerUserId = typeof clubIdOrArgs === "string" ? null : (clubIdOrArgs.callerUserId ?? null);
 
+  // SIGNUP-2 Phase 2B (2026-10-25) -- subscription access-tier gate.
+  // Club-scoped outbound email is a FULL-tier capability
+  // (`club.mailbox.send` + `club.user-invites.deliver`).  Legacy
+  // ClubSubscription rows have accessTier=null -> grandfathered PASS;
+  // STAGED-tier Clubs (Phase 2G+) will be refused here with
+  // ForbiddenError before any adapter is constructed.  See
+  // docs/signup-2-phase-2b-capability-matrix.md Seam 2.
+  const { assertAccessTierForClubEmail } = await import("@/lib/billing/access-tier");
+  await assertAccessTierForClubEmail(clubId);
+
   // Priority 1 — Club-designated Work Intake mailbox with Mail.Send.
   // If the designated mailbox exists AND meets every eligibility
   // check, use it. If ANY check fails, we fall THROUGH to Priority 2
