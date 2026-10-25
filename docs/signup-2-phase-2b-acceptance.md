@@ -1,19 +1,40 @@
 # SIGNUP-2 Phase 2B — Acceptance Evidence
 
-**Status:** READY FOR FOUNDER ACCEPTANCE
+**Status:** ACCEPTED BY FOUNDER 2026-10-25.
+**Final deployed baseline:** `sha-9c717e1` / Fly v875
+(image `registry.fly.io/spectre-staging:sha-9c717e1c5fad`).
+The v875 image contains the full Phase 2B stack: `07924e9`
+(implementation) + `2a0e939` (polish) + `9c717e1` (SIGNUP-1G
+recovery repair, delivered in the same window).  Founder-confirmed
+Phase 2B closure via the same email that authorised Phase 2C
+planning.
+
 **Authored branch:** `staging-deploy/web1b1-framer-fidelity`
 **Phase baseline:** sha-9fbc7fc (Phase 2B authorization at sha-c3e337e)
 **Date:** 2026-10-25
 
 ## 1. Commits + Fly release
 
-- Implementation commit: **sha-07924e9** on branch `staging-deploy/web1b1-framer-fidelity`.
-- Fly release: **spectre-staging v873** (image `registry.fly.io/spectre-staging:sha-07924e911c7e`), deployed 2026-10-25 15:10 UTC.
-- Worker release: **spectre-staging-worker** on `sha-07924e911c7e` (one machine started; all machines on expected tag).
-- Rollback anchor: v872 (`sha-9fbc7fccc94e`) — SIGNUP-2 Phase 2A closure fix.
-- `/api/health` post-deploy: **HTTP 200** · DB ok (13 ms) · queue ok.
-- Migration outcome: **no migration applied** (Phase 2B reuses Phase 2A's schema per founder §6).
-- Log scan result: zero errors / zero warnings in the 60-second window after v873 landed.
+- Implementation commits:
+  - **sha-07924e9** — Phase 2B main implementation (18 files, 2264+).
+  - **sha-2a0e939** — Phase 2B polish (`verify` fixture subcommand +
+    Playwright hardening + acceptance evidence update).
+  - **sha-9c717e1** — SIGNUP-1G recovery repair (scanner-safe GET
+    landing page + POST-only consume).
+- **Final deployed baseline: Fly spectre-staging v875**
+  (image `registry.fly.io/spectre-staging:sha-9c717e1c5fad`),
+  deployed 2026-10-25 22:05 UTC.  Supersedes the interim v873
+  (`sha-07924e911c7e`).  v875 includes the full Phase 2B stack
+  AND the SIGNUP-1G repair in one image.
+- Worker release: **spectre-staging-worker** on `sha-9c717e1c5fad`
+  (one machine started; all machines on expected tag).
+- Rollback anchor: v874 (`sha-07924e911c7e`) — Phase 2B main at
+  v873 before the SIGNUP-1G repair landed.
+- `/api/health` post-deploy: **HTTP 200** · DB ok · queue ok.
+- Migration outcome: **no migration applied** (Phase 2B reuses
+  Phase 2A's schema per founder §6).
+- Log scan result: zero errors / zero warnings in the 60-second
+  window after v875 landed.
 
 ## 2. Scope — in Phase 2B, strictly
 
