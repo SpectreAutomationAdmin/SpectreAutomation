@@ -279,11 +279,102 @@ if ($Test) {
     Assert-Equal 'no secret here' (Protect-SecretInOutput -Text 'no secret here' -Secret 'SECRETVALUE') 'redaction leaves non-matching text untouched'
     Assert-Equal 'empty secret keeps text' (Protect-SecretInOutput -Text 'empty secret keeps text' -Secret '') 'empty secret returns text unchanged'
 
+    # ------------------------------------------------------------------
+    # Transport-level regression: launch a PowerShell receiver via the
+    # EXACT same mechanism the live run uses -- including the
+    # [Console]::InputEncoding swap -- capture the actual on-wire
+    # bytes to a file, and assert they begin with 45 4D 41 49 4C and
+    # contain no BOM.  This covers the Windows PowerShell 5.1
+    # Process.StandardInput preamble-flush defect that would NOT be
+    # caught by payload-only assertions above.
+    # ------------------------------------------------------------------
+    Say-Section "-Test (transport) -- live subprocess receiver"
+
+    $scratch = [System.IO.Path]::GetTempPath()
+    $recvDir = Join-Path $scratch ("signup-1g-xport-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    [void](New-Item -ItemType Directory -Path $recvDir -Force)
+    $recvScript = Join-Path $recvDir 'receiver.ps1'
+    $recvOut    = Join-Path $recvDir 'captured.bin'
+    $recvCode = @'
+param([string]$outPath)
+$in = [Console]::OpenStandardInput()
+$ms = New-Object System.IO.MemoryStream
+$buf = New-Object byte[] 4096
+while ($true) {
+    $n = $in.Read($buf, 0, $buf.Length)
+    if ($n -le 0) { break }
+    $ms.Write($buf, 0, $n)
+}
+[System.IO.File]::WriteAllBytes($outPath, $ms.ToArray())
+'@
+    Set-Content -Path $recvScript -Value $recvCode -Encoding ASCII
+
+    $xportBytes = Build-StdinBytes -Lines @(
+        'EMAIL_DELIVERY_MODE=microsoft365',
+        'MICROSOFT_FROM_MAILBOX=no-reply@spectreautomation.com'
+    )
+
+    # Apply the SAME Console.InputEncoding swap the live run uses.
+    $xportOrig = [Console]::InputEncoding
+    try {
+        [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+
+        $xpsi = New-Object System.Diagnostics.ProcessStartInfo
+        $xpsi.FileName               = (Get-Command powershell -ErrorAction Stop).Source
+        $xpsi.Arguments              = "-NoProfile -ExecutionPolicy Bypass -File `"$recvScript`" `"$recvOut`""
+        $xpsi.UseShellExecute        = $false
+        $xpsi.CreateNoWindow         = $true
+        $xpsi.RedirectStandardInput  = $true
+        $xpsi.RedirectStandardOutput = $true
+        $xpsi.RedirectStandardError  = $true
+        $xproc = [System.Diagnostics.Process]::new()
+        $xproc.StartInfo = $xpsi
+        [void]$xproc.Start()
+
+        $xbase = $xproc.StandardInput.BaseStream
+        $xbase.Write($xportBytes, 0, $xportBytes.Length)
+        $xbase.Flush()
+        $xbase.Close()
+        [void]$xproc.StandardOutput.ReadToEnd()
+        [void]$xproc.StandardError.ReadToEnd()
+        $xproc.WaitForExit()
+    } finally {
+        [Console]::InputEncoding = $xportOrig
+    }
+
+    if (-not (Test-Path $recvOut)) {
+        Say-Fail "transport test: receiver did not produce the capture file."
+        $script:failures++
+    } else {
+        $captured = [System.IO.File]::ReadAllBytes($recvOut)
+        Say-Info ("transport: payload={0} bytes; captured={1} bytes" -f $xportBytes.Length, $captured.Length)
+        if ($captured.Length -ge 5) {
+            Say-Info ("transport: first 10 captured hex = " + (($captured[0..9] | ForEach-Object { '{0:X2}' -f $_ }) -join ' '))
+        }
+        Assert-Equal $xportBytes.Length $captured.Length 'transport: on-wire byte count equals payload byte count (no BOM injected)'
+        Assert-Equal 0x45 $captured[0] 'transport: on-wire byte[0] = 0x45 (ASCII E)'
+        Assert-Equal 0x4D $captured[1] 'transport: on-wire byte[1] = 0x4D (ASCII M)'
+        Assert-Equal 0x41 $captured[2] 'transport: on-wire byte[2] = 0x41 (ASCII A)'
+        Assert-Equal 0x49 $captured[3] 'transport: on-wire byte[3] = 0x49 (ASCII I)'
+        Assert-Equal 0x4C $captured[4] 'transport: on-wire byte[4] = 0x4C (ASCII L)'
+        $hasBom = $false
+        for ($i = 0; $i -lt $captured.Length - 2; $i++) {
+            if ($captured[$i] -eq 0xEF -and $captured[$i+1] -eq 0xBB -and $captured[$i+2] -eq 0xBF) {
+                $hasBom = $true; break
+            }
+        }
+        Assert-True (-not $hasBom) 'transport: captured on-wire bytes contain no EF BB BF sequence'
+    }
+
+    try { Remove-Item -Recurse -Force -Path $recvDir -ErrorAction SilentlyContinue } catch {}
+
     # Scrub ONLY the dummy test values.
     $bytes = $null
     $kvLines = $null
     $decoded = $null
     $decodedLines = $null
+    $xportBytes = $null
+    $captured = $null
 
     Say-Section "-Test summary"
     if ($script:failures -gt 0) {
@@ -444,6 +535,28 @@ try {
 
     Say-Section "Phase 3 -- flyctl secrets import (stdin)"
 
+    # CRITICAL (SIGNUP-1G BOM-injection fix, v4):
+    # On Windows PowerShell 5.1, .NET Framework's Process.Start()
+    # constructs Process.StandardInput as a StreamWriter using
+    # [Console]::InputEncoding, and sets AutoFlush=true immediately
+    # after construction.  The AutoFlush setter calls Flush(), which
+    # writes the encoding's preamble to the subprocess's stdin pipe.
+    # On a machine whose InputEncoding is UTF-8-WITH-BOM (CodePage
+    # 65001; Preamble = EF BB BF -- the common default on modern
+    # Windows and the default here), those three BOM bytes land on
+    # the pipe BEFORE any user-level Write.  flyctl's `secrets
+    # import` parser then sees "﻿EMAIL_DELIVERY_MODE" and
+    # rejects the import.  Confirmed empirically by capturing the
+    # on-wire bytes with a receiver process.
+    #
+    # Fix: swap [Console]::InputEncoding to UTF-8-NO-BOM for the
+    # duration of Process.Start() so the StreamWriter's encoding has
+    # an empty preamble.  Restore the original encoding in finally.
+    $script:origInputEncoding = [Console]::InputEncoding
+    [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+    Say-OK ("Swapped [Console]::InputEncoding -> UTF-8-no-BOM (Preamble.Length = {0}) for Process.Start" -f `
+        [Console]::InputEncoding.GetPreamble().Length)
+
     # Launch flyctl via System.Diagnostics.Process so we can:
     #   - redirect stdin and write the KEY=VALUE lines there,
     #   - capture + redact stdout/stderr line-by-line,
@@ -570,6 +683,16 @@ try {
     exit 0
 }
 finally {
+    # Restore [Console]::InputEncoding to its original value (we
+    # swapped it to UTF-8-no-BOM around Process.Start to prevent
+    # the framework StreamWriter from emitting a preamble BOM).
+    if ($null -ne $script:origInputEncoding) {
+        try {
+            [Console]::InputEncoding = $script:origInputEncoding
+        } catch { }
+        Remove-Variable origInputEncoding -Scope Script -Force -ErrorAction SilentlyContinue
+    }
+
     # Scrub plaintext from this session even on error / Ctrl-C.
     if ($null -ne $script:plainSecret) {
         $script:plainSecret = ("x" * $script:plainSecret.Length)

@@ -4,8 +4,37 @@
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v9 (2026-10-24).  SIGNUP-1G Phase D.1 BOM fix.
-Supersedes v8.  Key change from v8:
+**Revision.** v10 (2026-10-24).  SIGNUP-1G Phase D.1 BOM fix,
+transport-level root cause.  Supersedes v9.  Key change from v9:
+
+- **Real root cause of the BOM identified** empirically with a
+  stdin-capture receiver subprocess.  v9 fixed the payload (bytes
+  in memory have no BOM); the BOM was coming from .NET Framework's
+  `Process.StandardInput` StreamWriter, whose `AutoFlush = true`
+  setter -- invoked inside `Process.Start()` itself, before the
+  caller ever accesses `StandardInput` -- calls `Flush()` which
+  writes the encoding's preamble to the subprocess's stdin pipe.
+  The encoding is `[Console]::InputEncoding`, which on this
+  machine is UTF-8-WITH-BOM (CodePage 65001, Preamble `EF BB BF`).
+  Three BOM bytes land on the pipe BEFORE any user-level Write;
+  flyctl's parser sees them glued to the first key name.
+- **Fix:** the activation script now swaps
+  `[Console]::InputEncoding` to a BOM-less `UTF8Encoding($false)`
+  for the duration of `Process.Start()`, so the framework-
+  constructed StreamWriter is built with an encoding whose
+  Preamble is empty.  The original InputEncoding is restored in
+  the `finally` block.
+- **Permanent transport regression** added to `-Test`.  It
+  constructs the exact same payload the live run would send, swaps
+  `InputEncoding` the same way, launches a PowerShell receiver
+  subprocess via the same mechanism, captures the actual on-wire
+  bytes to disk, and asserts byte-for-byte parity (`45 4D 41 49 4C`
+  first; no `EF BB BF` sequence anywhere; captured byte count
+  equals payload byte count).  Any future regression in the
+  transport layer will fail `-Test`.  Verified: 30/30 assertions
+  pass locally on Windows PowerShell 5.1.
+
+Earlier v9 additions (preserved):
 
 - **Stdin encoding fixed for Windows PowerShell 5.1.**  v8's
   `BaseStream.Write($bytes); StandardInput.Close()` sequence
