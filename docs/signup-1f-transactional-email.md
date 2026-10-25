@@ -4,8 +4,24 @@
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v7 (2026-10-24).  SIGNUP-1G, after live RBAC
-repair succeeded.  Supersedes v6.  Key additions:
+**Revision.** v8 (2026-10-24).  SIGNUP-1G Phase D.  Supersedes v7.
+Key change from v7:
+
+- **Fly activation now uses `flyctl secrets import` with stdin.**
+  v7 used `flyctl secrets set KEY=VALUE ...` with PowerShell array
+  splatting.  Array splatting bypasses the shell parser, but the
+  Windows kernel still exposes the subprocess's full command line
+  via `Win32_Process.CommandLine` to any process on the same user
+  session.  v8's `secrets import` approach puts only
+  `secrets import --app spectre-staging` on the subprocess
+  command line; the KEY=VALUE lines (including the secret value)
+  are streamed over stdin via a UTF-8-no-BOM write to the
+  subprocess's StandardInput.BaseStream.  The script self-verifies
+  the clean command line at run time (reads its own subprocess's
+  `Win32_Process.CommandLine` and aborts with exit 4 if the plain
+  secret is found).
+
+Earlier v7 additions (preserved):
 
 - **Three new operator scripts for Phase C + Phase D step 1**,
   so the founder's involvement is reduced to three
@@ -654,7 +670,15 @@ recorded.
 
 ### D.1 -- Set Fly staging secrets
 
-Secret re-entered via the same `Read-Host -AsSecureString` pattern.
+The script invokes `flyctl secrets import --app spectre-staging`
+and streams `KEY=VALUE` lines over the subprocess's STDIN.  The
+secret value never appears in the command-line arguments visible
+to any observer (`Get-CimInstance Win32_Process -Filter
+"ProcessId=<flyctl-pid>"` -> `CommandLine`).  The script
+self-verifies this at run time by reading its own subprocess's
+command line via WMI and aborting with exit 4 if the secret is
+found in it.
+
 The script refuses to run against any non-staging target.
 
 ```powershell
@@ -662,6 +686,18 @@ The script refuses to run against any non-staging target.
     -TenantId '<Directory (tenant) ID>' `
     -AppClientId '<Spectre Transactional Mail client id>'
 ```
+
+Secret-exposure surface audit (verified by this script's run):
+
+| Surface | Exposed? | Why |
+|---|---|---|
+| flyctl command-line argv | No | `secrets import --app spectre-staging` only; verified at run time via Win32_Process. |
+| PowerShell command history | No | Script's own invocation does not include the secret; Read-Host input is not recorded by PSReadLine. |
+| Source files | No | Nothing written. |
+| flyctl stdout/stderr | No | Captured line-by-line and redacted; any accidental echo is scrubbed before print. |
+| PowerShell session memory | Yes, briefly | `$plainSecret` and `$kvLines` cleared + overwritten in a `finally` block; GC.Collect called. |
+| Fly API transit | HTTPS to Fly's control plane, encrypted at rest at Fly. |
+| Deployed app process env | Yes, intentionally | The adapter reads `MICROSOFT_CLIENT_SECRET` from env; it never logs it. |
 
 Fly rolls the `spectre-staging` web app automatically in ~30-45 s.
 
