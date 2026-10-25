@@ -4,8 +4,30 @@
 Global Admin / Exchange Admin rights and `flyctl` access to the
 Spectre Fly org.
 
-**Revision.** v6 (2026-10-24).  SIGNUP-1G, after Phase 1b
-dry-run fix.  Supersedes v5.  Key change from v5:
+**Revision.** v7 (2026-10-24).  SIGNUP-1G, after live RBAC
+repair succeeded.  Supersedes v6.  Key additions:
+
+- **Three new operator scripts for Phase C + Phase D step 1**,
+  so the founder's involvement is reduced to three
+  interactive prompts (Entra sign-in; client-secret entry;
+  Fly auth confirmation):
+  - `scripts/signup-1g-entra-permissions-audit.ps1` -- read-only
+    Microsoft Graph query that proves the dedicated app has NO
+    application-permission Mail.Send grant.  No secrets.
+  - `scripts/signup-1g-graph-send-test.ps1` -- live
+    client-credentials token exchange + positive + negative
+    `/sendMail` calls.  Secret via `Read-Host -AsSecureString`;
+    scrubbed from memory before exit.
+  - `scripts/signup-1g-fly-secrets-activate.ps1` -- Fly staging
+    secret set via array splatting; same secret-entry pattern;
+    refuses any non-staging `-App` target.
+- Runbook adds a dedicated Phase C (security verification) and
+  Phase D (staging activation + Playwright regression) section
+  below Phase 6.
+- Acceptance evidence template is `docs/signup-1g-acceptance.md`,
+  filled during Phase D and attached to the final report.
+
+Earlier v6 change (preserved):
 
 - **Negative-control mailbox is now discovered, not assumed.**
   v5 defaulted `-NegativeControlMailbox` to `admin@spectreautomation.com`.
@@ -549,6 +571,158 @@ before declaring SIGNUP-1G accepted.
 - **Do not commit the client secret anywhere in the Spectre repo.**
   Secret appears in exactly two places: Entra portal (once) and
   `flyctl secrets` (encrypted at rest).
+
+---
+
+## Phase C -- Security verification (after Exchange RBAC passes)
+
+Prerequisites: `scripts/signup-1g-ms365-repair.ps1` has exited 0
+against your live tenant (RBAC repaired + positive + negative tests
+passed).
+
+### C.1 -- Entra API permissions audit (read-only, no secrets)
+
+Confirms the dedicated app has no application-permission Mail.Send
+grant on Microsoft Graph.  Any such grant would bypass the Exchange
+RBAC scope.  One-time prereq (per workstation):
+
+```powershell
+Install-Module Microsoft.Graph.Applications -Scope CurrentUser
+```
+
+Then:
+
+```powershell
+cd c:\dev\SpectreAutomation
+Connect-MgGraph -Scopes 'Application.Read.All'
+.\scripts\signup-1g-entra-permissions-audit.ps1 -AppClientId '<Spectre Transactional Mail client id>'
+```
+
+Expected final line: `[OK]      Entra API permissions audit PASSED.`
+Exit 0.  No application-permission Mail.Send grant found.
+
+If exit 3 (BLOCKER): remove the listed grants.  The script prints the
+exact `Remove-MgServicePrincipalAppRoleAssignment` command for each.
+
+### C.2 -- Live Microsoft Graph send tests (positive + negative)
+
+Confirms the live Graph API enforces the scope against real tokens.
+Positive: 202 Accepted from `no-reply@`.  Negative: 403 Forbidden from
+`cturcato@`.  Secret is entered via `Read-Host -AsSecureString`; it
+never enters command-line arguments, shell history, source files,
+logs, or chat.
+
+```powershell
+.\scripts\signup-1g-graph-send-test.ps1 `
+    -TenantId '<Directory (tenant) ID>' `
+    -AppClientId '<Spectre Transactional Mail client id>' `
+    -NegativeControlMailbox 'cturcato@spectreautomation.com' `
+    -ToEmail '<a real inbox you control>'
+```
+
+Expected final section:
+
+```
+Phase 3 -- POSITIVE send (no-reply@spectreautomation.com -> <ToEmail>)
+  [OK]      Positive send: HTTP 202 Accepted.
+Phase 4 -- NEGATIVE send (cturcato@spectreautomation.com -> <ToEmail>)
+  [OK]      Negative send: HTTP 403 Forbidden (as expected).
+```
+
+Exit 0.  **The positive-test email actually sends.**  Confirm it
+arrives at `<ToEmail>` within ~60 seconds; delete after.
+
+Exit 4 (SECURITY DEFECT) means the negative send returned 202 --
+re-audit immediately; do not proceed to Phase D.
+
+### C.3 -- Record evidence
+
+Fill the "Phase C" section of `docs/signup-1g-acceptance.md` with:
+- Entra audit script exit code + the "application-permission grants"
+  count line from its output.
+- Graph send-test script exit code + the positive HTTP status +
+  negative HTTP status.
+- A note of the `<ToEmail>` used + confirmation the test email was
+  received + deleted.
+
+---
+
+## Phase D -- Staging activation + full regression
+
+Prerequisites: Phase C exited 0 on both scripts and evidence is
+recorded.
+
+### D.1 -- Set Fly staging secrets
+
+Secret re-entered via the same `Read-Host -AsSecureString` pattern.
+The script refuses to run against any non-staging target.
+
+```powershell
+.\scripts\signup-1g-fly-secrets-activate.ps1 `
+    -TenantId '<Directory (tenant) ID>' `
+    -AppClientId '<Spectre Transactional Mail client id>'
+```
+
+Fly rolls the `spectre-staging` web app automatically in ~30-45 s.
+
+### D.2 -- Confirm effectiveAdapter
+
+```bash
+curl -s https://staging.spectreautomation.com/api/admin/signup/debug/status | jq .email
+```
+
+Expected: `"effectiveAdapter": "microsoft365"` and
+`"fromAddress": "no-reply@spectreautomation.com"`.
+
+### D.3 -- Signup regression (Playwright)
+
+Run from the Spectre repo:
+
+```powershell
+npx playwright test `
+    tests/e2e/signup-1-acceptance.staging.spec.ts `
+    tests/e2e/signup-1-conditional-acceptance.staging.spec.ts `
+    tests/e2e/signup-1c-ms-button-regression.staging.spec.ts `
+    tests/e2e/signup-1e-role-persistence.staging.spec.ts `
+    tests/e2e/signup-1f-cross-browser-recovery.staging.spec.ts `
+    --reporter=line
+```
+
+Expected: `10 passed` (five specs x chromium + staging-authenticated).
+
+### D.4 -- Real signup walk + email verification
+
+Walk https://staging.spectreautomation.com/signup in a browser with
+a Microsoft work account whose primary address you receive mail on.
+Confirm:
+- Email arrives from `Spectre Automation <no-reply@spectreautomation.com>`.
+- Body contains `/signup/r/<token>` link and "expires in 30 minutes".
+- Open the email in a different browser; click within 30 minutes;
+  lands on the status page.
+- Click the same link in a third browser; expect "already been used".
+
+### D.5 -- Log scan
+
+```bash
+flyctl logs --app spectre-staging --since 10m | grep -Ei "signup\.resume_email|signup\.recovery_link"
+flyctl logs --app spectre-staging --since 10m | grep -E "signup/r/[A-Za-z0-9_-]{20,}|resumeToken|recoveryToken"
+```
+
+Expected: first command shows masked emails + `linkIdTail` +
+`providerMessageId` only.  Second command returns zero matches.
+
+### D.6 -- Mailbox-integration regression
+
+Sign in to staging as a club admin with an existing Microsoft
+mailbox integration.  Confirm Work Intake inbox still lists recent
+emails and that delete/restore mutations still work.
+
+### D.7 -- Record evidence
+
+Fill the "Phase D" section of `docs/signup-1g-acceptance.md` with
+Playwright `n passed` line, email arrival confirmation, log-scan
+result, and mailbox-integration spot-check verdict.  Submit the
+completed document as the acceptance deliverable.
 
 ---
 
