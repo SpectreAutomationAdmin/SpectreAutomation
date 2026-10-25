@@ -157,6 +157,136 @@ async function verifyFixture() {
   console.log(JSON.stringify({ attestations, registrations }));
 }
 
+async function verifyVerdictFor(adminOid) {
+  // SIGNUP-2 Phase 2C acceptance helper.  Reads the verdict column
+  // written by the pipeline so the staging Playwright acceptance
+  // can assert what the pipeline persisted without hitting a
+  // read-protected admin endpoint.
+  const reg = await prisma.signupRegistration.findFirst({
+    where: { adminMicrosoftOid: adminOid },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      step: true,
+      status: true,
+      verificationVerdict: true,
+      verificationHoldCategory: true,
+      signingAuthoritySignal: true,
+      verificationDecidedAt: true,
+    },
+  });
+  console.log(JSON.stringify({ reg }));
+}
+
+async function createPhase2cFixture(scenario) {
+  // Scenario selector drives the legalName (which the fixture
+  // adapter in src/lib/signup/entity-registry/adapters/fixture.ts
+  // reads) + the ownershipVerificationState the pipeline reads.
+  const now = new Date();
+  const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 7);
+  const token = generateFixtureToken();
+  const tokenHash = hashToken(token);
+  // Each scenario gets a distinct oid so parallel scenarios can
+  // coexist on the same staging DB.
+  const oidTail = scenario.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12).padEnd(12, "0");
+  const oid = `${oidTail}-2b2b-2b2b-2b2b-2c0000000000`;
+  let legalName;
+  let ownership;
+  switch (scenario) {
+    case "pass-via-fixture":
+      // Fixture adapter would normally return ACTIVE+MATCHED, but
+      // Phase 2C's isLive=false on the fixture means PASS_AUTOMATED
+      // is unreachable via staging acceptance -- the result is a
+      // HOLD:ENTITY_VERIFICATION ("standing-not-from-live-adapter").
+      // This scenario documents that invariant.
+      legalName = "FIXTURE:ACTIVE+MATCHED Phase 2C Acceptance Pass Club";
+      ownership = "AUTOMATED_PASSED";
+      break;
+    case "hold":
+      legalName = "FIXTURE:MANUAL_REVIEW_REQUIRED Phase 2C Hold Club";
+      ownership = "AUTOMATED_PASSED";
+      break;
+    case "reject":
+      legalName = "FIXTURE:NOT_ACTIVE Phase 2C Reject Club";
+      ownership = "AUTOMATED_PASSED";
+      break;
+    default:
+      throw new Error(`unknown scenario: ${scenario}`);
+  }
+
+  // Destroy prior for this specific oid before create (idempotent).
+  const prior = await prisma.signupRegistration.findMany({
+    where: { adminMicrosoftOid: oid },
+    select: { id: true },
+  });
+  if (prior.length) {
+    const ids = prior.map((r) => r.id);
+    await prisma.subscriptionAuthorisationAttestation.deleteMany({ where: { signupRegistrationId: { in: ids } } });
+    await prisma.entityStandingCheck.deleteMany({ where: { signupRegistrationId: { in: ids } } });
+    await prisma.signupRecoveryLink.deleteMany({ where: { registrationId: { in: ids } } });
+    await prisma.signupOAuthTransaction.deleteMany({ where: { registrationId: { in: ids } } });
+    await prisma.signupRegistration.deleteMany({ where: { id: { in: ids } } });
+  }
+
+  const reg = await prisma.signupRegistration.create({
+    data: {
+      resumeTokenHash: tokenHash,
+      legalName,
+      legalNameNormalized: legalName.toLowerCase(),
+      operatingName: null,
+      operatingNameNormalized: null,
+      country: "CA",
+      provinceState: "AB",
+      addressLine1: "1 Fixture Lane",
+      city: "Fixtureville",
+      postalCode: "T0A 0A0",
+      websiteUrl: null,
+      adminEmail: `signup-2-phase-2c-${scenario}@spectre.test`,
+      adminMicrosoftOid: oid,
+      adminMicrosoftTenantId: "00000000-2c2c-ffff-2c2c-000000000000",
+      adminDisplayName: `Phase 2C ${scenario}`,
+      adminGivenName: "Phase2C",
+      adminSurname: scenario,
+      adminPosition: "General Manager",
+      adminVerifiedAt: now,
+      step: "READY_FOR_AUTHORITY_ATTESTATION",
+      status: "DRAFT",
+      ownershipVerificationState: ownership,
+      startedByIp: "127.0.0.1",
+      startedUserAgent: "SIGNUP-2 Phase 2C Fixture",
+      expiresAt: expires,
+    },
+  });
+
+  const authorityUrl = `${BASE_URL}/signup/t/${encodeURIComponent(token)}/authority`;
+  console.log(JSON.stringify({
+    scenario,
+    authorityUrl,
+    registrationId: reg.id,
+    token,
+    adminMicrosoftOid: oid,
+    legalName,
+  }));
+}
+
+async function destroyPhase2cFixtures() {
+  const regs = await prisma.signupRegistration.findMany({
+    where: { adminMicrosoftOid: { endsWith: "-2c0000000000" } },
+    select: { id: true, adminMicrosoftOid: true },
+  });
+  if (regs.length === 0) {
+    console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  const ids = regs.map((r) => r.id);
+  await prisma.subscriptionAuthorisationAttestation.deleteMany({ where: { signupRegistrationId: { in: ids } } });
+  await prisma.entityStandingCheck.deleteMany({ where: { signupRegistrationId: { in: ids } } });
+  await prisma.signupRecoveryLink.deleteMany({ where: { registrationId: { in: ids } } });
+  await prisma.signupOAuthTransaction.deleteMany({ where: { registrationId: { in: ids } } });
+  const result = await prisma.signupRegistration.deleteMany({ where: { id: { in: ids } } });
+  console.log(JSON.stringify({ destroyed: result.count }));
+}
+
 async function main() {
   const action = process.argv[2];
   if (action === "create") {
@@ -165,8 +295,24 @@ async function main() {
     await destroyFixture();
   } else if (action === "verify") {
     await verifyFixture();
+  } else if (action === "phase2c-create") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2c-create <pass-via-fixture|hold|reject>");
+      process.exit(2);
+    }
+    await createPhase2cFixture(scenario);
+  } else if (action === "phase2c-destroy") {
+    await destroyPhase2cFixtures();
+  } else if (action === "phase2c-verdict") {
+    const oid = process.argv[3];
+    if (!oid) {
+      console.error("Usage: ... phase2c-verdict <adminMicrosoftOid>");
+      process.exit(2);
+    }
+    await verifyVerdictFor(oid);
   } else {
-    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify}");
+    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict}");
     process.exit(2);
   }
 }

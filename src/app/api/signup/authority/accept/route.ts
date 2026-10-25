@@ -206,6 +206,28 @@ export async function POST(req: NextRequest) {
       termsVersionLabel: doc.label,
     });
 
+    // SIGNUP-2 Phase 2C (2026-10-25) -- after the attestation
+    // persists, fire the verification pipeline.  The pipeline is
+    // self-contained; failures are logged but do not block the
+    // attestation acceptance (the receipt page is reached either
+    // way; the applicant simply sees "Verification in progress"
+    // until a verdict is written on a later retry).
+    try {
+      const { runRegistrationVerification } = await import("@/lib/signup/registration-verification");
+      await runRegistrationVerification({
+        registrationId: reg.id,
+        correlationId: `attest-${reg.id.slice(-6)}`,
+      });
+    } catch (err) {
+      logger.warn("signup.verification.pipeline_error", {
+        registrationIdTail: reg.id.slice(-6),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      // Pipeline failures do NOT block the attestation receipt page;
+      // Phase 2C's verdict column stays null and the applicant sees
+      // "Verification in progress".  A retry hook lives in Phase 2H.
+    }
+
     return redirectTo(`/signup/t/${encodeURIComponent(token)}/authority/complete`);
   } catch (err) {
     logger.error("signup.authority.accept.failed", {

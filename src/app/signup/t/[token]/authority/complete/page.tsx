@@ -37,6 +37,19 @@ export default async function AuthorityCompletePage({
     },
   });
 
+  // SIGNUP-2 Phase 2C (2026-10-25) -- verification state surface.
+  // Gated by SPECTRE_SIGNUP_2C_VERIFICATION_LIVE; default OFF (fail-
+  // closed per founder §6).  The pipeline still writes the verdict
+  // server-side even when the flag is off -- only the applicant-facing
+  // disclosure is gated.
+  const verificationLive = process.env.SPECTRE_SIGNUP_2C_VERIFICATION_LIVE === "1";
+  const verification = verificationLive
+    ? await prisma.signupRegistration.findUnique({
+        where: { id: reg.id },
+        select: { verificationVerdict: true, verificationDecidedAt: true },
+      })
+    : null;
+
   if (!attestation) {
     // Someone navigated here without actually completing the
     // attestation; bounce them back to the entry.
@@ -96,13 +109,54 @@ export default async function AuthorityCompletePage({
             </time>
           </p>
         </div>
-        <p className="signup-meta">
-          The next step &mdash; secure collection of the pre-authorised debit
-          mandate &mdash; is being prepared.  Spectre will contact you when
-          it is available.  Until then, your Club&rsquo;s registration is
-          saved; no payment has been collected and no subscription has been
-          activated.
-        </p>
+        {verificationLive ? (
+          <div
+            className="signup-verification-state"
+            role="status"
+            data-testid="signup-verification-state"
+          >
+            {!verification || !verification.verificationVerdict ? (
+              <p data-testid="signup-verification-pending">
+                Verification is in progress.  We&rsquo;re confirming the
+                Club&rsquo;s standing and your authority to authorise this
+                subscription.  We&rsquo;ll be in touch when the next step is
+                ready.
+              </p>
+            ) : verification.verificationVerdict === "PASS_AUTOMATED" ? (
+              <p data-testid="signup-verification-pass">
+                Verification is complete.  The next step &mdash; secure
+                collection of the pre-authorised debit mandate &mdash; is
+                being prepared.  Spectre will contact you when it is available.
+              </p>
+            ) : verification.verificationVerdict === "HOLD_FOR_REVIEW" ? (
+              <p data-testid="signup-verification-hold">
+                Your registration is under review by Spectre.  Reviews
+                typically complete within one business day.  We&rsquo;ll
+                reach out directly if we need any additional information.
+              </p>
+            ) : (
+              <p data-testid="signup-verification-reject">
+                We weren&rsquo;t able to complete verification.  Please
+                contact{" "}
+                <a
+                  className="w1b-text-link"
+                  href="mailto:hello@spectreautomation.com?subject=Spectre%20Registration"
+                >
+                  hello@spectreautomation.com
+                </a>
+                .
+              </p>
+            )}
+          </div>
+        ) : (
+          <p className="signup-meta">
+            The next step &mdash; secure collection of the pre-authorised debit
+            mandate &mdash; is being prepared.  Spectre will contact you when
+            it is available.  Until then, your Club&rsquo;s registration is
+            saved; no payment has been collected and no subscription has been
+            activated.
+          </p>
+        )}
       </section>
     </main>
   );

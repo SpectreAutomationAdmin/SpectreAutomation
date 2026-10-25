@@ -10726,6 +10726,19 @@ model SignupRegistration {
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt
 
+  // SIGNUP-2 Phase 2C (2026-10-25) -- verification pipeline outcome.
+  // Written by the authority-corroborator after Phase 2B attestation
+  // persists.  Null for pre-2C registrations (treated as pending by
+  // Phase 2E).  verificationDeciderUserId is null when the
+  // corroborator wrote it automatically; populated by the Phase 2H
+  // operator-override path when an authorised operator releases a
+  // HOLD or converts to REJECT.
+  verificationVerdict         String?
+  verificationDecidedAt       DateTime?
+  verificationDeciderUserId   String?
+  verificationHoldCategory    String?
+  signingAuthoritySignal      String?
+
   microsoftTransactions SignupOAuthTransaction[]
   recoveryLinks         SignupRecoveryLink[]
 
@@ -10734,6 +10747,7 @@ model SignupRegistration {
   @@index([ownershipVerificationState])
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
+  @@index([verificationVerdict, verificationDecidedAt])
 }
 
 // SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates
