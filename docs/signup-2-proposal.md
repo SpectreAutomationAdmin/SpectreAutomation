@@ -1,256 +1,510 @@
-# SIGNUP-2 -- Scope + Implementation Proposal
+# SIGNUP-2 -- Architecture Decision Document (v2)
 
-**Status.** Planning only.  No code; no live payment entities; no
-tenant activation.
+**Status.** Architecture research + planning only.  **No code; no
+Stripe entities; no DB migrations; no production configuration; no
+new application deploys.**  v2 supersedes v1 of this document
+(2026-10-25) and incorporates the founder's architecture-review
+directive of the same date.
 
-**Audience.** Founder review before any implementation begins.
-
-**Dependencies accepted at this point:**
-- SIGNUP-1G accepted on staging (dedicated transactional-mail Entra
-  app + Exchange RBAC + 30-min recovery TTL + regression evidence).
-- Classifier (`src/lib/signup/org-verification.ts`) continues to
-  emit `AUTOMATED_PASSED | NEEDS_MANUAL_REVIEW | ESCALATED |
-  OVERRIDDEN` as the preliminary risk signal.
-- Spectre's existing dormant Stripe adapter at
-  [src/lib/billing/index.ts](../src/lib/billing/index.ts) (card
-  path) is NOT the primary SIGNUP-2 instrument; see Section 3.
-- The delegated-authority commercial-authority model in
+**Dependencies accepted:**
+- SIGNUP-1G accepted on staging per founder's 2026-10-25 message.
+  Baseline frozen at `sha-fb604f9` on
+  `staging-deploy/web1b1-framer-fidelity`, Fly `v865`.
+- SIGNUP-1G transactional-mail adapter is Spectre's outbound email
+  spine; SIGNUP-2 reuses it for welcome + billing notifications.
+- Delegated-authority commercial-authority model in
   [docs/signup-2-commercial-authority-verification.md](signup-2-commercial-authority-verification.md).
-- The Stripe ACSS-Debit architecture note in
-  [docs/signup-2-payment-architecture.md](signup-2-payment-architecture.md).
 
-Both prior docs stay in force.  This document extends them into an
-executable plan.
+**Separately-tracked, untested in SIGNUP-1G** (preserved per
+founder directive; not re-opened by this document):
+- Real Microsoft work-account signup walkthrough (end-to-end UI).
+- Outlook -> Spectre delete-sync convergence under real
+  mailbox-integration load.
 
----
-
-## 1 Commercial posture
-
-- **Annual subscription:** CAD $38,000 per Club.
-- **Primary instrument:** Stripe ACSS Debit (Canadian Pre-Authorized
-  Debit via Payments Canada ACSS; CPA Rule H1 governs).  Card remains
-  a secondary option a Controller can elect.
-- **Payment experience:** Spectre-controlled UI (Stripe
-  Checkout `mode: "setup"` hosted mandate collection is used only
-  for the one page that collects PAD bank details + mandate
-  acceptance -- everything else is a Spectre-branded screen).  No
-  AP-workflow dependency, no third-party invoicing experience, no
-  "Pay a Stripe invoice link" email.
-- **Three distinct lifecycle events** (never merged):
-
-  1. **Subscription authorisation.**  Signatory accepts the
-     mandate + attestation.  Spectre records who / when / what
-     signed.  **No funds move.**
-  2. **First debit (payment collection).**  Stripe initiates the
-     PAD via the collected mandate.  Settles T+4 to T+5 on
-     standard timing.
-  3. **Tenant activation.**  Spectre provisions the Club tenant
-     (User + Club + UserClubRole + initial seed data).
-
-  Timing: 1 happens at signup completion; 2 fires immediately after
-  on Spectre's trigger (not Stripe's); 3 fires on
-  `payment_intent.succeeded`.  The three events are independent;
-  the lifecycle supports retry + rollback + manual override.
+These are tracked in
+[docs/signup-1g-outstanding-untested-scopes.md](signup-1g-outstanding-untested-scopes.md).
 
 ---
 
-## 2 Customer journey + UI states
+## 1 Founder-approved product direction (as of 2026-10-25)
 
-Expressed as `SignupRegistration.step` extensions on top of the
-accepted SIGNUP-1 lifecycle.  Each row describes a single state
-and the UI the applicant sees.
+| # | Decision | Interpreted architecture impact |
+|---|---|---|
+| 1 | Annual billing at CAD $38,000 | One `BillingCycle` per year per Club; renewal invoice fires on anniversary. |
+| 2 | ACSS Debit preferred; card secondary pending feasibility + cost | Section 2 (fees) + Section 11 (feasibility).  Build primary ACSS path; defer card wire-up to a later gated phase. |
+| 3 | Initiate first debit after mandate acceptance; distinguish initiation / settlement / activation | Section 3 (five-event lifecycle) + Section 7 (access policy). |
+| 4 | Reuse SIGNUP-1G transactional-mail adapter | Welcome + billing + payment-failure emails go through the dedicated `no-reply@` identity. |
+| 5 | In-dashboard operator inbox + email notifications | New operator-inbox feature set.  Section 9. |
+| 6 | Daily reconciliation + 30-day exception window | Nightly job + 30-day drift surfacing. |
+| 7 | Coulee Ridge for staging validation; production pilots require separate approval | Section 15. |
+| 8 | Defer additional pricing tiers + discounts | Keep `SubscriptionPlan` model minimal; one plan row at MVP. |
+| 9 | **No government-ID collection or retention** until necessity + legal basis established | Remove the gov-ID branch from the elevated-risk path entirely until a dedicated review authorises it.  Section 10. |
+| 10 | Version-pinned terms + authorisation evidence | `SubscriptionAuthorisationAttestation.termsVersionSha256` becomes a required column. |
 
-| Step (new) | Precondition | Spectre UI | Operator state |
+---
+
+## 2 Verified Stripe facts (sourced + current)
+
+Verified against [stripe.com/en-ca/pricing/local-payment-methods](https://stripe.com/en-ca/pricing/local-payment-methods) and [docs.stripe.com/payments/acss-debit](https://docs.stripe.com/payments/acss-debit) on 2026-10-25.
+
+### 2a Fees
+
+| Instrument | Rate | Fixed fee | Cap | $38K annual cost |
+|---|---|---|---|---|
+| **ACSS Debit (CA PAD)** | 1 % | CAD $0.40 | **CAD $5.00 per transaction** | **~CAD $6/year** (cap + CAD $1 one-time instant-verification). |
+| Card (domestic CA) | 2.9 % | CAD $0.30 | n/a | ~CAD $1,102.30/year. |
+| Card (international) | +0.8 % on top of 2.9 % | | | ~CAD $1,406/year. |
+| Card (manually entered) | +0.5 % on top of 2.9 % | | | ~CAD $1,292/year. |
+
+The **CAD $5 PAD cap** is the architecturally dominant fact: Stripe's
+cost for the primary payment path is bounded at ~CAD $6 per Club
+per year regardless of ticket size.  Earlier (v1 of this doc)
+estimated ~CAD $380 using the uncapped rate; **that was wrong**.
+Card remains >~175x more expensive per Club per year.
+
+### 2b Failure fees
+
+| Event | Fee |
+|---|---|
+| Failed PAD (NSF, invalid account, stop-payment) | CAD $5.00. |
+| PAD dispute | CAD $5.00. |
+
+### 2c Transaction limits
+
+| Instrument | Min | Default max | Hard cap |
 |---|---|---|---|
-| `ADMIN_VERIFIED` (existing) | Microsoft identity captured; position selected; classifier run | SIGNUP-1 status card: "Your registration is saved" | Idle; await signatory decision |
-| `AUTHORITY_PENDING` | Classifier green OR exception artefact uploaded + reviewer-released | Signatory-attestation surface: "Confirm you have authority to bind this Club" | Idle; await attestation |
-| `MANDATE_PENDING` | Attestation accepted | Stripe-hosted Checkout page in setup mode: collect bank account + mandate acceptance | Awaiting SetupIntent.succeeded |
-| `MANDATE_CAPTURED` | SetupIntent.succeeded webhook | Spectre summary page: "Mandate accepted; first debit in <N> business days" | Spectre creates Subscription + first invoice |
-| `AWAITING_FIRST_SETTLEMENT` | PaymentIntent.processing webhook | Status card: "First payment in flight" with ETA | Idle; await settlement |
-| `ACTIVE` | PaymentIntent.succeeded webhook | Spectre tenant activated; redirect to the newly-provisioned Club dashboard | Audit; monitor |
-| `AT_RISK` | PaymentIntent.payment_failed OR charge.dispute.created | Status card: "Payment issue; Spectre will contact you" + operator notified | Operator reaches out |
-| `CANCELLED` | Subscription cancellation | Static page: "Subscription cancelled; data retained per policy" | Audit; schedule teardown per policy |
-| `MANUAL_INVOICE` | Operator elected fallback (edge case) | Status card: "Invoice to follow; Spectre will contact you" | Operator-driven; no Stripe entity |
+| ACSS Debit | CAD $0.50 | **CAD $999,999.99** per transaction | CAD $9,999,999.99 with Stripe-approved increased limits. |
+| Card | varies by issuer | Issuer-controlled | Commercial-card single-authorisation caps commonly $25K-$50K; may require 3DS or issuer pre-approval at $38K. |
 
-Each state transition emits an audit record (`audit()` call per
-Spectre's standard pattern).  Each transition has a defined
-inverse for rollback where the real world allows it (e.g.
-MANDATE_CAPTURED -> MANDATE_PENDING on operator revocation).
+**For $38K annual single-debit:** ACSS well within default max; card
+is subject to issuer-side ceilings and may require either an issuer
+pre-approval call or splitting into quarterly $9,500 debits.
 
-### 2a Non-standard transitions (deliberate design)
+### 2d Settlement timing
 
-- **MANDATE_CAPTURED without AWAITING_FIRST_SETTLEMENT.**  If
-  Spectre's internal operator wants to defer the first debit (e.g.
-  pending final paperwork), the lifecycle allows holding at
-  MANDATE_CAPTURED until an operator-triggered "charge now" action.
-- **ACTIVE without debit (manual-invoice path).**  If a Club pays
-  by wire or cheque, the operator can mark `ClubSubscription.status =
-  ACTIVE` + `source = MANUAL_INVOICE` without any Stripe entity.
-  This is the rare-case fallback; it's covered to prevent "we
-  can't support this Club at all" lock-in.
-- **Tenant provisioning never fires before first-settlement
-  succeeded unless `source = MANUAL_INVOICE` AND operator confirmed
-  cleared funds.**  Hard invariant.  Covered by RBAC + audit.
+| Instrument | Payment success | Funds available | Cutoff |
+|---|---|---|---|
+| ACSS Debit (standard) | T+4 at 21:00 UTC | T+5 at 00:00 UTC | 17:00 US/Eastern |
+| Card | T+2 nominal | T+2 nominal | per Stripe payout schedule |
 
----
+### 2e Dispute windows
 
-## 3 Payment-provider architecture options
+| Account type | Window | Contestable? |
+|---|---|---|
+| Business bank account disputing a PAD | **10 business days** | **No** -- "no-questions-asked" per Stripe; Stripe's decision is final. |
+| Personal bank account disputing a PAD | 90 calendar days | No. |
+| Card chargeback | 120 days typical | Yes -- evidence submission allowed. |
 
-The 2026-10-20 payment architecture doc (link in dependencies)
-recommends Stripe ACSS Debit on the strength of Spectre's existing
-Stripe wiring + Stripe's mandate / dispute tooling.  That
-recommendation stands.  This section calls out the specific
-Stripe-adjacent choices SIGNUP-2 must make at kickoff + the
-alternatives considered.
+### 2f Refund windows
 
-### 3a Primary -- Stripe ACSS Debit (recommended)
+- PAD refunds submitted within 180 days of original payment; processed in ~3 business days.
+- Refunds are separate credits, not reversals; statement descriptor references original but is not labelled "refund".
 
-- Stripe-hosted Checkout in `mode: "setup"` for mandate collection
-  (Section 4 of the architecture doc).
-- Subscriptions API for recurring annual billing against the
-  saved PaymentMethod with `default_for: ['invoice', 'subscription']`.
-- Fees: CAD $0.68 flat + 1% per PAD transaction.  (At $38K annual:
-  ~CAD $380.68 per cycle.)
-- Settlement: T+4 success / T+5 funds available.
-- Mandate text + mandate-confirmation email + debit-notification
-  email all handled by Stripe to satisfy Rule H1.
-- Spectre persists mandate acceptance context in
-  `SubscriptionPaymentMandate` (new model; see Section 5a).
+### 2g Automatic retries
 
-**Open decision #1 for founder approval:**
-*Default to annual billing (one $38K debit per year) OR offer
-quarterly instalments ($9,500 x 4)?*  Annual is simpler + default
-in the architecture doc; quarterly reduces NSF exposure but
-quadruples Stripe fees.  Recommend annual as default.
+Stripe Smart Retries (opt-in per account) retries a failed PAD
+**once, within 30 days** of the original attempt.  No retry fee for
+Smart-Retry attempts.
 
-### 3b Secondary -- Commercial card (card_present / Checkout card mode)
+### 2h Compliance
 
-Supported by Spectre's existing adapter without changes.  Elected
-by the Controller on a per-Club basis via a toggle on the
-signatory-attestation page.  Default is PAD; card is opt-in.
-
-- Fees: 2.9% + CAD $0.30.  At $38K annual: ~CAD $1,102.
-- Settlement: T+2.
-- Chargeback window: 120 days (vs 10 bd for business PAD).
-- Issuer-side authorisation limits may apply at $38K (common
-  commercial cards cap single transactions at $25K-$50K).
-- Mitigation: split annual charge into 4 quarterly debits at
-  $9,500 per quarter.  Operator-elected per Club.
-
-### 3c Tertiary -- Manual invoice (wire / cheque / EFT via bank portal)
-
-Fallback for Clubs whose bank doesn't support PAD or whose
-Controller cannot elect card.  Spectre operator records cleared
-funds; tenant activates on operator sign-off.
-
-Not an automated path; by design.
-
-### 3d Rejected alternatives (documented for completeness)
-
-- **Rotessa / Plooto / Interac eTransfer:** smaller fee stack but
-  immature dispute / mandate tooling vs Stripe.  Rejected unless
-  the Stripe fee stack starts hurting at larger Club counts; the
-  adapter interface at [src/lib/billing/index.ts](../src/lib/billing/index.ts)
-  makes a later swap tractable.
-- **Spectre-built direct ACH integration with a Canadian bank:**
-  high regulatory burden, poor fit for Spectre's early-stage scale.
-
-**Open decision #2:**
-*Launch SIGNUP-2 with ACSS Debit primary + card secondary, OR
-ACSS Debit only?*  Recommend "primary + secondary" so the
-Controller is never blocked by issuer-side card limits.
+- Stripe-hosted mandate collection + Stripe-sent mandate-confirmation email + Stripe-sent debit-notification email collectively satisfy **CPA Rule H1 Sections 19-21** on Spectre's behalf when using Stripe Checkout `mode: "setup"`.
+- Stripe is PCI DSS Level 1 certified; Spectre never handles raw bank account numbers for the PAD path.
 
 ---
 
-## 4 Required approvals + mandates
+## 3 Lifecycle: five distinct events
 
-Captured at distinct points in the SIGNUP-2 flow:
+The founder's directive explicitly separates these; v2 architects
+each as its own observable state transition with its own trigger,
+its own invariants, and its own rollback semantics.
 
-### 4a Commercial-authority attestation (text SHA-256 recorded)
+| Event | Trigger (Stripe or Spectre) | Observable | Invariants | What CANNOT happen before |
+|---|---|---|---|---|
+| **1 Authorisation** | Spectre: signatory accepts attestation + accepts Stripe mandate | `SetupIntent.succeeded`; `SubscriptionAuthorisationAttestation` row; `SubscriptionPaymentMandate` row (ISSUED). | No funds move.  Mandate stored.  Attestation SHA-256 locked. | Any debit, any provisioning. |
+| **2 Payment initiation** | Spectre: calls `stripe.subscriptions.create(...)` which creates a Subscription + its first invoice; a PaymentIntent is created against the saved PaymentMethod with `idempotency_key = BillingCycle.id` | `BillingCycle` created with status `INITIATED`.  Stripe PaymentIntent exists in state `requires_action` or `processing` (for PAD, directly to `processing`). | PaymentIntent id persists; BillingCycle.stripePaymentIntentId set. | Settlement, activation, revenue recognition. |
+| **3 Processing** | Stripe: `payment_intent.processing` webhook (ACSS: Stripe submitted the debit to ACSS network) | `BillingCycle.status = AWAITING_SETTLEMENT`; `charge.pending` emitted; Spectre records `expectedDebitDate`. | Stripe sends debit-notification email (Rule H1 Section 20). | Settlement, activation. |
+| **4 Settlement** | Stripe: `payment_intent.succeeded` **AND** `charge.succeeded` for the same PaymentIntent | `BillingCycle.status = SETTLED`.  `BillingCycle.settlementConfirmedAt` set.  Audit emitted. | Spectre records `providerSettlementId` = charge id. | Activation (durable workflow starts here; see Section 6). |
+| **5 Activation** | Spectre: durable `TenantProvisioningJob` reaches terminal success | `ClubSubscription.status = ACTIVE`.  Tenant resources exist (`User`, `Club`, `UserClubRole`, seed rows).  Welcome email sent via SIGNUP-1G adapter. | Audit emitted on each step; job rows preserved for post-mortem. | n/a (terminal). |
 
-Per [docs/signup-2-commercial-authority-verification.md](signup-2-commercial-authority-verification.md):
-
-- Attestation text displayed in-page; signatory clicks "I confirm".
-- `SubscriptionAuthorisationAttestation` row records: signatory
-  identity (Microsoft `oid` + `tid`), timestamp, IP, user agent,
-  attestation-text SHA-256, display name, title, Club legal name.
-- Immutable thereafter.
-
-### 4b CPA Rule H1 PAD mandate (Stripe-hosted; Stripe-stored)
-
-- Stripe presents mandate text that satisfies Rule H1 Section 19
-  (payor name, payee = Spectre Automation, payor bank, debit
-  amount or variable-amount cap, frequency, authorisation date,
-  cancellation rights).
-- Signatory enters institution + transit + account; verifies
-  (instant OR microdeposit).
-- Signatory clicks "Accept".
-- Stripe generates mandate id + sends mandate-confirmation email
-  (within 5 calendar days per Rule H1).
-- Spectre persists `SubscriptionPaymentMandate` row.
-
-### 4c Debit notification (Stripe-sent, Rule H1 Section 20)
-
-- On every debit, Stripe emits `charge.pending` + sends debit-
-  notification email to the payor.
-- Spectre's webhook handler marks `BillingCycle.status =
-  AWAITING_SETTLEMENT`; does NOT also send its own notification
-  (would duplicate Stripe's).
-
-### 4d Cancellation (Rule H1 Section 21)
-
-- Payor can cancel the mandate at any time via a Spectre operator
-  request OR directly with their bank.
-- Cancellation revokes the Stripe PaymentMethod + logs a
-  `SubscriptionPaymentMandate.revokedAt` row (does NOT delete
-  the original; audit retention is a hard invariant).
-- Future debits refuse.
+**Reversible transitions** that break the forward progression are
+enumerated in Section 4.
 
 ---
 
-## 5 Data model (planned)
+## 4 Subscription state machine (defensible; covers failure, return, dispute, reversal)
 
-Three new models + modest extensions.  Final shapes land during
-implementation after review.
+```
+                                 (signatory accepts attestation + mandate)
+                   ------------------------------------------------>  AUTHORISED
+                                                                             |
+                                                            (Spectre creates Subscription + PaymentIntent)
+                                                                             v
+                                                                        INITIATED
+                                                                             |
+                                                      (ACSS: payment_intent.processing)
+                                                                             v
+                                                                 AWAITING_SETTLEMENT
+                                                     ______________________|_______________________
+                                                    |                                                |
+                           (payment_intent.succeeded + charge.succeeded)                 (payment_intent.payment_failed)
+                                                    v                                                v
+                                                 SETTLED                                        PAYMENT_FAILED
+                                                    |                                                |
+                                                    v                                                |
+                                      (TenantProvisioningJob runs)                                   |
+                                                    v                                                |
+                                              /--> ACTIVE                                            |
+                                            (ok)                                                     |
+                                              \__________________________________________           |
+                                                                                         \          |
+                                                                                          v         v
+                                                                           (dispute win./lose,                   (operator contacts Club:
+                                                                            NSF reversal within 10bd,            new mandate OR give up)
+                                                                            or operator-initiated suspend)                 |
+                                                                                                                            v
+                                                                           charge.dispute.created                        AT_RISK
+                                                                                   |                                        |
+                                                                                   v                            ___________|___________
+                                                                             DISPUTE_OPEN                      |                       |
+                                                                                   |                   (Smart Retry succeeds)   (operator abandons)
+                                                                                   v                           |                       |
+                                                                   (charge.dispute.closed, non-contestable)    v                       v
+                                                                                   |                       SETTLED                CANCELLED
+                                                                                   v                       (retry only)
+                                                                             REVERSED
+                                                                                   |
+                                                                                   v
+                                                                               SUSPENDED (operator contacts Club)
+                                                                                   |
+                                                                      _____________|_____________
+                                                                     |                           |
+                                                              (new mandate accepted +     (Club does not renew)
+                                                               fresh BillingCycle paid)          |
+                                                                     |                           v
+                                                                     v                       CANCELLED
+                                                                  ACTIVE
+```
 
-### 5a `SubscriptionPaymentMandate`
+**All transitions emit an `audit()` call** with before + after +
+actor (user id for operator action, "system/webhook" for
+Stripe-triggered) + IP + user agent (where available) + Stripe
+event id (where applicable).
+
+**Terminal states:** `ACTIVE`, `CANCELLED`.  All others are
+transitional.
+
+**Reversible-from-ACTIVE invariants** (the ones most often missed):
+
+- **PAD NSF reversal after reported settlement.**  Stripe docs
+  state: "In rare situations, Stripe receives a PAD failure after
+  a PaymentIntent transitions to succeeded.  Stripe then creates
+  a dispute with reason `insufficient_funds`."  Our handler for
+  `charge.dispute.created` with that reason must transition
+  `ACTIVE` -> `REVERSED` -> `SUSPENDED` and preserve tenant data
+  (do not teardown).
+- **Business-account PAD dispute (10 bd window).**  Same transition.
+- **Operator-initiated suspension** (abuse flag, missing document,
+  etc.).  `ACTIVE` -> `SUSPENDED` by operator action; audit
+  records reason + operator identity.
+
+**Transitions NEVER permitted:**
+- `ACTIVE` -> `AUTHORISED` (cannot un-pay).
+- `ACTIVE` -> `INITIATED` (cannot restart a cycle; cancel + fresh
+  cycle instead).
+- `REVERSED` -> `SETTLED` (cannot un-reverse; must create a new
+  BillingCycle on a fresh mandate).
+- Direct `INITIATED` -> `ACTIVE` without passing through
+  `AWAITING_SETTLEMENT` + `SETTLED`.
+
+---
+
+## 5 Webhook ordering, dedup, reconciliation, idempotency
+
+### 5a Reality of Stripe webhook delivery
+
+Three facts drive the design:
+
+1. **At-least-once delivery.**  Stripe retries failed webhook
+   deliveries for up to 3 days.  Spectre MUST deduplicate by
+   `event.id`.
+2. **Out-of-order delivery.**  Stripe does NOT guarantee event
+   ordering.  Our handlers must not assume event A arrives before
+   event B even if A logically precedes B.
+3. **Chargeable events can arrive out-of-sequence with lifecycle
+   events.**  `charge.dispute.created` can arrive while
+   `payment_intent.succeeded` is still in flight (rare but
+   documented).
+
+### 5b Deduplication
 
 ```prisma
-model SubscriptionPaymentMandate {
-  id                       String   @id @default(cuid())
-  clubId                   String
-  club                     Club     @relation(fields: [clubId], references: [id])
-  signupRegistrationId     String?  // tenant provision mirrors it over
-  stripePaymentMethodId    String   @unique
-  stripeMandateId          String   @unique
-  mandateType              String   // "ACSS_DEBIT" | "CARD"
-  mandateVariant           String   // "INTERVAL" | "SPORADIC" | "COMBINED"
-  transactionType          String   // "BUSINESS"
-  acceptedAt               DateTime
-  acceptedByUserId         String?
-  acceptedByMicrosoftOid   String?
-  acceptedIp               String?
-  acceptedUserAgent        String?
-  mandateTextHash          String   // SHA-256 of Stripe-rendered text at acceptance
-  mandateTextLength        Int
-  revokedAt                DateTime?
-  revokeReason             String?
-
-  @@index([clubId, acceptedAt])
+model StripeWebhookEvent {
+  id            String   @id          // Stripe event.id
+  eventType     String
+  receivedAt    DateTime @default(now())
+  processedAt   DateTime?
+  processingResult String?            // "success" | "noop" | "failed"
+  payloadJson   String                // the raw Stripe payload for audit/replay
+  @@index([eventType, receivedAt])
 }
 ```
 
-### 5b `SubscriptionAuthorisationAttestation`
+The webhook route's first act is `prisma.stripeWebhookEvent.create({...}, {skipDuplicates: true})`.  If `event.id` is already present, the handler returns 200 immediately -- it is a replay.
+
+### 5c Ordering tolerance
+
+Each handler is **state-transition idempotent**.  The handler for
+`payment_intent.succeeded` reads the current `BillingCycle.status`
+and either:
+- Advances to `SETTLED` if currently `AWAITING_SETTLEMENT` or
+  `INITIATED` (forward transitions).
+- Logs a noop + audit if currently `SETTLED` (duplicate).
+- Logs a warning + audit if currently `PAYMENT_FAILED` or beyond
+  (out-of-order; investigate).
+
+The handler for `charge.dispute.created` tolerates `BillingCycle.status`
+being anything from `INITIATED` upward.
+
+**Explicit state preconditions for each event type** live in a
+single table-driven service (`src/lib/billing/stripe-webhook-router.ts`
+in the SIGNUP-2 implementation), so the ordering rules are reviewable
+in one place rather than scattered across handler files.
+
+### 5d Idempotency keys outbound
+
+- `stripe.paymentIntents.create` -- idempotency_key = `BillingCycle.id`.
+- `stripe.subscriptions.create` -- idempotency_key = `clubId + "subscription-create"`.
+- `stripe.customers.create` -- idempotency_key = `clubId + "customer-create"`.
+- `stripe.refunds.create` -- idempotency_key = `BillingCycle.id + "refund"`.
+
+Retrying any outbound Spectre -> Stripe call returns the original
+Stripe entity, not a duplicate.
+
+### 5e Daily reconciliation
+
+Scheduled worker job: once per 24h, for every `BillingCycle` where
+`status IN ('INITIATED', 'AWAITING_SETTLEMENT', 'DISPUTE_OPEN')`
+AND `createdAt > now() - 30 days`:
+
+1. Fetch the Stripe PaymentIntent + Charge state.
+2. If Stripe says `succeeded` but Spectre says `AWAITING_SETTLEMENT`:
+   emit `spectre.billing.reconciliation.missed_settlement` audit
+   event + attempt to replay the `payment_intent.succeeded`
+   webhook handler.
+3. If Stripe says disputed but Spectre has no `DISPUTE_OPEN`:
+   emit `spectre.billing.reconciliation.missed_dispute` + queue
+   operator notification.
+4. If Stripe says `canceled` but Spectre says `AWAITING_SETTLEMENT`:
+   emit `spectre.billing.reconciliation.stale_initiated` +
+   transition to `PAYMENT_FAILED`.
+
+30-day window matches the founder-approved exception-review
+framework.  Older `BillingCycle` rows go through a monthly
+longitudinal audit instead.
+
+---
+
+## 6 Durable tenant provisioning workflow
+
+**Correction from v1:** v1 claimed tenant provisioning + `ClubSubscription.ACTIVE`
+transition could run inside the same DB transaction as the
+`payment_intent.succeeded` webhook handler.  **That's wrong.**  Reasons:
+
+- Stripe webhook delivery is at-least-once; the handler may fire
+  multiple times.
+- Tenant provisioning has effects OUTSIDE the DB transaction
+  boundary: welcome-email send through the SIGNUP-1G adapter,
+  seed-data loader, media + storage initialisation, future
+  integration hooks (Microsoft 365, Google Workspace, etc.).
+- An external-call failure mid-transaction cannot be rolled back.
+
+**v2 design: a durable, retryable workflow row.**
+
+```prisma
+model TenantProvisioningJob {
+  id                    String   @id @default(cuid())
+  billingCycleId        String   @unique                     // trigger key
+  billingCycle          BillingCycle @relation(fields: [billingCycleId], references: [id])
+  signupRegistrationId  String                               // where to find the identity + attestation
+  state                 String                               // CREATED | USER_CREATED | CLUB_CREATED | ROLES_ASSIGNED | SEED_DONE | EMAILED | COMPLETED | FAILED
+  attempts              Int      @default(0)
+  nextAttemptAt         DateTime?
+  lastError             String?
+  completedAt           DateTime?
+  // Each step records its own idempotency keys:
+  provisionedUserId     String?
+  provisionedClubId     String?
+  seedBatchSha256       String?
+  welcomeEmailProviderMessageId String?
+
+  @@index([state, nextAttemptAt])
+}
+```
+
+- Row created when `payment_intent.succeeded` fires AND
+  `BillingCycle` transitions to `SETTLED`.  Creation is idempotent
+  via `billingCycleId` uniqueness.
+- A worker loop picks up rows with `state != COMPLETED` and
+  `nextAttemptAt <= now()`, advances the state machine one step
+  at a time, and records progress.  Each step is idempotent
+  (uses deterministic keys like `clubId = signupRegistrationId`-derived).
+- On `FAILED` with retriable error: `nextAttemptAt = now() + backoff`
+  (exponential, max 1 h).
+- On `FAILED` with non-retriable error: operator notification; row
+  stays `FAILED` until operator intervenes.
+- `COMPLETED` transition emits the `ClubSubscription.ACTIVE`
+  update + welcome email + audit.
+
+**This is the ONLY code path that moves `ClubSubscription` to
+`ACTIVE`.**  Webhook handlers never do; API routes never do;
+operator shortcuts route through the same job service.
+
+---
+
+## 7 Policy recommendation: access relative to settlement
+
+Three options.  The founder's directive (item 3) requires an
+explicit recommendation.
+
+| Policy | Access gates on | Pros | Cons | NSF/dispute exposure |
+|---|---|---|---|---|
+| **Strict** | `charge.succeeded` only | No wrong-granted access; cleanest book-keeping. | ~5 business-day wait from authorisation to access.  Poor onboarding UX. | Zero. |
+| **Provisional** | `payment_intent.processing` + mandate accepted | T+0 access.  Matches Club expectations ("I signed up today, I expect to use it today"). | NSF at T+4 means revoking access on an active Club. | ~10 bd (business dispute window) + ~1% NSF rate on first debits per Stripe industry data. |
+| **Staged** | Dashboard + read-only on mandate acceptance; full write on `charge.succeeded` | T+0 limited access; strict safety on provisioning. | More UI state to maintain; Club gets a confusing partial experience for 5 days. | Low; limited write-paths available during provisional phase. |
+
+**Recommendation: Provisional access with mandatory revocation guarantee.**
+
+- Access provisioned at `payment_intent.processing`.
+- `ClubSubscription.status = AWAITING_SETTLEMENT` is visible to
+  Club in a dismissible banner ("Your first payment is in flight.
+  Expected to clear by <date>.").
+- If `payment_intent.payment_failed` arrives (NSF, invalid account),
+  the `TenantProvisioningJob` state advances to `SUSPENDED`;
+  dashboard writes are frozen; dashboard reads remain for 7 days
+  while operator contacts Club.
+- If a dispute arrives post-`ACTIVE` within the 10 bd window: same
+  `SUSPENDED` transition.
+- After operator remediation (new mandate + fresh BillingCycle
+  settled), access is restored by the normal `ACTIVE` transition.
+- After 7 days in `SUSPENDED` with no remediation: `CANCELLED`;
+  tenant data retained per CPA + Spectre retention policy; access
+  closed.
+
+Reasoning: The $38K annual commitment + delegated-authority
+attestation + CPA Rule H1 mandate collectively make hard-fraud
+scenarios rare; the adapter interface + state machine already
+support clean revocation; and T+0 access is table stakes for a
+B2B SaaS onboarding experience.  The Spectre operator inbox
+(decision 5) gives Spectre an immediate signal when the
+exceptional case arises.
+
+The founder may elect "Strict" if the operations team wants zero
+retroactive-revocation risk; "Staged" if a middle ground is
+desired.  Flag this as an **open decision requiring an explicit
+call before Phase 2A implementation.**
+
+---
+
+## 8 Canadian PAD mandate obligations
+
+### 8a CPA Rule H1 (the governing payment-system rule)
+
+- **Section 19 -- Mandate requirements.**  Mandate must capture
+  payor name, payee name, payor bank + branch + account, debit
+  amount or variable-amount cap, frequency, authorisation date,
+  payor's cancellation rights.  **Stripe-hosted Checkout satisfies
+  all of these**; Spectre persists only the acceptance context.
+- **Section 20 -- Pre-notification.**  Payor must be notified
+  before each debit.  Stripe sends debit-notification emails
+  automatically.  **Spectre must NOT disable Stripe emails** on
+  the account.
+- **Section 21 -- Cancellation.**  Payor can cancel the mandate at
+  any time.  Spectre operator surface implements the cancellation
+  path.
+
+### 8b PIPEDA + provincial privacy laws
+
+- Signatory personal information in attestation + mandate records
+  is "commercial" information under PIPEDA (not personal health,
+  not minor); standard Spectre privacy posture suffices.
+- Bank account numbers: Stripe stores (encrypted at rest, PCI DSS
+  Level 1); **Spectre never stores raw bank account numbers**.
+  Spectre stores only Stripe PaymentMethod id + Mandate id.
+- Signatory email + IP + user agent: retained in attestation record
+  for 7 years post-mandate end (regulatory retention) under
+  Spectre's existing retention schedule.
+
+### 8c Identity verification
+
+Per the founder's decision 9: **no government-ID collection or
+retention in SIGNUP-2**.  The delegated-authority model relies on:
+- Microsoft-verified work-account identity (SIGNUP-1).
+- Club affiliation signal (website domain OR tenant domain OR
+  prior Spectre record).
+- Self-declared role + contractual-authority attestation (SHA-256
+  locked).
+- Entity standing (ACTIVE / IN GOOD STANDING at authorisation).
+
+If a specific risk signal later demands stronger identity proofing,
+a dedicated review (and SIGNUP-2.1 slice, not inside SIGNUP-2) will
+authorise it under a clear legal basis.
+
+### 8d Record retention
+
+| Record | Retention | Trigger |
+|---|---|---|
+| `SubscriptionAuthorisationAttestation` | 7 years after `ClubSubscription.CANCELLED` | Rule H1 + Spectre contract retention. |
+| `SubscriptionPaymentMandate` | 7 years after `revokedAt` | Rule H1 Section 23. |
+| `BillingCycle` + webhook events | 7 years after cycle end | Spectre contract retention. |
+| `TenantProvisioningJob` | 2 years after `COMPLETED` or `FAILED` | Audit retention; shorter because the subscription record owns the authoritative state. |
+
+---
+
+## 9 Operator surface (founder decision 5)
+
+Spectre's in-dashboard operator inbox plus email notifications.
+
+Minimum SpectreAdmin screens needed for SIGNUP-2 launch:
+
+- **Signatory review.**  List of registrations where classifier
+  returned `NEEDS_MANUAL_REVIEW` or `ESCALATED`.  Reviewer sees
+  evidence packet + can release / reject.
+- **Mandate review.**  List of `SubscriptionPaymentMandate` rows
+  with `revokedAt=null`; operator can revoke on abuse signal.
+- **Reconciliation drift board.**  Rows from Section 5e's audit
+  events; operator triages + resolves.
+- **Tenant-provisioning job board.**  Rows from Section 6; operator
+  retries, intervenes, or marks `FAILED` permanently.
+- **Manual-invoice workflow.**  Operator records cleared funds +
+  authorises tenant provisioning off the Stripe path.
+- **At-risk / suspended Clubs board.**  Rows from the state machine
+  Section 4; operator contacts Club.
+
+Each screen gates on an operator-level RBAC permission (TBD during
+Phase 2H).
+
+Email notifications go to a configurable Spectre operator
+distribution list via the SIGNUP-1G adapter (decision 4).
+
+---
+
+## 10 Data model (updated from v1)
+
+### 10a `SubscriptionAuthorisationAttestation`
 
 ```prisma
 model SubscriptionAuthorisationAttestation {
   id                       String   @id @default(cuid())
   signupRegistrationId     String   @unique
-  clubId                   String?  // null until tenant provisioned; backfilled
+  clubId                   String?                        // backfilled on provisioning
   signatoryFullName        String
   signatoryTitle           String
   clubLegalName            String
-  attestationTextHash      String   // SHA-256 of the exact text at acceptance
+  attestationTextHash      String                          // SHA-256 of exact clicked text
+  attestationTextLength    Int
+  termsVersionSha256       String                          // founder decision 10: version-pin ToS
+  termsVersionLabel        String                          // e.g. "ToS-v3-2026-10-25"
   acceptedAt               DateTime
   acceptedIp               String?
   acceptedUserAgent        String?
@@ -261,357 +515,229 @@ model SubscriptionAuthorisationAttestation {
 
 Immutable; append-only.
 
-### 5c `EntityStandingCheck`
+### 10b `SubscriptionPaymentMandate` -- unchanged shape from v1
 
-Replaces the earlier draft's `CorporateRecordsCheck` to make the
-soft-signal nature explicit.  Captures registry lookup payload +
-standing (`ACTIVE | NOT_ACTIVE | NOT_FOUND`).  Signatory-vs-officer
-match is a recorded signal, never a hard gate for baseline
-registrations (per the delegated-authority model).
+(See prior architecture note.)
 
-### 5d Extensions to `ClubSubscription`
+### 10c `EntityStandingCheck`
 
-- `status` enum widened to include every state from the lifecycle
-  map in Section 2 (`PENDING_AUTHORITY | AUTHORITY_ACCEPTED |
-  MANDATE_PENDING | MANDATE_CAPTURED | AWAITING_FIRST_SETTLEMENT |
-  ACTIVE | AT_RISK | CANCELLED | MANUAL_INVOICE`).
-- `source` enum: `STRIPE_ACSS | STRIPE_CARD | MANUAL_INVOICE`.
-- `firstSettlementAt` + `nextRenewalAt` columns.
-- Existing `activatedAt / cancelledAt` columns retained.
+Captures standing (`ACTIVE | NOT_ACTIVE | NOT_FOUND`) + fetched
+registry payload.  Signatory-vs-officer match recorded as a soft
+signal.
 
-### 5e `BillingCycle` extensions
+### 10d `BillingCycle` -- extended
 
-- `source` column mirrors `ClubSubscription.source`.
-- `expectedDebitDate` from Stripe `payment_method_details.acss_debit.expected_debit_date`.
-- `settlementConfirmedAt` separately from `createdAt`.
+- `status`: enum covering every state in Section 4.
+- `source`: `STRIPE_ACSS | STRIPE_CARD | MANUAL_INVOICE`.
+- `stripePaymentIntentId`, `stripeChargeId`.
+- `expectedDebitDate`, `settlementConfirmedAt`,
+  `reversedAt`, `reversalReason`.
+- `periodLabel` already unique per Club.
 
----
+### 10e `ClubSubscription` -- extended
 
-## 6 Security + compliance
+- `status`: `AUTHORISED | INITIATED | AWAITING_SETTLEMENT | ACTIVE | SUSPENDED | AT_RISK | REVERSED | CANCELLED | MANUAL_INVOICE`.
+- `firstSettlementAt`, `nextRenewalAt`.
+- `source` mirrors `BillingCycle.source`.
+- `operatorNotes` for suspension/cancellation reason.
 
-### 6a Secret handling
+### 10f `TenantProvisioningJob`
 
-- Stripe API key + webhook secret stored as Fly secrets, same
-  pattern as the SIGNUP-1G transactional-mail secret (never on
-  CLI, in files, in logs, or in chat).
-- Rotation runbook: analogous to the SIGNUP-1G transactional-mail
-  rotation ([docs/signup-1g-credential-rotation.md](signup-1g-credential-rotation.md)),
-  adapted for Stripe's dashboard + the Fly staging activation
-  script's secret-import pattern.
+See Section 6.
 
-### 6b CPA Rule H1 record-keeping
+### 10g `StripeWebhookEvent`
 
-- Spectre retains `SubscriptionPaymentMandate` for 7 years after
-  mandate end.
-- Stripe retains the mandate text; Spectre retains the acceptance
-  context (who / when / IP / UA).
-
-### 6c PIPEDA / provincial privacy
-
-- Signatory personal information in attestation + mandate records
-  is handled under Spectre's existing privacy posture.
-- Government-ID (elevated-risk path only) is stored encrypted at
-  rest (KMS envelope keys), deleted after verification + 90 days.
-
-### 6d FINTRAC
-
-- Spectre is not a reporting entity for subscription revenue.
-- No MSB registration implied.
-
-### 6e Idempotency + duplicate-charge protection
-
-Essential invariants for the implementation:
-
-1. **One `PaymentIntent` per `BillingCycle`.**  `BillingCycle.id`
-   is passed as Stripe's `idempotency_key` on PaymentIntent create.
-   Retries from Spectre produce the same PaymentIntent, not a
-   duplicate.
-2. **One `BillingCycle` per `(clubId, periodLabel)`.**  Unique
-   constraint already exists on the model.
-3. **Webhook events deduplicated by Stripe `event.id`.**  Spectre
-   persists seen event ids; duplicate webhook deliveries are a
-   no-op.
-4. **`charge.succeeded` is the ONLY event that transitions
-   `BillingCycle` to `PAID`.**  Not `payment_intent.processing`,
-   not `payment_intent.succeeded` on a card path, not any
-   manual-ops shortcut.  Prevents accidental double-counting.
-5. **Tenant provisioning (`User` + `Club` + `UserClubRole` writes)
-   runs inside the same DB transaction as the
-   `ClubSubscription.status -> ACTIVE` update.**  Prevents the
-   paid-but-no-tenant anomaly.
-
-### 6f Failed / incomplete payment handling
-
-- **NSF / returned PAD** -> `payment_intent.payment_failed` ->
-  `BillingCycle.status = FAILED`.  Stripe Smart Retries attempts
-  once within 30 days (if enabled per account policy).
-  Spectre notifies operator; operator contacts Club.
-- **Dispute (business account; 10 bd window)** ->
-  `charge.dispute.created` -> operator notified; `BillingCycle`
-  stays `PAID` but marked `DISPUTED` with the dispute amount.
-  Cannot be contested per Stripe; outcome is final.
-- **Mandate revoked mid-cycle** -> `SubscriptionPaymentMandate.revokedAt`
-  recorded; next renewal blocked; Spectre contacts Club for a
-  fresh mandate.
-
-### 6g Reconciliation + audit logging
-
-- Every state transition on `SignupRegistration`,
-  `ClubSubscription`, `BillingCycle`,
-  `SubscriptionPaymentMandate`, and
-  `SubscriptionAuthorisationAttestation` emits an `audit()` call
-  with before/after + actor + IP + user agent.
-- A nightly reconciliation job compares Spectre's
-  `BillingCycle.status` against Stripe's PaymentIntent + Charge
-  state for the past 30 days; divergence emits a
-  `spectre.billing.reconciliation.drift` audit event.
+See Section 5b.
 
 ---
 
-## 7 Failure modes + rollback
+## 11 Stripe vs alternatives (long-term architecture question)
 
-| Failure | Detection | Rollback |
+The founder's directive asks: **Is Stripe the best long-term
+architecture for Spectre's internally controlled payments
+experience?**
+
+### 11a What makes Stripe the current recommendation
+
+- **Already integrated.** Adapter at [src/lib/billing/index.ts](../src/lib/billing/index.ts)
+  compiles today.
+- **ACSS cost cap at CAD $5/transaction** means fee advantage over
+  Rotessa/Plooto is nominal at Spectre's scale.
+- **Dispute + mandate tooling** is substantially more mature than
+  Rotessa / Plooto.
+- **Developer experience** (SDK, test clock, docs, webhook
+  reliability) is excellent.
+- **Compliance posture.** PCI DSS Level 1; Rule H1 handled by
+  Stripe for us.
+- **Spectre's engineering throughput.** Building against Rotessa
+  or Plooto would cost ~2-3 engineering weeks of mandate +
+  reconciliation code that Stripe gives us for free.
+
+### 11b Credible alternatives (summarised; detailed comparisons below)
+
+| Provider | Fee at $38K annual | API maturity | PAD coverage | Dispute tooling | Build cost to swap |
+|---|---|---|---|---|---|
+| **Stripe (current)** | ~CAD $6 | Excellent | CA + US | Excellent | 0 |
+| **Rotessa** | ~CAD $0.50-$1.49 per debit | Good; dev-first | CA + US only | Fair | ~2-3 weeks |
+| **Plooto** | ~CAD $0.50 per debit | Fair; B2B-focused | CA + US only | Fair | ~3-4 weeks |
+| **Direct bank integration** (RBC / BMO / etc.) | ~CAD $0.00-$0.25 | Poor; FIX / batch files | CA | Poor | ~6-12 weeks + compliance review |
+| **Chargify / Maxio** (billing layer over Stripe) | +Chargify subscription fee + Stripe underneath | Good; subscription-first | CA + US | Good (via Stripe) | ~1 week |
+
+### 11c Total cost analysis
+
+Assume Spectre scales to **100 Clubs** at $38K/year.  Total
+annual revenue: $3.8M.
+
+| Provider | Annual fee cost | Fee as % of revenue |
 |---|---|---|
-| SetupIntent creation 500s | Stripe API error on create | User sees error page; `SignupRegistration.step` stays at `AUTHORITY_PENDING`; no partial state; retry allowed. |
-| Mandate collection abandoned by user | Checkout session expires | No webhook; `step` stays at `MANDATE_PENDING`; recovery link lets them resume. |
-| First debit NSF | `payment_intent.payment_failed` webhook | `BillingCycle.FAILED`; `ClubSubscription.AT_RISK`; operator contacts Club; **tenant NOT provisioned**. |
-| Dispute opened post-success | `charge.dispute.created` webhook | `BillingCycle.DISPUTED`; `ClubSubscription.AT_RISK`; operator contacts Club; **tenant NOT torn down** (dispute may be erroneous; Spectre retains data per policy). |
-| Signatory revokes mandate between acceptance + first debit | Stripe PaymentMethod.updated webhook | `SubscriptionPaymentMandate.revokedAt`; `ClubSubscription.MANDATE_PENDING`; applicant can submit a new mandate. |
-| Webhook delivery lost | Nightly reconciliation detects drift | Audit event emitted; operator triggers manual reconciliation. |
-| Spectre fails tenant provisioning after paid cycle | Same DB-transaction invariant means the whole transition rolls back; `BillingCycle` stays `PAID`; `ClubSubscription.status` reverts | Operator retries provisioning; no funds move. |
+| Stripe ACSS Debit | $600 | 0.016% |
+| Rotessa | ~$150 | 0.004% |
+| Plooto | ~$50 | 0.001% |
+| Direct bank | ~$25 (bank fees) | 0.001% |
+
+At 100 Clubs, the fee delta between Stripe and the cheapest
+alternative is ~$575/year.  **Engineering cost to switch** (one-time
+~$30-50K in staff time + ~$10K/year ongoing in dispute-handling
+operator time) **dominates the fee delta until Spectre reaches
+roughly 10,000 Clubs**.
+
+### 11d Recommendation
+
+**Stay on Stripe for the foreseeable future.**  Spectre's adapter
+interface in [src/lib/billing/index.ts](../src/lib/billing/index.ts)
+is already provider-agnostic; a future swap to Rotessa or Plooto
+is cheap when the business case justifies it.  Revisit at:
+- 1,000 Clubs (would still be <$10K/year fee advantage; probably not).
+- 10,000 Clubs (fee advantage becomes material; dispute workload
+  may justify Rotessa's manual-ops cost structure).
+- Any point where Stripe's dispute policy (10 bd, non-contestable)
+  becomes an operational bottleneck.
+
+**Interim mitigation:** every architectural choice SIGNUP-2 makes
+is written through the `BillingProvider` adapter interface so
+provider swap stays tractable.
 
 ---
 
-## 8 Staging test strategy
+## 12 Risks + mitigations (updated)
 
-Mirrors SIGNUP-1G's acceptance pattern:
-
-1. **Dedicated Stripe TEST account** for staging; never share Live
-   Stripe keys with staging.
-2. **Playwright specs:**
-   - `signup-2-authority-attestation.staging.spec.ts` -- walk the
-     attestation surface; verify immutable record.
-   - `signup-2-mandate-capture.staging.spec.ts` -- walk the
-     Stripe-hosted mandate collection in test mode; verify
-     SetupIntent + PaymentMethod + Mandate persistence.
-   - `signup-2-first-debit.staging.spec.ts` -- Stripe test clock
-     (`test_clock`) advances to simulate T+4 settlement; verify
-     `BillingCycle.PAID` + tenant provisioning + redirect.
-   - `signup-2-nsf-retry.staging.spec.ts` -- Stripe test payment
-     method `pm_card_chargeDeclinedInsufficientFunds` (or ACSS
-     equivalent); verify `AT_RISK` + no tenant provision.
-   - `signup-2-dispute.staging.spec.ts` -- Stripe test dispute
-     trigger; verify `DISPUTED` + operator notification.
-   - `signup-2-webhook-replay.staging.spec.ts` -- replay a
-     webhook event; verify idempotent no-op.
-   - `signup-2-manual-invoice.staging.spec.ts` -- operator
-     elects manual invoice; verify tenant provision gated on
-     operator sign-off.
-3. **Contract tests:**
-   - `signup-2-lifecycle.test.ts` -- state-machine invariants.
-   - `signup-2-idempotency.test.ts` -- replayed webhooks + retried
-     operations are no-ops.
-   - `signup-2-reconciliation.test.ts` -- drift detector logic.
-4. **Secret / audit scans:**
-   - Reuse the Fly log scan from SIGNUP-1G's Phase D.5.  Zero
-     Stripe key leaks, zero mandate text leaks, zero bank account
-     number leaks.
-5. **Acceptance evidence template** in the shape of
-   `docs/signup-1g-acceptance.md`.
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| First-debit NSF | Industry baseline ~1-2% for new PADs | Operator time + 5-10 bd re-attempt | Smart Retries once; `SUSPENDED` state preserves tenant; operator contacts Club. |
+| Business-account dispute 10 bd window | Rare at B2B scale | Full reversal + CAD $5 fee | Dispute handler flips to `REVERSED` -> `SUSPENDED`; tenant preserved. |
+| Signatory impersonation | Low | Legal exposure; charge reversal | Attestation records SHA-256 of clicked text + Microsoft `oid`; dispute defence relies on this record. |
+| Webhook out-of-order delivery | Possible | Incorrect state transition | Per-handler state preconditions; reconciliation job catches drift within 24 h. |
+| Webhook replay | Routine (Stripe retry) | Duplicate side effects | `StripeWebhookEvent.id` dedup table + skipDuplicates insert. |
+| Tenant provisioning side effect fails after `SETTLED` | Realistic (email, seed) | Club paid but no tenant | Durable `TenantProvisioningJob` with per-step idempotency; operator retry. |
+| Stripe secret rotation drops webhooks | Possible | Up to 1 h of missed events | Reuse SIGNUP-1G credential-rotation runbook; staging verification required; reconciliation catches drift. |
+| Fly deploy of Stripe secret duplicates SIGNUP-1G BOM injection | Avoided | n/a | Reuse `scripts/signup-1g-fly-secrets-activate.ps1` (already proven; UTF-8-no-BOM transport fix in place). |
+| Reconciliation drift silently diverges | Possible on webhook infra failure | Missed revenue or missed revocation | Nightly reconciliation + 30-day exception window; operator inbox surface. |
+| Access revoked wrongly on false-positive dispute | Rare | Club disruption | 7-day `SUSPENDED` window with read access + operator-initiated restore. |
+| Secret or mandate text leaks | Low | Regulatory + reputational | Reuse SIGNUP-1G Fly log scan; audit coverage; private-key material lives only in Stripe + Fly. |
+| ToS version drift | Low | Legal uncertainty | `termsVersionSha256` locked in attestation record. |
 
 ---
 
-## 9 Implementation phases (proposed)
+## 13 Implementation phases (revised)
 
-Each phase lands via DRH-1 to staging; each has an acceptance gate.
-Production remains unauthorised throughout.
+| Phase | Scope | Acceptance gate | Can begin without further decision? |
+|---|---|---|---|
+| **2A** Schema + state machine (no Stripe calls) | Models in Sections 5b, 6, 10; state-machine service with contract tests; Prisma migrations (dual schema) | Contract tests green; audit coverage asserted; typecheck + regression | Yes (schema-only). |
+| **2B** Attestation surface | `/signup/t/<token>/authority` UI; attestation write path with text-SHA-256 lock; audit | Playwright: full attestation walk; attestation record immutable | Yes. |
+| **2C** Entity standing check | Jurisdiction registry adapter (ON + BC day one); EntityStandingCheck row | Registry round-trip end-to-end for one adapter | Needs registry API decision per province. |
+| **2D** Stripe adapter extensions | `BillingProvider` interface widened; stripe npm dynamic-import stays dormant until `SPECTRE_BILLING_PROVIDER=stripe`; mock-provider parity | Adapter contract tests; mock deterministic | Yes. |
+| **2E** Mandate capture | `/signup/t/<token>/mandate` page launches Stripe Checkout `setup` mode; return handler persists `SubscriptionPaymentMandate` | Stripe TEST mode walk; mandate text SHA-256 recorded | Yes (needs Stripe TEST key configured). |
+| **2F** Payment initiation + processing + settlement | Webhook router + idempotent handlers for 7 event types; Stripe test clock advances T+4 | Playwright + contract tests; reconciliation job runs | Yes. |
+| **2G** Durable tenant provisioning | `TenantProvisioningJob` + worker loop; welcome email via SIGNUP-1G | Full acceptance walk end-to-end on Coulee Ridge staging | Yes. |
+| **2H** Operator surface | SpectreAdmin screens from Section 9 | Operator walkthrough + RBAC enforcement verified | Yes. |
+| **2I** Reconciliation + alerting | Nightly reconciliation; audit emission; operator inbox + email notification | Induced drift surfaces within 24 h | Yes. |
+| **2J** Production readiness | Stripe LIVE account; PAD capability review; Fly production secrets; first pilot Club | Founder approves pilot list | Blocked on founder approval + production authorisation. |
 
-### Phase 2A -- Lifecycle schema + state machine
-
-- `ClubSubscription` + `BillingCycle` enum widening.
-- New `SubscriptionPaymentMandate`,
-  `SubscriptionAuthorisationAttestation`,
-  `EntityStandingCheck` models.
-- Prisma migration (dual-schema; same pattern as SIGNUP-1F).
-- State-machine service + unit tests.
-- **No Stripe calls yet.**
-- Acceptance: contract tests green; audit coverage asserted.
-
-### Phase 2B -- Attestation surface
-
-- Signatory attestation UI (`/signup/t/<token>/authority`).
-- `SubscriptionAuthorisationAttestation` write path + audit.
-- Playwright: authority attestation walk.
-- Acceptance: attestation record SHA-256 immutable; audit logged.
-
-### Phase 2C -- Entity standing check
-
-- `EntityStandingCheck` + jurisdiction registry adapter (ON, BC
-  on day one; QC / AB / smaller provinces via manual review
-  initially).
-- Soft-signal recording; no gate on signatory-vs-officer match.
-- Acceptance: registry lookup round-trips end-to-end for the
-  CA registry adapter under test.
-
-### Phase 2D -- Stripe adapter extensions
-
-- Extend `BillingProvider` with
-  `createPadMandateSetupSession`,
-  `createPadSubscription`,
-  `retrieveMandate`,
-  `createCardCheckoutSession` (existing),
-  `syncSubscriptionStatus`.
-- Dynamic-import `stripe` npm package (adapter stays dormant
-  until `SPECTRE_BILLING_PROVIDER=stripe`).
-- Mock-provider parity for every new method.
-- Acceptance: adapter contract tests; mock provider deterministic.
-
-### Phase 2E -- Mandate capture flow
-
-- `/signup/t/<token>/mandate` page launches Stripe Checkout in
-  setup mode.
-- Return handler reads SetupIntent + persists
-  `SubscriptionPaymentMandate`.
-- Webhook route handles `checkout.session.completed` +
-  `payment_method.updated`.
-- Acceptance: mandate persistence + Stripe test-mode walk.
-
-### Phase 2F -- First debit + settlement
-
-- `payment_intent.processing / succeeded / payment_failed`
-  webhook branches.
-- `BillingCycle` transitions + idempotency key.
-- `ClubSubscription.status` transitions.
-- Acceptance: Stripe test clock advances; staging walks succeed +
-  fail scenarios.
-
-### Phase 2G -- Tenant provisioning
-
-- `User` + `Club` + `UserClubRole` writes inside the same DB
-  transaction as `ClubSubscription.ACTIVE`.
-- Initial seed data pattern (chart of accounts, roles,
-  default settings).
-- Welcome email (via SIGNUP-1G transactional-mail adapter).
-- Acceptance: paid-cycle -> tenant active + welcome email sent;
-  all audit records present.
-
-### Phase 2H -- Operator surface
-
-- SpectreAdmin screens for signatory review, elevated-risk
-  artefact upload, manual-invoice workflow, mandate revocation,
-  reconciliation drift resolution.
-- Permission gated.
-- Acceptance: operator screens functional + audit coverage.
-
-### Phase 2I -- Reconciliation + alerting
-
-- Nightly reconciliation job (worker-scheduler cron).
-- Audit emission on drift.
-- Operator notification channel (TBD -- email, Slack, dashboard).
-- Acceptance: induced drift surfaces within 24 h.
-
-### Phase 2J -- Production readiness
-
-- Stripe LIVE account provisioning.
-- PAD capability enablement review.
-- Fly production secret deployment via the same stdin pattern.
-- First real-Club pilot (founder-approved).
-- Acceptance: founder authorises production rollout.
+**Milestones:**
+- Internal engineering estimate: 2A-2I ≈ 4-6 engineering weeks for a focused slice; 2J + pilot runway adds 2-4 weeks of real-time dependencies (Stripe LIVE provisioning timeline, bank verification by first Club).
+- Each phase ships through DRH-1 to staging; each has its own
+  acceptance evidence doc.
 
 ---
 
-## 10 Risks + mitigations
+## 14 Remaining founder decisions (reduced from v1's list)
 
-| Risk | Mitigation |
-|---|---|
-| Stripe Checkout subscription mode doesn't support PADs (confirmed in architecture doc) | Use `mode: "setup"` + separate Subscriptions API call (architecture doc Section 3). |
-| First-debit NSF on PAD leaves applicant stuck for 2 weeks | Stripe Smart Retries + operator contact; applicant can re-submit mandate at any time. |
-| PAD dispute window is 10 bd (business) with no contest path | Monitor dispute rate; if dispute rate > N per 100 cycles, escalate to card-only onboarding for the affected pattern. |
-| Signatory authority is incorrect post-authorisation (impersonation) | Attestation records SHA-256 of the exact clicked text + Microsoft `oid`; dispute resolution relies on this record. |
-| Fly deploy of Stripe secret duplicates SIGNUP-1G BOM injection failure | Reuse the SIGNUP-1G `scripts/signup-1g-fly-secrets-activate.ps1` pattern; `[Console]::InputEncoding` swap is already proven. |
-| Stripe secret rotation drops subscription webhooks | Overlap-rotation per the SIGNUP-1G credential-rotation runbook pattern. |
-| Reconciliation drift silently diverges | Nightly job + audit emission; founder-reviewed dashboard. |
-| Tenant provisioned but paid cycle not actually settled | DB-transaction invariant + no provisioning fires before
-`payment_intent.succeeded`. |
-| Manual-invoice path misused | Operator-only + separate audit action name + required operator sign-off text + mandatory operator identity logged. |
+The founder's 10 decisions on 2026-10-25 settled most of v1's open
+items.  Remaining:
 
----
+1. **Access policy at settlement** (Section 7): Provisional
+   (recommended), Strict, or Staged?
+2. **Dispute rate monitoring threshold** (Section 12): at what
+   per-100-cycle dispute rate does Spectre escalate from
+   PAD-primary onboarding to card-only or manual-review-only?
+   (Recommend >= 2 disputes per 100 cycles over any trailing 90
+   days triggers review.)
+3. **Operator notification channel implementation** (Section 9):
+   in-dashboard inbox + email was approved; is email per-event
+   OR daily digest acceptable for routine events?  (Recommend
+   per-event for `SUSPENDED` / `AT_RISK` / `FAILED`; daily
+   digest for `AUTHORISED` / `SETTLED` activity.)
+4. **PAD mandate variant** (Section 2 of the architecture doc):
+   Stripe supports `interval`, `sporadic`, `combined`.  Recommend
+   `interval` for the one annual debit (simplest Rule H1
+   compliance; renewal auto-charges on anniversary).
+5. **First-renewal lead time for signatory notification.**
+   Annual renewal: 30 days ahead? 14 days? 7 days?  Current
+   Stripe Billing default is 7 days before invoice fires.
+   Recommend 30 days ahead per founder preference pattern on
+   invoicing.
+6. **Terms-of-service document location and versioning.**
+   Where in the repo does the signed-at-authorisation terms
+   document live?  Must be versioned so `termsVersionSha256`
+   is reproducible.
 
-## 11 Architectural decisions needed from the founder (before coding)
-
-1. **Default billing cadence:** annual single debit (recommended),
-   OR quarterly instalments?  See Section 3a.
-2. **Launch instrument mix:** ACSS Debit primary + card secondary
-   (recommended), OR ACSS Debit only?  See Section 3d.
-3. **First-debit timing:** immediately on mandate acceptance
-   (recommended; aligns with Stripe default), OR deferred to
-   operator trigger?  See Section 2a.
-4. **Welcome email surface:** SIGNUP-1G transactional-mail
-   adapter (recommended; same no-reply@ identity), OR a new
-   dedicated adapter for welcome?  Separate identity has clearer
-   audit; shared identity is simpler.
-5. **Operator notification channel:** email, Slack, or an
-   in-dashboard inbox?  Each has different latency + reliability
-   tradeoffs.
-6. **Reconciliation window:** 30 days (recommended default),
-   7 days (tighter but more false positives from in-flight PADs),
-   90 days (looser but easier)?
-7. **Pilot Club list for production rollout:** who / how many /
-   how early?
-8. **Pricing variants:** ever a $38K Club?  Discounts?  Tiers?
-   SIGNUP-2 can bake flexibility in now or defer.
-9. **Government-ID retention after elevated-risk path:** 90 days
-   (recommended), 30 days (minimal), 365 days (regulatory
-   defensive)?
-10. **Terms of service version pinning:** does the attestation
-    include a snapshot of the ToS SHA-256 at acceptance?
-    Recommend yes.
-
-Each of these is a product decision, not an engineering question.
-No implementation begins until the founder has answered 1-10 (or
-confirmed the recommended defaults).
+Each is a product decision.  None blocks Phases 2A-2E (schema +
+attestation + mandate capture); they're required by 2F-2I.
 
 ---
 
-## 12 Acceptance criteria for the SIGNUP-2 workstream as a whole
+## 15 Staging strategy (Coulee Ridge)
 
-Modelled on SIGNUP-1G's pattern:
+Per founder decision 7:
 
-- Every phase (2A-2J) lands via DRH-1 to staging.
-- Each phase has its own `docs/signup-2-<phase>-acceptance.md`
-  with evidence (contract tests + Playwright + log scans +
-  audit coverage).
-- The final signup-2 acceptance report proves end-to-end:
-  signatory attestation -> mandate acceptance -> first debit
-  settles -> tenant provisioned -> welcome email delivered via
-  the SIGNUP-1G adapter.
-- Production rollout is a separate deliberate step with explicit
-  founder authorisation.
-- SIGNUP-1 + SIGNUP-1F + SIGNUP-1G regression suites remain green
-  throughout.
-
----
-
-## 13 What SIGNUP-2 does NOT touch
-
-- `src/lib/signup/recovery-link.ts` and related SIGNUP-1G code
-  paths are frozen per [memory/project_signup_1g_accepted.md](../memory/project_signup_1g_accepted.md).
-- The b7f855a6-prefixed delegated OAuth app's purpose, scopes,
-  and redirect URIs are unchanged.
-- Spectre's existing accounting / GL / AP / AR / payroll modules
-  are untouched by this proposal.
-- Production tenants are untouched.
-- Member-portal + white-label branding is unaffected.
+- **Coulee Ridge is the staging validation tenant.**  Every
+  SIGNUP-2 Playwright spec provisions a scratch registration
+  that eventually attaches to Coulee Ridge's existing tenant for
+  convenience, OR to a dedicated SIGNUP-2 scratch tenant.
+- **Hard invariant: no SIGNUP-2 test writes to Coulee Ridge's
+  real production accounting / COA / payroll data.**  Dedicated
+  scratch records; cleanup after each spec; snapshot/restore
+  pattern analogous to signup-1-conditional-acceptance.
+- **Production pilot clubs: separate approval.**  Phase 2J gates
+  on founder-named pilot list + explicit production rollout
+  authorisation.
 
 ---
 
-## 14 Open items for the founder's response
+## 16 What SIGNUP-2 does NOT touch (preserved from v1)
 
-Please respond with:
-- Explicit answers (or "accept recommended default") to Decisions
-  1-10 in Section 11.
-- Authorisation to begin Phase 2A, OR a request to revise the
-  proposal.
-- Any additional constraints not captured above.
+- SIGNUP-1G frozen code paths per
+  [memory/project_signup_1g_accepted.md](../memory/project_signup_1g_accepted.md).
+- Delegated OAuth app (client-id prefix `b7f855a6`) scopes +
+  redirect URIs.
+- Spectre's existing accounting / GL / AP / AR / payroll modules.
+- Production tenants until explicit Phase 2J authorisation.
+- Member-portal + white-label branding.
+- Government-ID collection or retention (per founder decision 9).
 
-No implementation begins without this response.
+---
+
+## 17 Authorisation requested
+
+**This document is authorisation for architecture research +
+planning only.  It is NOT authorisation to implement.**
+
+Before Phase 2A begins:
+- Founder confirms this revised architecture (or requests further
+  revisions).
+- Founder answers the six remaining decisions in Section 14 (or
+  accepts the recommended defaults).
+
+No code written, no Stripe entities created, no DB migration run,
+no production configuration changed, no new app code deployed
+until that explicit approval.
