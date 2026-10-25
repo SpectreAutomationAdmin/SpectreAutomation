@@ -8438,7 +8438,29 @@ model ClubSubscription {
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
+  // SIGNUP-2 Phase 2A (2026-10-25) -- additive, nullable columns.
+  // Existing tenants have these as null; access-tier enforcement is
+  // dormant for them (null -> grandfathered PASS).  See
+  // src/lib/billing/access-tier.ts.  The legacy `status` column
+  // continues to drive existing entitlement code; the SIGNUP-2
+  // state machine runs on `subscriptionStatus` only.
+  subscriptionStatus  String?  // AUTHORISED | INITIATED | AWAITING_SETTLEMENT | SETTLED | ACTIVATION_READY | ACTIVE | SUSPENDED | PAYMENT_FAILED | CANCELLED | MANUAL_INVOICE
+  accessTier          String?  // PRE_AUTH | STAGED | FULL | SUSPENDED_READ_ONLY (null = grandfathered legacy tenant)
+  source              String?  // STRIPE_ACSS | STRIPE_CARD | MANUAL_INVOICE
+  firstSettlementAt   DateTime?
+  nextRenewalAt       DateTime?
+  operatorNotes       String?
+  signupRegistrationId String?
+
+  provisioningJobs             TenantProvisioningJob[]
+  authorisationAttestations    SubscriptionAuthorisationAttestation[]
+  paymentMandates              SubscriptionPaymentMandate[]
+  entityStandingChecks         EntityStandingCheck[]
+  paymentReconciliationEntries PaymentReconciliationEntry[]
+
   @@index([status])
+  @@index([subscriptionStatus])
+  @@index([accessTier])
 }
 
 // kind: API_CALLS | STORAGE_GB | PUSH_DELIVERIES | EXPORTS_GENERATED | WEBHOOK_DELIVERIES
@@ -8469,8 +8491,26 @@ model BillingCycle {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // SIGNUP-2 Phase 2A (2026-10-25) -- additive, nullable columns.
+  // Legacy `status` continues to drive Phase-11 code.  SIGNUP-2's
+  // state machine runs on `subscriptionStatus`.
+  subscriptionStatus     String?   // AUTHORISED | INITIATED | AWAITING_SETTLEMENT | SETTLED | ACTIVATION_READY | PAYMENT_FAILED | REVERSED | DISPUTE_OPEN
+  source                 String?   // STRIPE_ACSS | STRIPE_CARD | MANUAL_INVOICE
+  stripePaymentIntentId  String?   @unique
+  stripeChargeId         String?   @unique
+  stripeBalanceTransactionId String? @unique
+  expectedDebitDate      DateTime?
+  settlementConfirmedAt  DateTime?
+  reversedAt             DateTime?
+  reversalReason         String?
+
+  provisioningJob   TenantProvisioningJob?
+  reconciliationEntries PaymentReconciliationEntry[]
+
   @@unique([clubId, periodLabel])
   @@index([clubId, status])
+  @@index([subscriptionStatus])
+  @@index([stripePaymentIntentId])
 }
 
 // =========================================================================
@@ -10734,6 +10774,201 @@ model SignupOAuthTransaction {
 
   @@index([registrationId, createdAt])
   @@index([expiresAt])
+}
+
+// =========================================================================
+// SIGNUP-2 Phase 2A (2026-10-25) -- subscription domain foundation.
+//
+// Seven new models + extensions to ClubSubscription/BillingCycle above.
+// Phase 2A ships SCHEMA + STATE-MACHINE PRIMITIVES ONLY.  No webhook
+// routes, no Stripe API calls, no live payment entities.  Access-tier
+// enforcement grandfathers legacy tenants (accessTier = null -> PASS).
+// =========================================================================
+
+// Immutable record of signatory authority to bind the Club to the
+// $38K CAD annual subscription.  Text SHA-256 locked at acceptance;
+// Terms-of-service version SHA-256 pinned per founder decision 10.
+model SubscriptionAuthorisationAttestation {
+  id                       String   @id @default(cuid())
+  signupRegistrationId     String   @unique
+  clubId                   String?
+  clubSubscription         ClubSubscription? @relation(fields: [clubId], references: [clubId])
+  signatoryFullName        String
+  signatoryTitle           String
+  clubLegalName            String
+  attestationTextHash      String   // SHA-256 of exact clicked attestation text
+  attestationTextLength    Int
+  termsVersionSha256       String   // SHA-256 of the ToS doc at acceptance
+  termsVersionLabel        String   // human-readable label e.g. "ToS-v3-2026-10-25"
+  acceptedAt               DateTime
+  acceptedIp               String?
+  acceptedUserAgent        String?
+  acceptedByMicrosoftOid   String?
+  acceptedByMicrosoftTid   String?
+  supersededAt             DateTime?
+  supersededReason         String?
+
+  @@index([signupRegistrationId])
+  @@index([clubId])
+  @@index([acceptedAt])
+}
+
+// Stripe-side mandate acceptance context.  Spectre persists only the
+// acceptance context + Stripe references; Stripe stores the mandate
+// text + bank account details.
+model SubscriptionPaymentMandate {
+  id                       String   @id @default(cuid())
+  clubId                   String
+  clubSubscription         ClubSubscription  @relation(fields: [clubId], references: [clubId])
+  signupRegistrationId     String?
+  stripePaymentMethodId    String   @unique
+  stripeMandateId          String   @unique
+  mandateType              String   // ACSS_DEBIT | CARD
+  mandateVariant           String   // INTERVAL | SPORADIC | COMBINED
+  transactionType          String   // BUSINESS | PERSONAL
+  acceptedAt               DateTime
+  acceptedByUserId         String?
+  acceptedByMicrosoftOid   String?
+  acceptedIp               String?
+  acceptedUserAgent        String?
+  mandateTextHash          String   // SHA-256 of Stripe-rendered mandate text
+  mandateTextLength        Int
+  revokedAt                DateTime?
+  revokeReason             String?
+
+  @@index([clubId, acceptedAt])
+  @@index([stripePaymentMethodId])
+  @@index([stripeMandateId])
+}
+
+// Jurisdiction registry outcome.  Signatory-vs-officer match is a
+// SOFT SIGNAL recorded here, never a hard gate (per the delegated-
+// authority model).
+model EntityStandingCheck {
+  id                   String   @id @default(cuid())
+  signupRegistrationId String
+  clubId               String?
+  clubSubscription     ClubSubscription? @relation(fields: [clubId], references: [clubId])
+  jurisdiction         String   // e.g. "CA-ON" | "CA-BC"
+  businessNumber       String?
+  standing             String   // ACTIVE | NOT_ACTIVE | NOT_FOUND
+  officerMatch         String?  // MATCHED | PARTIAL | NOT_MATCHED
+  registryPayloadJson  String?  // raw registry response, redacted
+  fetchedAt            DateTime
+  createdAt            DateTime @default(now())
+
+  @@index([signupRegistrationId])
+  @@index([clubId])
+  @@index([standing])
+}
+
+// Durable, retryable tenant-provisioning workflow.  Keyed by the
+// first BillingCycle so the ACTIVATION_READY -> ACTIVE transition
+// is idempotent.  Each step has its own idempotency anchor; retries
+// resume from the last completed step.
+model TenantProvisioningJob {
+  id                               String       @id @default(cuid())
+  billingCycleId                   String       @unique
+  billingCycle                     BillingCycle @relation(fields: [billingCycleId], references: [id])
+  clubSubscriptionClubId           String
+  clubSubscription                 ClubSubscription @relation(fields: [clubSubscriptionClubId], references: [clubId])
+  signupRegistrationId             String
+  state                            String       // CREATED | USER_CREATED | CLUB_CREATED | ROLES_ASSIGNED | COA_COMMITTED | OPENING_BALANCE_COMMITTED | BRANDING_COMMITTED | INVITATIONS_DELIVERED | WELCOME_EMAIL_SENT | COMPLETED | FAILED
+  attempts                         Int          @default(0)
+  nextAttemptAt                    DateTime?
+  lastError                        String?
+  startedAt                        DateTime?
+  completedAt                      DateTime?
+  cancelledAt                      DateTime?
+  cancelReason                     String?
+  provisionedUserId                String?
+  provisionedClubId                String?
+  rolesAssignedBatchKey            String?
+  committedCoaBatchKey             String?
+  committedOpeningBalanceBatchKey  String?
+  committedBrandingBatchKey        String?
+  invitationsDeliveredBatchKey     String?
+  welcomeEmailProviderMessageId    String?
+  createdAt                        DateTime @default(now())
+  updatedAt                        DateTime @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([billingCycleId])
+  @@index([clubSubscriptionClubId])
+}
+
+// Spectre-controlled payment-provider ledger.  Append-only; a
+// correction creates a new OPERATOR_ADJUSTMENT row referencing the
+// original.  Independent of Stripe's dashboard; reconciled daily.
+model PaymentReconciliationEntry {
+  id                            String   @id @default(cuid())
+  clubId                        String?
+  clubSubscription              ClubSubscription? @relation(fields: [clubId], references: [clubId])
+  billingCycleId                String?
+  billingCycle                  BillingCycle? @relation(fields: [billingCycleId], references: [id])
+  entryType                     String   // See v3 doc Section 4b; e.g. CHARGE_SETTLED, DISPUTE_OPENED
+  amountMinorUnits              BigInt   // CAD cents; sign per entry type
+  currency                      String   // "cad"
+  providerEventId               String?
+  providerPaymentIntentId       String?
+  providerChargeId              String?
+  providerBalanceTransactionId  String?
+  providerFeeAmount             BigInt?
+  providerNetAmount             BigInt?
+  occurredAt                    DateTime
+  recordedAt                    DateTime @default(now())
+  reconciledWithProvider        Boolean  @default(false)
+  reconciledAt                  DateTime?
+  reconciliationNotes           String?
+  operatorUserId                String?
+  correctsEntryId               String?  // self-reference for OPERATOR_ADJUSTMENT
+
+  @@index([clubId, occurredAt])
+  @@index([billingCycleId, entryType])
+  @@index([providerEventId])
+  @@index([reconciledWithProvider, recordedAt])
+}
+
+// Stripe webhook dedup table.  First action on any webhook route is
+// `create({...}, {skipDuplicates: true})`.  Idempotent replays return
+// a 200 noop.
+model StripeWebhookEvent {
+  id                String   @id      // Stripe event.id (NOT cuid)
+  eventType         String
+  receivedAt        DateTime @default(now())
+  processedAt       DateTime?
+  processingResult  String?  // success | noop | failed
+  payloadJson       String   // raw Stripe payload for audit / replay
+  errorDetail       String?
+
+  @@index([eventType, receivedAt])
+  @@index([processedAt])
+}
+
+// Operator inbox entries -- the AUTHORITATIVE operational record
+// per founder decision 3 (immediate email for failures; daily
+// digest for routine).  Email is the alerting channel; this table
+// is the record.
+model OperatorInboxEntry {
+  id                 String   @id @default(cuid())
+  severity           String   // IMMEDIATE | ROUTINE
+  category           String   // PAYMENT_FAILURE | DISPUTE | SUSPENSION | PROVISIONING_FAILURE | RECONCILIATION_DRIFT | RENEWAL_WARNING | AUTHORISED | SETTLED
+  clubId             String?
+  billingCycleId     String?
+  providerEventId    String?
+  title              String
+  body               String
+  recommendedAction  String?
+  createdAt          DateTime @default(now())
+  readByUserId       String?
+  readAt             DateTime?
+  resolvedByUserId   String?
+  resolvedAt         DateTime?
+  resolutionNote     String?
+
+  @@index([severity, resolvedAt])
+  @@index([clubId, createdAt])
+  @@index([category, createdAt])
 }
 
 // WI-SYNC-1g (2026-10-18) — Outlook restore (move-to-Inbox) mutation.
