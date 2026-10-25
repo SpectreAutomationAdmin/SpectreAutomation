@@ -312,4 +312,38 @@ Specifically:
 
 - Suggested next step: **founder review of this document + explicit authorisation of Phase 2B** (attestation surface + capability-tier enforcement wiring for new tenants).
 
-- Rollback is trivial if needed: `flyctl releases rollback --app spectre-staging --to v869` reverts the deploy; the new tables remain in the database as empty + unused; the migration is additive so rollback does not break anything.  No production Fly app involved.
+- **Rollback -- important correction (2026-10-25).**  The previous
+  draft of this section implied Fly release rollback reverses
+  Phase 2A entirely.  That is NOT the case.  Rollback has two
+  distinct scopes:
+
+  1. **Application-code rollback.**  `flyctl releases rollback
+     --app spectre-staging --to v869` reverts the application
+     image.  Application traffic resumes against the SIGNUP-1G
+     baseline (sha-fb604f9 code paths).  Phase 2A's new
+     application code is no longer served.
+
+  2. **Database-schema rollback is NOT performed by a Fly
+     release rollback.**  The additive migration
+     (`20261025_signup_2a_subscription_domain`) applied to the
+     Postgres database remains in place.  The seven new tables
+     stay (empty + unused by the reverted application).  The
+     additive columns on `ClubSubscription` + `BillingCycle`
+     stay (null on every row; unused by the reverted
+     application).  Because the migration is strictly additive
+     (ADD COLUMN / CREATE TABLE / CREATE INDEX, no DROP, no
+     RENAME, no data mutation), the pre-Phase-2A application
+     code continues to function correctly against the extended
+     schema -- its SELECT queries ignore the new columns, its
+     INSERTs don't populate them, and its migrations history
+     only tracks what it knows about.
+
+  Phase 2A can therefore be paused at the application layer
+  immediately via (1), and the schema will quiesce.  A full
+  database-schema rollback (dropping the seven tables + the
+  additive columns) requires a separate, explicit, destructive
+  migration that **has not been authorised** and is not part of
+  this acceptance.  Operations wanting to clean up Phase 2A's
+  schema entirely must file an authorised teardown slice.
+
+  No production Fly app involved in either scope.
