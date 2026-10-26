@@ -297,6 +297,15 @@ export const PERMISSIONS = {
   "hr:training:assign":            { name: "Explicitly assign a training course to an employee", category: "HR" },
   "hr:training:compliance:read":   { name: "Read employee training compliance status",  category: "HR" },
 
+  // SIGNUP-2 Phase 2D (2026-10-25) -- Operator signup verification.
+  // Granted ONLY to SUPER_ADMIN at launch per founder decision 1.
+  // Phase 2H can later split into finer-grained scopes with a
+  // dual-approval chain.
+  "platform:signups:release": {
+    name: "Release signup registrations to AUTHORISED",
+    category: "PLATFORM_SIGNUPS",
+  },
+
   // Member portal (granted to MEMBER role)
   "self:account:read": { name: "View own member account", category: "MEMBER_PORTAL" },
   "self:profile:write": { name: "Edit own profile/household/preferences", category: "MEMBER_PORTAL" },

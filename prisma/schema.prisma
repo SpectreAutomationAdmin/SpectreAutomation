@@ -10730,8 +10730,8 @@ model SignupRegistration {
   // Written by the authority-corroborator after Phase 2B attestation
   // persists.  Null for pre-2C registrations (treated as pending by
   // Phase 2E).  verificationDeciderUserId is null when the
-  // corroborator wrote it automatically; populated by the Phase 2H
-  // operator-override path when an authorised operator releases a
+  // corroborator wrote it automatically; populated by the Phase 2D
+  // operator-release path when an authorised operator releases a
   // HOLD or converts to REJECT.
   verificationVerdict         String?
   verificationDecidedAt       DateTime?
@@ -10741,6 +10741,7 @@ model SignupRegistration {
 
   microsoftTransactions SignupOAuthTransaction[]
   recoveryLinks         SignupRecoveryLink[]
+  operatorVerificationRecords OperatorVerificationRecord[]
 
   @@index([status, expiresAt])
   @@index([adminMicrosoftOid, status])
@@ -10748,6 +10749,36 @@ model SignupRegistration {
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
   @@index([verificationVerdict, verificationDecidedAt])
+}
+
+// SIGNUP-2 Phase 2D (2026-10-25) -- Operator verification records.
+//
+// Immutable append-only ledger of operator verification actions.
+// One row per per-concept verification (STANDING or AUTHORITY) and
+// one row per final decision (RELEASE or REJECT).  Three-operator
+// separation-of-duties: the operator user ids on the latest
+// STANDING, AUTHORITY, and RELEASE rows must all be distinct.
+model OperatorVerificationRecord {
+  id                    String   @id @default(cuid())
+  signupRegistrationId  String
+  signupRegistration    SignupRegistration @relation(fields: [signupRegistrationId], references: [id], onDelete: Cascade)
+  concept               String   // "STANDING" | "AUTHORITY" | "RELEASE" | "REJECT"
+  finding               String   // "VERIFIED" | "NOT_VERIFIED" | "AUTHORISED" | "REJECTED"
+  evidenceSource        String?  // class of evidence (e.g. "ab-cores-agent", "bc-registry-api", "delegation-letter")
+  evidenceProvenance    String?  // provenance detail (issuing body, confirmation number, document type)
+  evidenceReference     String?  // short reference id / URL / case id (<= 500 chars)
+  reason                String?  // operator rationale (<= 1000 chars)
+  operatorUserId        String
+  operatorIp            String?
+  operatorUserAgent     String?
+  verifiedAt            DateTime
+  expiresAt             DateTime? // freshness window (STANDING defaults verifiedAt + 24h; AUTHORITY optional)
+  createdAt             DateTime @default(now())
+
+  @@index([signupRegistrationId, createdAt])
+  @@index([operatorUserId, createdAt])
+  @@index([concept, createdAt])
+  @@index([expiresAt])
 }
 
 // SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates

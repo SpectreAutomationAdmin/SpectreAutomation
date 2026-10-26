@@ -10559,6 +10559,7 @@ model SignupRegistration {
 
   microsoftTransactions SignupOAuthTransaction[]
   recoveryLinks         SignupRecoveryLink[]
+  operatorVerificationRecords OperatorVerificationRecord[]
 
   @@index([status, expiresAt])
   @@index([adminMicrosoftOid, status])
@@ -10566,6 +10567,31 @@ model SignupRegistration {
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
   @@index([verificationVerdict, verificationDecidedAt])
+}
+
+// SIGNUP-2 Phase 2D (2026-10-25) -- Operator verification records.
+// Immutable append-only ledger; three-operator separation-of-duties.
+model OperatorVerificationRecord {
+  id                    String   @id @default(cuid())
+  signupRegistrationId  String
+  signupRegistration    SignupRegistration @relation(fields: [signupRegistrationId], references: [id], onDelete: Cascade)
+  concept               String   // "STANDING" | "AUTHORITY" | "RELEASE" | "REJECT"
+  finding               String   // "VERIFIED" | "NOT_VERIFIED" | "AUTHORISED" | "REJECTED"
+  evidenceSource        String?
+  evidenceProvenance    String?
+  evidenceReference     String?
+  reason                String?
+  operatorUserId        String
+  operatorIp            String?
+  operatorUserAgent     String?
+  verifiedAt            DateTime
+  expiresAt             DateTime?
+  createdAt             DateTime @default(now())
+
+  @@index([signupRegistrationId, createdAt])
+  @@index([operatorUserId, createdAt])
+  @@index([concept, createdAt])
+  @@index([expiresAt])
 }
 
 // SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates

@@ -269,6 +269,233 @@ async function createPhase2cFixture(scenario) {
   }));
 }
 
+async function listSuperAdmins() {
+  // Phase 2D helper -- discover authorised SUPER_ADMIN accounts via
+  // the application's own permission system per founder decision 8.
+  // Checks both the deprecated User.role column AND UserClubRole
+  // with clubId=null so no platform-admin configuration is missed.
+  // Prints masked emails only.
+  const platformRoleRows = await prisma.userClubRole.findMany({
+    where: { clubId: null },
+    select: {
+      userId: true,
+      roleKey: true,
+      user: { select: { email: true, name: true } },
+    },
+  });
+  const byRole = {};
+  for (const r of platformRoleRows) {
+    byRole[r.roleKey] = byRole[r.roleKey] || [];
+    byRole[r.roleKey].push({
+      userIdTail: r.userId.slice(-6),
+      emailMasked: r.user?.email ? maskEmailAt(r.user.email) : null,
+      nameInitial: r.user?.name ? r.user.name.slice(0, 1) + "." : null,
+    });
+  }
+  // Fallback: scan User.role for admin-like strings (SUPER_ADMIN,
+  // SPECTRE_ADMIN, PLATFORM_ADMIN).  The deprecated column is still
+  // the live source of truth on the founder's own user row.
+  const adminUsers = await prisma.user.findMany({
+    where: {
+      OR: [
+        { role: "SUPER_ADMIN" },
+        { role: "SPECTRE_ADMIN" },
+        { role: "PLATFORM_ADMIN" },
+      ],
+    },
+    select: { id: true, email: true, name: true, role: true, status: true },
+  });
+  const userRoleSummary = adminUsers.map((u) => ({
+    userIdTail: u.id.slice(-6),
+    emailMasked: u.email ? maskEmailAt(u.email) : null,
+    nameInitial: u.name ? u.name.slice(0, 1) + "." : null,
+    role: u.role,
+    status: u.status,
+  }));
+  console.log(JSON.stringify({
+    userClubRoleAtClubNull: { byRole, totalCount: platformRoleRows.length },
+    userRoleColumn: { admins: userRoleSummary, totalCount: adminUsers.length },
+  }));
+}
+
+function maskEmailAt(email) {
+  const at = email.indexOf("@");
+  if (at < 2) return "***";
+  return email.slice(0, 2) + "***@" + email.slice(at + 1);
+}
+
+// ---------------------------------------------------------------
+// SIGNUP-2 Phase 2D (2026-10-25) fixture extensions.
+//
+// Creates three synthetic SUPER_ADMIN operator identities + one
+// HOLD_FOR_REVIEW SignupRegistration (bypassing the Phase 2B flag
+// gate by writing the attestation + standing check directly) so
+// the Playwright acceptance can exercise the three-operator
+// separation-of-duties workflow.
+//
+// Isolation per founder §5:  the three operators are deterministic
+// synthetic identities (NOT real admin accounts).  Teardown removes
+// them without touching anything else.
+// ---------------------------------------------------------------
+const PHASE_2D_FIXTURE_PREFIX = "signup-2d-fixture-";
+const PHASE_2D_TRIO = [
+  { role: "standing-operator",  email: `${PHASE_2D_FIXTURE_PREFIX}standing@spectre.test`,  name: "Phase2D Standing Operator"  },
+  { role: "authority-operator", email: `${PHASE_2D_FIXTURE_PREFIX}authority@spectre.test`, name: "Phase2D Authority Operator" },
+  { role: "release-operator",   email: `${PHASE_2D_FIXTURE_PREFIX}release@spectre.test`,   name: "Phase2D Release Operator"   },
+];
+const PHASE_2D_REGISTRATION_OID = "00000000-2d2d-2d2d-2d2d-000000000000";
+
+async function phase2dSetup() {
+  const bcrypt = await import("bcryptjs");
+  const password = `Phase2D-Fixture-Password-${Date.now()}`;
+  const passwordHash = await bcrypt.hash(password, 4); // low rounds for test fixture only
+
+  // Destroy any prior Phase 2D fixtures first.
+  await phase2dTeardown({ silent: true });
+
+  // Create the three operator users with SUPER_ADMIN role at
+  // clubId=null (platform scope).  Each gets the SAME password so
+  // Playwright can log in via a single `password` return value.
+  const operators = [];
+  for (const spec of PHASE_2D_TRIO) {
+    const u = await prisma.user.create({
+      data: {
+        email: spec.email,
+        name: spec.name,
+        role: "SUPER_ADMIN",
+        passwordHash,
+        status: "ACTIVE",
+      },
+    });
+    await prisma.userClubRole.create({
+      data: {
+        userId: u.id,
+        clubId: null,
+        roleKey: "SUPER_ADMIN",
+      },
+    });
+    operators.push({ role: spec.role, userId: u.id, email: u.email });
+  }
+
+  // Create a HOLD_FOR_REVIEW SignupRegistration + attestation +
+  // standing check.  Phase 2B's attestation gate is bypassed by
+  // writing directly (the fixture is operator-side only; no
+  // applicant interaction).
+  const now = new Date();
+  const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 7);
+  const token = `${PHASE_2D_FIXTURE_PREFIX}token-${randomBytes(12).toString("base64url")}`;
+  const tokenHash = hashToken(token);
+  const legalName = "Phase 2D Acceptance Fixture Club";
+
+  const reg = await prisma.signupRegistration.create({
+    data: {
+      resumeTokenHash: tokenHash,
+      legalName,
+      legalNameNormalized: legalName.toLowerCase(),
+      country: "CA",
+      provinceState: "AB",
+      addressLine1: "1 Phase2D Lane",
+      city: "Fixtureville",
+      postalCode: "T0A 0A0",
+      adminEmail: `${PHASE_2D_FIXTURE_PREFIX}applicant@spectre.test`,
+      adminMicrosoftOid: PHASE_2D_REGISTRATION_OID,
+      adminMicrosoftTenantId: "00000000-2d2d-ffff-2d2d-000000000000",
+      adminDisplayName: "Phase 2D Applicant",
+      adminGivenName: "Phase2D",
+      adminSurname: "Applicant",
+      adminPosition: "General Manager",
+      adminVerifiedAt: now,
+      step: "AUTHORITY_ACCEPTED",
+      status: "DRAFT",
+      ownershipVerificationState: "AUTOMATED_PASSED",
+      startedByIp: "127.0.0.1",
+      startedUserAgent: "SIGNUP-2 Phase 2D Fixture",
+      expiresAt: expires,
+      verificationVerdict: "HOLD_FOR_REVIEW",
+      verificationDecidedAt: now,
+      verificationHoldCategory: "ENTITY_VERIFICATION",
+      signingAuthoritySignal: "NONE",
+    },
+  });
+
+  await prisma.subscriptionAuthorisationAttestation.create({
+    data: {
+      signupRegistrationId: reg.id,
+      clubId: null,
+      signatoryFullName: "Phase 2D Fixture Signatory",
+      signatoryTitle: "General Manager",
+      clubLegalName: legalName,
+      attestationTextHash: "ff".repeat(32),
+      attestationTextLength: 500,
+      termsVersionSha256: "ee".repeat(32),
+      termsVersionLabel: "ToS-dev-fixture-2026-10-25",
+      acceptedAt: now,
+      acceptedIp: "127.0.0.1",
+      acceptedUserAgent: "SIGNUP-2 Phase 2D Fixture",
+      acceptedByMicrosoftOid: PHASE_2D_REGISTRATION_OID,
+      acceptedByMicrosoftTid: "00000000-2d2d-ffff-2d2d-000000000000",
+    },
+  });
+
+  await prisma.entityStandingCheck.create({
+    data: {
+      signupRegistrationId: reg.id,
+      clubId: null,
+      jurisdiction: "CA-AB",
+      standing: "MANUAL_REVIEW_REQUIRED",
+      officerMatch: null,
+      registryPayloadJson: JSON.stringify({ schema: "phase-2c.v1", standing: "MANUAL_REVIEW_REQUIRED", evidenceSource: "stub:manual-review:CA-AB" }),
+      fetchedAt: now,
+    },
+  });
+
+  console.log(JSON.stringify({
+    registration: {
+      id: reg.id,
+      legalName: reg.legalName,
+      state: "HOLD_FOR_REVIEW:ENTITY_VERIFICATION",
+    },
+    operators,
+    password, // one-time fixture password; same for all three
+    queueUrl: `${BASE_URL}/app/admin/signup-ops`,
+    reviewUrl: `${BASE_URL}/app/admin/signup-ops/registration/${reg.id}`,
+  }));
+}
+
+async function phase2dTeardown({ silent = false } = {}) {
+  // Remove the fixture registration (and its cascading rows).
+  const regs = await prisma.signupRegistration.findMany({
+    where: { adminMicrosoftOid: PHASE_2D_REGISTRATION_OID },
+    select: { id: true },
+  });
+  const regIds = regs.map((r) => r.id);
+  if (regIds.length) {
+    await prisma.operatorVerificationRecord.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.subscriptionAuthorisationAttestation.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.entityStandingCheck.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.signupRecoveryLink.deleteMany({ where: { registrationId: { in: regIds } } });
+    await prisma.signupOAuthTransaction.deleteMany({ where: { registrationId: { in: regIds } } });
+    await prisma.signupRegistration.deleteMany({ where: { id: { in: regIds } } });
+  }
+  // Remove the three operator identities.
+  const emails = PHASE_2D_TRIO.map((s) => s.email);
+  const users = await prisma.user.findMany({
+    where: { email: { in: emails } },
+    select: { id: true },
+  });
+  const userIds = users.map((u) => u.id);
+  if (userIds.length) {
+    await prisma.userClubRole.deleteMany({ where: { userId: { in: userIds } } });
+    await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+  }
+  if (!silent) {
+    console.log(JSON.stringify({
+      destroyedRegistrations: regIds.length,
+      destroyedOperators: userIds.length,
+    }));
+  }
+}
+
 async function destroyPhase2cFixtures() {
   const regs = await prisma.signupRegistration.findMany({
     where: { adminMicrosoftOid: { endsWith: "-2c0000000000" } },
@@ -311,8 +538,14 @@ async function main() {
       process.exit(2);
     }
     await verifyVerdictFor(oid);
+  } else if (action === "super-admin-list") {
+    await listSuperAdmins();
+  } else if (action === "phase2d-setup") {
+    await phase2dSetup();
+  } else if (action === "phase2d-teardown") {
+    await phase2dTeardown();
   } else {
-    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict}");
+    console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict|super-admin-list|phase2d-setup|phase2d-teardown}");
     process.exit(2);
   }
 }
