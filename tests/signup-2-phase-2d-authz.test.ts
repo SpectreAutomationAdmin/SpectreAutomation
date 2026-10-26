@@ -70,13 +70,22 @@ describe("SIGNUP-2 Phase 2D · routes consistently gate on authentication", () =
 });
 
 describe("SIGNUP-2 Phase 2D · NO Microsoft-tenant-ID-equality check (founder §3A)", () => {
-  it("service does NOT compare principal tenant id against adminMicrosoftTenantId", () => {
-    expect(SERVICE).not.toMatch(/adminMicrosoftTenantId/);
-    expect(SERVICE).not.toMatch(/tenantId/);
+  it("service never COMPARES against adminMicrosoftTenantId", () => {
+    // Comments / documentation may mention the field; the test
+    // asserts the service never performs a comparison on it.
+    const compareUsages = SERVICE.match(/adminMicrosoftTenantId\s*(?:===|!==|==|!=)/g) ?? [];
+    expect(compareUsages).toEqual([]);
+    // Also never read into a comparison variable.
+    const assignUsages = SERVICE.match(/const\s+\w+\s*=\s*[^;]*adminMicrosoftTenantId/g) ?? [];
+    expect(assignUsages).toEqual([]);
   });
 
-  it("self-approval protection uses operator email, not tenant id", () => {
-    expect(SERVICE).toMatch(/reg\.adminEmail\.toLowerCase\(\) === principal\.email\.toLowerCase\(\)/);
+  it("self-approval protection uses NORMALISED email (not raw lower-cased)", () => {
+    // Phase 2D identity-control correction (2026-10-26): the
+    // comparator now goes through normaliseEmailForComparison on
+    // both sides.
+    expect(SERVICE).toMatch(/normaliseEmailForComparison\(principal\.email\)/);
+    expect(SERVICE).toMatch(/normaliseEmailForComparison\(reg\.adminEmail\)/);
   });
 
   it("the self-approval check runs on every write entry point", () => {

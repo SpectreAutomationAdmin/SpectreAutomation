@@ -194,6 +194,51 @@ jobs:
           GITHUB_REF_NAME:                  ${{ steps.ref.outputs.value }}
         run: npm run deploy:staging
 
+      # SIGNUP-2 Phase 2D follow-up (2026-10-26) — mandatory post-deploy
+      # verification gate.  Phase 2D's v880 release stalled with the
+      # web machine still on the prior image, yet the deploy controller
+      # reported success.  This gate asserts the running web machine's
+      # image tag matches the sha we built + pushed; a mismatch or
+      # stall fails the workflow (so the next steps -- worker build +
+      # smoke -- do not execute, and the deploy is observable as a
+      # failure in GitHub Actions UI rather than a false green).
+      - name: Verify web machine is on expected image tag
+        if: success()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          EXPECTED_IMAGE_TAG: ${{ steps.sha.outputs.image_tag }}
+        run: |
+          # Up to 180 s of polling.  Fails the workflow if:
+          #   • no machine reaches `state=started` on the expected tag, OR
+          #   • any machine stays on a different image tag past the window.
+          attempt=0
+          while [ "$attempt" -lt 18 ]; do
+            attempt=$((attempt + 1))
+            STATUS_JSON=$(flyctl status --app spectre-staging --json 2>/dev/null || echo '{}')
+            STATES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.state] | @csv' 2>/dev/null || echo "")
+            IMAGES=$(echo "$STATUS_JSON" | jq -r '[.Machines[]?.image_ref.tag] | @csv' 2>/dev/null || echo "")
+            STARTED_ON_TAG=$(echo "$STATUS_JSON" | jq -r --arg t "$EXPECTED_IMAGE_TAG" '[.Machines[]? | select(.state == "started" and .image_ref.tag == $t)] | length' 2>/dev/null || echo "0")
+            STUCK=$(echo "$STATUS_JSON" | jq -r '[.Machines[]? | select(.state == "starting" or .state == "pending" or .state == "crashed" or .state == "failed" or .state == "replacing" or .state == "creating")] | length' 2>/dev/null || echo "0")
+            WRONG_TAG=$(echo "$STATUS_JSON" | jq -r --arg t "$EXPECTED_IMAGE_TAG" '[.Machines[]? | select(.image_ref.tag != $t)] | length' 2>/dev/null || echo "99")
+            echo "::notice::web attempt=${attempt} states=${STATES} images=${IMAGES} started_on_tag=${STARTED_ON_TAG} wrong_tag=${WRONG_TAG} stuck=${STUCK}"
+            if [ "$STUCK" = "0" ] && [ "$STARTED_ON_TAG" -ge "1" ] && [ "$WRONG_TAG" = "0" ]; then
+              echo "::notice::web — ${STARTED_ON_TAG} machine(s) started on tag ${EXPECTED_IMAGE_TAG}; every machine on expected tag"
+              # Final liveness probe at the public hostname.
+              HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" "https://staging.spectreautomation.com/api/health" || echo "000")
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "::notice::web — /api/health returned 200"
+                exit 0
+              else
+                echo "::error::web — /api/health returned ${HTTP_CODE} after image rollover"
+                exit 1
+              fi
+            fi
+            sleep 10
+          done
+          echo "::error::web — rollout did not converge in 180 s (started_on_tag=${STARTED_ON_TAG}, wrong_tag=${WRONG_TAG}, stuck=${STUCK})"
+          echo "$STATUS_JSON" | jq '.Machines[]? | {id,state,image_ref:.image_ref.tag}' || true
+          exit 1
+
       # WI-SYNC-1b (2026-10-18) — build + push the worker image.
       # Separate Dockerfile (Dockerfile.worker) runs bin/worker.ts
       # on `spectre-staging-worker`.  Uses its own cache scope so

@@ -129,14 +129,62 @@ async function loadRegistrationForOperator(registrationId: string): Promise<Regi
   return reg;
 }
 
+/** Aggressive email normalisation for the self-approval comparator.
+ *  Lowercases, trims, and strips plus-tags so `foo+ops@club.com` and
+ *  `foo@club.com` compare equal (same mailbox at Gmail / Outlook /
+ *  most providers).  Returns null for falsy input so the comparator
+ *  never silently matches null-vs-null. */
+export function normaliseEmailForComparison(raw: string | null | undefined): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.length === 0) return null;
+  const at = trimmed.indexOf("@");
+  if (at <= 0) return trimmed; // malformed -- compare as-is
+  const local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at);
+  const plus = local.indexOf("+");
+  const localNoTag = plus > 0 ? local.slice(0, plus) : local;
+  return `${localNoTag}${domain}`;
+}
+
 function assertNotApplicant(principal: Principal, reg: RegistrationForOperator): void {
-  // Per founder §3A: do NOT rely on Microsoft tenant-ID inequality.
-  // Use authenticated immutable user identity.  The applicant on a
-  // signup registration is identified by their email captured at
-  // Microsoft identity verification.  No operator with that email
-  // may act on the registration.
-  if (reg.adminEmail && principal.email && reg.adminEmail.toLowerCase() === principal.email.toLowerCase()) {
-    throw new ForbiddenError("Operator email matches applicant email -- applicant self-approval refused");
+  // SIGNUP-2 Phase 2D identity-control correction (founder §3 of the
+  // Phase 2E authorisation, 2026-10-26): the previous version
+  // compared raw lower-cased emails.  Operators are password-
+  // authenticated and do NOT carry a Microsoft `oid` / `tid` on the
+  // User row today, so email remains the strongest comparator
+  // available on the operator session.  (Applicants ARE Microsoft-
+  // authenticated and the registration row carries the applicant's
+  // `adminMicrosoftOid` + `adminMicrosoftTenantId`.)
+  //
+  // Phase 2D does NOT rely on tenant-ID equality anywhere (founder
+  // §3A).  This function:
+  //   1. Normalises both emails (lowercase + trim + plus-tag strip)
+  //      so a plus-tag-aliased operator cannot bypass the check.
+  //   2. Treats a missing applicant email as a hard refusal (an
+  //      incomplete registration is NEVER actionable by Phase 2D).
+  //
+  // Forward-looking: a future Phase-2H slice can add a Microsoft
+  // OIDC login path to the User model (new `microsoftOid` column),
+  // at which point the comparator should prefer `principal.microsoftOid`
+  // vs `reg.adminMicrosoftOid` as the primary comparison and keep
+  // normalised email equality as the additional safeguard.
+  const operatorEmail = normaliseEmailForComparison(principal.email);
+  const applicantEmail = normaliseEmailForComparison(reg.adminEmail);
+  if (!applicantEmail) {
+    throw new ForbiddenError(
+      "Registration has no admin email on file; refusing operator action until identity is captured",
+    );
+  }
+  if (!operatorEmail) {
+    throw new ForbiddenError(
+      "Operator session has no email; refusing action",
+    );
+  }
+  if (operatorEmail === applicantEmail) {
+    throw new ForbiddenError(
+      "Operator email matches applicant email (after normalisation) -- applicant self-approval refused",
+    );
   }
 }
 

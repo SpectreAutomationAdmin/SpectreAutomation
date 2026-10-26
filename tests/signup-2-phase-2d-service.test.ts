@@ -77,8 +77,14 @@ describe("SIGNUP-2 Phase 2D · service enforces every entry-point invariant (sou
     expect(SERVICE.match(/assertOperatorAuthorised\(principal\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
-  it("every write entry point refuses the applicant (operator email == applicant email)", () => {
-    expect(SERVICE).toMatch(/function assertNotApplicant[\s\S]+?reg\.adminEmail\.toLowerCase\(\) === principal\.email\.toLowerCase\(\)/);
+  it("every write entry point refuses the applicant (operator email == applicant email after normalisation)", () => {
+    // Phase 2D identity-control correction (2026-10-26): the
+    // comparator was strengthened to normalise both emails before
+    // comparing (lowercase + trim + plus-tag strip).  See
+    // tests/signup-2-phase-2d-identity-control.test.ts for the
+    // normaliser's own property tests.
+    expect(SERVICE).toMatch(/function assertNotApplicant[\s\S]+?normaliseEmailForComparison\(principal\.email\)/);
+    expect(SERVICE).toMatch(/function assertNotApplicant[\s\S]+?normaliseEmailForComparison\(reg\.adminEmail\)/);
     expect(SERVICE.match(/assertNotApplicant\(principal, reg\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 
