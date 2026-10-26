@@ -96,7 +96,10 @@ export function hasExhaustedRetries(attempts: number): boolean {
  *  cycle through SETTLED -> ACTIVATION_READY. */
 export async function createProvisioningJob(args: {
   billingCycleId: string;
-  clubSubscriptionClubId: string;
+  // SIGNUP-2 Phase 2F (2026-10-26) -- Club shell may not exist yet
+  // when Phase 2F creates the authorisation.  Phase 2G backfills on
+  // its CLUB_CREATED step.
+  clubSubscriptionClubId: string | null;
   signupRegistrationId: string;
 }): Promise<{ id: string; createdNew: boolean }> {
   const existing = await prisma.tenantProvisioningJob.findUnique({
@@ -128,7 +131,8 @@ export async function createProvisioningJob(args: {
 export interface StepHandlerContext {
   jobId: string;
   billingCycleId: string;
-  clubSubscriptionClubId: string;
+  // SIGNUP-2 Phase 2F (2026-10-26) -- see createProvisioningJob.
+  clubSubscriptionClubId: string | null;
   signupRegistrationId: string;
 }
 export type StepHandler = (

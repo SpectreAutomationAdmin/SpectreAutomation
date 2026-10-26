@@ -10937,8 +10937,14 @@ model TenantProvisioningJob {
   id                               String       @id @default(cuid())
   billingCycleId                   String       @unique
   billingCycle                     BillingCycle @relation(fields: [billingCycleId], references: [id])
-  clubSubscriptionClubId           String
-  clubSubscription                 ClubSubscription @relation(fields: [clubSubscriptionClubId], references: [clubId])
+  // SIGNUP-2 Phase 2F (2026-10-26) -- clubSubscriptionClubId relaxed
+  // to NULLABLE so Phase 2F can create the authorisation BEFORE
+  // Phase 2G provisions the Club shell.  Pattern mirror of
+  // SubscriptionPaymentMandate.clubId (Phase 2E) and
+  // SubscriptionAuthorisationAttestation.clubId (Phase 2B).  Phase
+  // 2G's CLUB_CREATED step backfills this column + the Club relation.
+  clubSubscriptionClubId           String?
+  clubSubscription                 ClubSubscription? @relation(fields: [clubSubscriptionClubId], references: [clubId])
   signupRegistrationId             String
   state                            String       // CREATED | USER_CREATED | CLUB_CREATED | ROLES_ASSIGNED | COA_COMMITTED | OPENING_BALANCE_COMMITTED | BRANDING_COMMITTED | INVITATIONS_DELIVERED | WELCOME_EMAIL_SENT | COMPLETED | FAILED
   attempts                         Int          @default(0)
@@ -10959,9 +10965,20 @@ model TenantProvisioningJob {
   createdAt                        DateTime @default(now())
   updatedAt                        DateTime @updatedAt
 
+  // SIGNUP-2 Phase 2F (2026-10-26) -- authorisation evidence +
+  // invalidation record.  See founder §4 (mock evidence isolation)
+  // + §6 (Phase 2F owns authorisation invalidation; Phase 2G owns
+  // provisioning cancellation).
+  authorisationEvidenceSource      String?   // "live-stripe" | "mock-stripe"
+  authorisationExpiresAt           DateTime?
+  invalidatedAt                    DateTime?
+  invalidatedReason                String?
+
   @@index([state, nextAttemptAt])
   @@index([billingCycleId])
   @@index([clubSubscriptionClubId])
+  @@index([authorisationEvidenceSource])
+  @@index([invalidatedAt])
 }
 
 // Spectre-controlled payment-provider ledger.  Append-only; a

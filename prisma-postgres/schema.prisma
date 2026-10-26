@@ -10743,8 +10743,10 @@ model TenantProvisioningJob {
   id                               String       @id @default(cuid())
   billingCycleId                   String       @unique
   billingCycle                     BillingCycle @relation(fields: [billingCycleId], references: [id])
-  clubSubscriptionClubId           String
-  clubSubscription                 ClubSubscription @relation(fields: [clubSubscriptionClubId], references: [clubId])
+  // SIGNUP-2 Phase 2F (2026-10-26) -- clubSubscriptionClubId relaxed
+  // to NULLABLE; Phase 2G backfills on CLUB_CREATED.
+  clubSubscriptionClubId           String?
+  clubSubscription                 ClubSubscription? @relation(fields: [clubSubscriptionClubId], references: [clubId])
   signupRegistrationId             String
   state                            String
   attempts                         Int          @default(0)
@@ -10765,9 +10767,18 @@ model TenantProvisioningJob {
   createdAt                        DateTime @default(now())
   updatedAt                        DateTime @updatedAt
 
+  // SIGNUP-2 Phase 2F (2026-10-26) -- authorisation evidence +
+  // invalidation record.
+  authorisationEvidenceSource      String?   // "live-stripe" | "mock-stripe"
+  authorisationExpiresAt           DateTime?
+  invalidatedAt                    DateTime?
+  invalidatedReason                String?
+
   @@index([state, nextAttemptAt])
   @@index([billingCycleId])
   @@index([clubSubscriptionClubId])
+  @@index([authorisationEvidenceSource])
+  @@index([invalidatedAt])
 }
 
 model PaymentReconciliationEntry {
