@@ -40,7 +40,9 @@ on:
         type: string
 
 concurrency:
-  group: staging-flag-ttl
+  # Shared group with staging-flag-activate.yml so cleanup + activation
+  # never execute simultaneously.  Per founder closure §3.
+  group: staging-flag-mutex
   cancel-in-progress: false
 
 permissions:
@@ -142,11 +144,80 @@ jobs:
           echo "to_unset=$to_unset" >> $GITHUB_OUTPUT
           echo "vars_to_delete=$vars_to_delete" >> $GITHUB_OUTPUT
 
-      - name: Unset expired Fly secrets
+      - name: Fresh-expiry re-check (defence in depth, founder §3)
+        id: recheck
         if: ${{ steps.decide.outputs.to_unset != '' }}
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          FORCE: ${{ inputs.confirm_emergency_unset }}
           TO_UNSET: ${{ steps.decide.outputs.to_unset }}
+          VARS_TO_DELETE: ${{ steps.decide.outputs.vars_to_delete }}
+        run: |
+          set -euo pipefail
+          # Re-read every GH variable we were about to act on IMMEDIATELY
+          # before the destructive step.  Even with the shared concurrency
+          # group this is a cheap belt-and-braces check: if an activation
+          # somehow refreshed the expiry window since `decide` ran, we
+          # must NOT unset the Fly flag.  If the variable disappeared
+          # (operator cleared it manually), keep it in the unset list.
+          now_epoch=$(date -u +%s)
+          final_unset=""
+          final_vars=""
+          gh_vars=$(gh variable list --repo "$REPO" --json name,value)
+          for flag in $TO_UNSET; do
+            var_name="STAGING_FLAG_${flag}_WINDOW"
+            if [ "$FORCE" = "true" ]; then
+              final_unset+=" $flag"
+              # Delete the variable too if present.
+              if printf '%s' "$gh_vars" | jq -e --arg n "$var_name" '.[] | select(.name==$n)' >/dev/null; then
+                final_vars+=" $var_name"
+              fi
+              continue
+            fi
+            fresh_val=$(printf '%s' "$gh_vars" | jq -r --arg n "$var_name" '.[] | select(.name==$n) | .value // ""')
+            if [ -z "$fresh_val" ]; then
+              echo "::notice::$flag variable disappeared between decide and recheck; proceeding with unset"
+              final_unset+=" $flag"
+              continue
+            fi
+            fresh_exp=$(echo "$fresh_val" | awk -F'|' '{print $2}')
+            fresh_epoch=$(date -u -d "$fresh_exp" +%s 2>/dev/null || echo 0)
+            if [ "$fresh_epoch" = "0" ]; then
+              echo "::notice::$flag re-read gave unparsable expiry '$fresh_exp'; proceeding with unset"
+              final_unset+=" $flag"
+              final_vars+=" $var_name"
+              continue
+            fi
+            if [ "$fresh_epoch" -gt "$now_epoch" ]; then
+              echo "::warning::$flag was refreshed between decide and recheck (now expires $fresh_exp); SKIPPING unset to protect the new activation window"
+            else
+              final_unset+=" $flag"
+              final_vars+=" $var_name"
+            fi
+          done
+          # Also carry over any orphan variables (fly secret absent)
+          # that the decide step flagged for deletion.
+          for v in $VARS_TO_DELETE; do
+            case " $final_vars " in
+              *" $v "*) : ;;  # already present
+              *)
+                # Only carry over if the variable is actually unused by any
+                # currently-set fly secret.  The decide step already
+                # validated this; just include.
+                final_vars+=" $v" ;;
+            esac
+          done
+          final_unset="$(echo "$final_unset" | tr -s ' ' | sed 's/^ //')"
+          final_vars="$(echo "$final_vars" | tr -s ' ' | sed 's/^ //')"
+          echo "final_unset=$final_unset" >> $GITHUB_OUTPUT
+          echo "final_vars=$final_vars" >> $GITHUB_OUTPUT
+
+      - name: Unset expired Fly secrets (post-recheck)
+        if: ${{ steps.recheck.outputs.final_unset != '' }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          TO_UNSET: ${{ steps.recheck.outputs.final_unset }}
         run: |
           set -euo pipefail
           echo "::notice::Unsetting expired staging flags: $TO_UNSET"
@@ -158,12 +229,12 @@ jobs:
             echo "::warning::/api/health returned $code within 30s of flag unset"
           fi
 
-      - name: Delete expired variables
-        if: ${{ steps.decide.outputs.vars_to_delete != '' }}
+      - name: Delete expired variables (post-recheck)
+        if: ${{ steps.recheck.outputs.final_vars != '' || steps.decide.outputs.vars_to_delete != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-          VARS: ${{ steps.decide.outputs.vars_to_delete }}
+          VARS: ${{ steps.recheck.outputs.final_vars != '' && steps.recheck.outputs.final_vars || steps.decide.outputs.vars_to_delete }}
         run: |
           set -euo pipefail
           for v in $VARS; do
@@ -173,18 +244,20 @@ jobs:
       - name: Summary
         if: always()
         env:
-          TO_UNSET: ${{ steps.decide.outputs.to_unset }}
-          VARS: ${{ steps.decide.outputs.vars_to_delete }}
+          DECIDED: ${{ steps.decide.outputs.to_unset }}
+          FINAL_UNSET: ${{ steps.recheck.outputs.final_unset }}
+          FINAL_VARS: ${{ steps.recheck.outputs.final_vars }}
           FORCE: ${{ inputs.confirm_emergency_unset }}
         run: |
           {
             echo "### Staging flag TTL safeguard — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
-            echo "- Mode:            $([ "$FORCE" = "true" ] && echo "EMERGENCY UNSET" || echo "SCHEDULED / NORMAL")"
-            if [ -z "$TO_UNSET" ] && [ -z "$VARS" ]; then
-              echo "- Nothing expired."
-            else
-              echo "- Flags unset:     \`${TO_UNSET:-<none>}\`"
-              echo "- Vars deleted:    \`${VARS:-<none>}\`"
+            echo "- Mode:                $([ "$FORCE" = "true" ] && echo "EMERGENCY UNSET" || echo "SCHEDULED / NORMAL")"
+            echo "- Decided for unset:   \`${DECIDED:-<none>}\`"
+            echo "- Final-recheck unset: \`${FINAL_UNSET:-<none>}\`"
+            echo "- Vars deleted:        \`${FINAL_VARS:-<none>}\`"
+            if [ -n "$DECIDED" ] && [ -z "$FINAL_UNSET" ]; then
+              echo
+              echo "- Fresh-expiry re-check SKIPPED every unset — at least one activation refreshed its window between decide and unset.  No destructive action taken (correct behaviour per founder closure §3)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

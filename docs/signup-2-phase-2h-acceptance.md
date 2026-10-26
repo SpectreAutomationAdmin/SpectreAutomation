@@ -1,6 +1,6 @@
 # SIGNUP-2 Phase 2H — Acceptance Evidence
 
-**Status.** READY FOR FOUNDER ACCEPTANCE (STAGING, flags OFF).
+**Status.** TECHNICALLY ACCEPTED — MOCK-BACKED STAGING BASELINE (2026-10-26, flags OFF).
 Phase 2H tenant-lifecycle (suspension + reinstatement +
 operator-remediation surface) is implemented, deployed to
 `spectre-staging`, migrated, and validated under a controlled

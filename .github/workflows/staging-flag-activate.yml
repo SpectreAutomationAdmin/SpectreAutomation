@@ -51,7 +51,15 @@ on:
         type: string
 
 concurrency:
-  group: staging-flag-activate
+  # Shared group with staging-flag-ttl.yml so activation + cleanup
+  # never execute simultaneously.  Per founder closure §3:
+  # protects against the race where cleanup reads an expired
+  # record, activation refreshes the expiry, cleanup acts on its
+  # stale observation.  Serialising via GH Actions concurrency
+  # groups is the primary mitigation; the TTL workflow adds a
+  # fresh-expiry re-read immediately before unset as defence in
+  # depth.
+  group: staging-flag-mutex
   cancel-in-progress: false
 
 permissions:
