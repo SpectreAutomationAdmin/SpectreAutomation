@@ -949,6 +949,481 @@ async function destroyPhase2cFixtures() {
   console.log(JSON.stringify({ destroyed: result.count }));
 }
 
+// ---------------------------------------------------------------
+// Phase 2G provisioning fixtures.
+// Shape: seeds a Phase 2F mock-backed authorisation (registration +
+// attestation + mandate + billing cycle + fixture Club + ClubSubscription)
+// AND the TenantProvisioningJob row Phase 2G would consume.  Scenarios:
+//   happy             -- clean path
+//   email-collision   -- pre-seed a User with the same adminEmail so
+//                        step 1 (USER_CREATED) refuses
+//   slug-collision    -- pre-seed a Club with the slug Phase 2G would
+//                        derive so step 2 (CLUB_CREATED) refuses
+// Each scenario uses a distinct adminMicrosoftOid.
+// ---------------------------------------------------------------
+const PHASE_2G_FIXTURE_PREFIX = "signup-2g-fixture-";
+const PHASE_2G_SCENARIOS = {
+  "happy":            { oid: "00000000-2g2g-happy-2g2g-000000000000", preseedUser: false, preseedClub: false },
+  "email-collision":  { oid: "00000000-2g2g-emlcol-2g2g-00000000000", preseedUser: true,  preseedClub: false },
+  "slug-collision":   { oid: "00000000-2g2g-slgcol-2g2g-00000000000", preseedUser: false, preseedClub: true  },
+};
+
+function phase2gRegEmail(scenario) {
+  return `${PHASE_2G_FIXTURE_PREFIX}${scenario}-applicant@spectre.test`;
+}
+
+function phase2gRegLegalName(scenario) {
+  return `Phase 2G Fixture Club (${scenario})`;
+}
+
+async function phase2gSeed(scenario) {
+  const spec = PHASE_2G_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2g-seed] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  await phase2gTeardownScenario(scenario, { silent: true });
+
+  const now = new Date();
+  const expires = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 7);
+  const legalName = phase2gRegLegalName(scenario);
+  const adminEmail = phase2gRegEmail(scenario);
+
+  // Pre-seed collisions BEFORE creating the registration (so the
+  // Phase 2G steps hit the collision on their happy path).
+  let preseededUserId = null;
+  let preseededClubId = null;
+  if (spec.preseedUser) {
+    const bcryptModule = await import("bcryptjs");
+    const bcrypt = bcryptModule.default ?? bcryptModule;
+    const u = await prisma.user.create({
+      data: {
+        email: adminEmail,
+        name: `Phase 2G Preseed Collision (${scenario})`,
+        role: "CLUB_ADMIN",
+        passwordHash: await bcrypt.hash("Phase2G-Preseed-Password", 4),
+        status: "ACTIVE",
+      },
+    });
+    preseededUserId = u.id;
+  }
+  // Slug collision: we don't know the registrationId yet.  Create
+  // the registration first, derive the slug, then pre-seed a Club
+  // with that slug.
+
+  const reg = await prisma.signupRegistration.create({
+    data: {
+      resumeTokenHash: hashToken(generateFixtureToken() + scenario),
+      legalName,
+      legalNameNormalized: legalName.toLowerCase(),
+      country: "CA",
+      provinceState: "AB",
+      addressLine1: "1 Phase 2G Lane",
+      city: "Fixtureville",
+      postalCode: "T0A 0A0",
+      adminEmail,
+      adminMicrosoftOid: spec.oid,
+      adminMicrosoftTenantId: "00000000-2g2g-ffff-2g2g-000000000000",
+      adminDisplayName: `Phase 2G Fixture Admin ${scenario}`,
+      adminGivenName: "Phase2G",
+      adminSurname: scenario,
+      adminPosition: "General Manager",
+      adminVerifiedAt: now,
+      step: "AUTHORITY_ACCEPTED",
+      status: "DRAFT",
+      ownershipVerificationState: "AUTOMATED_PASSED",
+      startedByIp: "127.0.0.1",
+      startedUserAgent: "SIGNUP-2 Phase 2G Fixture",
+      expiresAt: expires,
+      verificationVerdict: "MANUAL_RELEASE",
+      verificationDecidedAt: now,
+      verificationHoldCategory: null,
+      signingAuthoritySignal: "OPERATOR_RELEASE",
+    },
+  });
+
+  if (spec.preseedClub) {
+    const slugBase = legalName
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .slice(0, 40) || "club";
+    const slug = `${slugBase}-${reg.id.slice(-6)}`;
+    const preClub = await prisma.club.create({
+      data: {
+        slug,
+        name: `Preseed collision ${scenario}`,
+        region: "AB",
+        salesTaxRegion: "GST",
+        foundedYear: 2026,
+        timezone: "America/Edmonton",
+        stagingDataMode: "SYNTHETIC_DEMO",
+      },
+    });
+    preseededClubId = preClub.id;
+  }
+
+  // Phase 2B attestation (SHA from staging-only acceptance ToS doc
+  // installed via phase2f-super-admin-setup, or the dev fixture if
+  // the acceptance doc isn't installed yet).
+  const resolvedTosSha = await (async () => {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const { createHash } = await import("node:crypto");
+      const prod = path.resolve(process.cwd(), "docs", "legal", "terms-of-service-v1.md");
+      const fixture = path.resolve(process.cwd(), "docs", "legal", "terms-of-service-fixture-dev.md");
+      const p = fs.existsSync(prod) ? prod : fixture;
+      if (fs.existsSync(p)) {
+        const body = fs.readFileSync(p, "utf8");
+        return createHash("sha256").update(body, "utf8").digest("hex");
+      }
+    } catch {}
+    return "ee".repeat(32);
+  })();
+
+  await prisma.subscriptionAuthorisationAttestation.create({
+    data: {
+      signupRegistrationId: reg.id,
+      clubId: null,
+      signatoryFullName: `Phase 2G Fixture Signatory ${scenario}`,
+      signatoryTitle: "General Manager",
+      clubLegalName: legalName,
+      attestationTextHash: "aa".repeat(32),
+      attestationTextLength: 500,
+      termsVersionSha256: resolvedTosSha,
+      termsVersionLabel: "ToS-staging-acceptance-2026-10-26",
+      acceptedAt: now,
+      acceptedIp: "127.0.0.1",
+      acceptedUserAgent: "SIGNUP-2 Phase 2G Fixture",
+      acceptedByMicrosoftOid: spec.oid,
+      acceptedByMicrosoftTenantId: "00000000-2g2g-ffff-2g2g-000000000000",
+      acceptedByEmail: adminEmail,
+    },
+  });
+
+  // Phase 2D RELEASE operator-verification record.
+  const releaseRecord = await prisma.operatorVerificationRecord.create({
+    data: {
+      signupRegistrationId: reg.id,
+      concept: "RELEASE",
+      adapter: "fixture",
+      source: "fixture-phase2g",
+      verdict: "PASS",
+      operatorUserId: "fixture-phase2g-operator",
+      verifiedAt: now,
+      expiresAt: expires,
+      detailJson: JSON.stringify({ scenario, fixture: "phase2g" }),
+    },
+  });
+
+  // Phase 2E mandate (idempotent on signupRegistrationId).
+  await prisma.subscriptionPaymentMandate.create({
+    data: {
+      signupRegistrationId: reg.id,
+      clubId: null,
+      stripeCustomerId: `cus_mock_${scenario}_${reg.id.slice(-6)}`,
+      stripeMandateId: `mandate_mock_${scenario}_${reg.id.slice(-6)}`,
+      stripePaymentMethodId: `pm_mock_${scenario}_${reg.id.slice(-6)}`,
+      mandateType: "ACSS_DEBIT",
+      mandateVariant: "INTERVAL",
+      transactionType: "BUSINESS",
+      acceptedAt: now,
+      mandateTextHash: "bb".repeat(32),
+      mandateTextLength: 500,
+    },
+  });
+
+  // Fixture Club for the BillingCycle FK.  Phase 2G will create a
+  // DIFFERENT Club in CLUB_CREATED; this fixture club exists only
+  // so Phase 2F can produce the authorisation.
+  const fixtureClubSlug = `${PHASE_2G_FIXTURE_PREFIX}cycle-${scenario}-${reg.id.slice(-8)}`.toLowerCase();
+  const fixtureClub = await prisma.club.create({
+    data: {
+      slug: fixtureClubSlug,
+      name: `Phase 2G Fixture Billing Cycle Club (${scenario})`,
+      region: "AB",
+      salesTaxRegion: "GST",
+      foundedYear: 2026,
+      timezone: "America/Edmonton",
+      stagingDataMode: "SYNTHETIC_DEMO",
+    },
+  });
+  await prisma.clubSubscription.create({
+    data: {
+      clubId: fixtureClub.id,
+      status: "ACTIVE",
+      subscriptionStatus: "ACTIVATION_READY",
+      accessTier: "STAGED",
+    },
+  });
+
+  const cycle = await prisma.billingCycle.create({
+    data: {
+      clubId: fixtureClub.id,
+      periodLabel: `${PHASE_2G_FIXTURE_PREFIX}cycle-${scenario}-${reg.id.slice(-8)}`,
+      startDate: now,
+      endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+      totalDue: 38000.00,
+      totalPaid: 38000.00,
+      status: "OPEN",
+      subscriptionStatus: "ACTIVATION_READY",
+      source: "STRIPE_ACSS",
+      stripePaymentIntentId: `pi_mock_${scenario}_${reg.id.slice(-6)}`,
+      stripeChargeId: `ch_mock_${scenario}_${reg.id.slice(-6)}`,
+      stripeBalanceTransactionId: `btxn_mock_${scenario}_${reg.id.slice(-6)}`,
+      expectedDebitDate: now,
+      settlementConfirmedAt: now,
+      releasedByOperatorRecordId: releaseRecord.id,
+    },
+  });
+
+  // Phase 2F authorisation (mock-stripe evidence source).
+  const authorisationExpiresAt = new Date(now.getTime() + 15 * 60 * 1000);
+  const job = await prisma.tenantProvisioningJob.create({
+    data: {
+      billingCycleId: cycle.id,
+      signupRegistrationId: reg.id,
+      state: "CREATED",
+      attempts: 0,
+      nextAttemptAt: now,
+      authorisationEvidenceSource: "mock-stripe",
+      authorisationExpiresAt,
+      clubSubscriptionClubId: null,
+    },
+  });
+
+  console.log(JSON.stringify({
+    scenario,
+    registrationId: reg.id,
+    adminMicrosoftOid: spec.oid,
+    adminEmail,
+    legalName,
+    releaseRecordId: releaseRecord.id,
+    fixtureClubId: fixtureClub.id,
+    billingCycleId: cycle.id,
+    tenantProvisioningJobId: job.id,
+    preseededUserId,
+    preseededClubId,
+  }));
+}
+
+async function phase2gTeardownScenario(scenario, { silent = false } = {}) {
+  const spec = PHASE_2G_SCENARIOS[scenario];
+  if (!spec) {
+    if (!silent) console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  const adminEmail = phase2gRegEmail(scenario);
+  const regs = await prisma.signupRegistration.findMany({
+    where: { adminMicrosoftOid: spec.oid },
+    select: { id: true },
+  });
+  const regIds = regs.map((r) => r.id);
+  const fixtureClubs = await prisma.club.findMany({
+    where: {
+      OR: [
+        { slug: { startsWith: `${PHASE_2G_FIXTURE_PREFIX}cycle-${scenario}-` } },
+        { slug: { startsWith: `${PHASE_2G_FIXTURE_PREFIX}${scenario}-preseed-` } },
+      ],
+    },
+    select: { id: true },
+  });
+  const fixtureClubIds = fixtureClubs.map((c) => c.id);
+
+  // Also discover Clubs Phase 2G itself created via the fixture
+  // registration (derived slug ends in reg.id.slice(-6)).  Collect
+  // via registration -> ClubSubscription -> clubId.
+  const subs = await prisma.clubSubscription.findMany({
+    where: { signupRegistrationId: { in: regIds } },
+    select: { clubId: true },
+  });
+  const provClubIds = subs.map((s) => s.clubId).filter((id) => !fixtureClubIds.includes(id));
+  const allClubIds = [...fixtureClubIds, ...provClubIds];
+
+  if (allClubIds.length) {
+    await prisma.tenantProvisioningJob.deleteMany({
+      where: { billingCycle: { clubId: { in: allClubIds } } },
+    });
+    await prisma.paymentReconciliationEntry.deleteMany({ where: { clubId: { in: allClubIds } } });
+    await prisma.operatorInboxEntry.deleteMany({ where: { clubId: { in: allClubIds } } });
+    await prisma.billingCycle.deleteMany({ where: { clubId: { in: allClubIds } } });
+    await prisma.userClubRole.deleteMany({ where: { clubId: { in: allClubIds } } });
+    await prisma.clubSubscription.deleteMany({ where: { clubId: { in: allClubIds } } });
+  }
+  if (regIds.length) {
+    await prisma.subscriptionPaymentMandate.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.operatorVerificationRecord.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.subscriptionAuthorisationAttestation.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.entityStandingCheck.deleteMany({ where: { signupRegistrationId: { in: regIds } } });
+    await prisma.signupRecoveryLink.deleteMany({ where: { registrationId: { in: regIds } } });
+    await prisma.signupOAuthTransaction.deleteMany({ where: { registrationId: { in: regIds } } });
+    await prisma.signupRegistration.deleteMany({ where: { id: { in: regIds } } });
+  }
+  if (allClubIds.length) {
+    await prisma.club.deleteMany({ where: { id: { in: allClubIds } } });
+  }
+  // Also delete the pre-seeded user (if any) + any user Phase 2G created.
+  const u = await prisma.user.findUnique({ where: { email: adminEmail }, select: { id: true } });
+  if (u) {
+    await prisma.userClubRole.deleteMany({ where: { userId: u.id } });
+    await prisma.session.deleteMany({ where: { userId: u.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: u.id } });
+  }
+  if (!silent) {
+    console.log(JSON.stringify({
+      destroyed: regIds.length,
+      destroyedClubs: allClubIds.length,
+      destroyedUser: !!u,
+    }));
+  }
+}
+
+async function phase2gTeardownAll() {
+  let total = 0;
+  for (const key of Object.keys(PHASE_2G_SCENARIOS)) {
+    await phase2gTeardownScenario(key, { silent: true });
+    total++;
+  }
+  console.log(JSON.stringify({ scenariosDestroyed: total }));
+}
+
+async function phase2gInspect(scenario) {
+  const spec = PHASE_2G_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2g-inspect] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const reg = await prisma.signupRegistration.findFirst({
+    where: { adminMicrosoftOid: spec.oid },
+    select: { id: true, adminEmail: true, legalName: true },
+  });
+  if (!reg) {
+    console.log(JSON.stringify({ scenario, missing: true }));
+    return;
+  }
+  const sub = await prisma.clubSubscription.findFirst({
+    where: { signupRegistrationId: reg.id },
+    select: {
+      id: true,
+      clubId: true,
+      subscriptionStatus: true,
+      accessTier: true,
+      status: true,
+      activatedAt: true,
+      provisioningCancelledAt: true,
+    },
+  });
+  const provClub = sub
+    ? await prisma.club.findUnique({
+        where: { id: sub.clubId },
+        select: { id: true, slug: true, name: true, provisioningCancelledAt: true },
+      })
+    : null;
+  const user = await prisma.user.findUnique({
+    where: { email: reg.adminEmail },
+    select: { id: true, email: true, status: true, provisioningCancelledAt: true },
+  });
+  const userRole = user && provClub
+    ? await prisma.userClubRole.findFirst({
+        where: { userId: user.id, clubId: provClub.id },
+        select: { roleKey: true },
+      })
+    : null;
+  const job = await prisma.tenantProvisioningJob.findFirst({
+    where: { signupRegistrationId: reg.id },
+    select: {
+      id: true,
+      state: true,
+      authorisationEvidenceSource: true,
+      invalidatedAt: true,
+      cancelledAt: true,
+      cancelReason: true,
+      provisionedUserId: true,
+      provisionedClubId: true,
+      rolesAssignedBatchKey: true,
+      committedCoaBatchKey: true,
+      committedOpeningBalanceBatchKey: true,
+      committedBrandingBatchKey: true,
+      invitationsDeliveredBatchKey: true,
+      welcomeEmailProviderMessageId: true,
+      completedAt: true,
+    },
+  });
+  console.log(JSON.stringify({
+    scenario,
+    registration: reg,
+    provisionedClub: provClub,
+    clubSubscription: sub,
+    provisionedUser: user,
+    userClubRole: userRole,
+    job,
+  }, null, 2));
+}
+
+async function phase2gReverse(scenario) {
+  const spec = PHASE_2G_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2g-reverse] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const reg = await prisma.signupRegistration.findFirst({
+    where: { adminMicrosoftOid: spec.oid },
+    select: { id: true },
+  });
+  if (!reg) {
+    console.log(JSON.stringify({ scenario, reversed: 0, missing: true }));
+    return;
+  }
+  const job = await prisma.tenantProvisioningJob.findFirst({
+    where: { signupRegistrationId: reg.id },
+    select: { billingCycleId: true },
+  });
+  if (!job) {
+    console.log(JSON.stringify({ scenario, reversed: 0, missing: "job" }));
+    return;
+  }
+  const now = new Date();
+  const r = await prisma.billingCycle.updateMany({
+    where: { id: job.billingCycleId },
+    data: { reversedAt: now, reversalReason: "phase2g-fixture-reverse", subscriptionStatus: "REVERSED" },
+  });
+  console.log(JSON.stringify({ scenario, reversed: r.count }));
+}
+
+async function phase2gInvalidate(scenario) {
+  const spec = PHASE_2G_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2g-invalidate] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const reg = await prisma.signupRegistration.findFirst({
+    where: { adminMicrosoftOid: spec.oid },
+    select: { id: true },
+  });
+  if (!reg) {
+    console.log(JSON.stringify({ scenario, invalidated: 0, missing: true }));
+    return;
+  }
+  const job = await prisma.tenantProvisioningJob.findFirst({
+    where: { signupRegistrationId: reg.id },
+    select: { id: true },
+  });
+  if (!job) {
+    console.log(JSON.stringify({ scenario, invalidated: 0, missing: "job" }));
+    return;
+  }
+  const now = new Date();
+  const r = await prisma.tenantProvisioningJob.updateMany({
+    where: { id: job.id, invalidatedAt: null },
+    data: { invalidatedAt: now, invalidatedReason: "phase2g-fixture-invalidate" },
+  });
+  console.log(JSON.stringify({ scenario, invalidated: r.count }));
+}
+
 async function main() {
   const action = process.argv[2];
   if (action === "create") {
@@ -1011,6 +1486,36 @@ async function main() {
     await phase2fSuperAdminSetup();
   } else if (action === "phase2f-super-admin-teardown") {
     await phase2fSuperAdminTeardown();
+  } else if (action === "phase2g-seed") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2g-seed <happy|email-collision|slug-collision>");
+      process.exit(2);
+    }
+    await phase2gSeed(scenario);
+  } else if (action === "phase2g-teardown") {
+    await phase2gTeardownAll();
+  } else if (action === "phase2g-inspect") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2g-inspect <scenario>");
+      process.exit(2);
+    }
+    await phase2gInspect(scenario);
+  } else if (action === "phase2g-reverse") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2g-reverse <scenario>");
+      process.exit(2);
+    }
+    await phase2gReverse(scenario);
+  } else if (action === "phase2g-invalidate") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2g-invalidate <scenario>");
+      process.exit(2);
+    }
+    await phase2gInvalidate(scenario);
   } else {
     console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict|super-admin-list|phase2d-setup|phase2d-teardown}");
     process.exit(2);
