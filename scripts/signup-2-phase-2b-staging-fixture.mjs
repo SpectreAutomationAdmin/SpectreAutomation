@@ -1100,8 +1100,7 @@ async function phase2gSeed(scenario) {
       acceptedIp: "127.0.0.1",
       acceptedUserAgent: "SIGNUP-2 Phase 2G Fixture",
       acceptedByMicrosoftOid: spec.oid,
-      acceptedByMicrosoftTenantId: "00000000-2g2g-ffff-2g2g-000000000000",
-      acceptedByEmail: adminEmail,
+      acceptedByMicrosoftTid: "00000000-2g2g-ffff-2g2g-000000000000",
     },
   });
 
@@ -1110,13 +1109,12 @@ async function phase2gSeed(scenario) {
     data: {
       signupRegistrationId: reg.id,
       concept: "RELEASE",
-      adapter: "fixture",
-      source: "fixture-phase2g",
-      verdict: "PASS",
+      finding: "AUTHORISED",
+      evidenceSource: "fixture-phase2g",
       operatorUserId: "fixture-phase2g-operator",
       verifiedAt: now,
       expiresAt: expires,
-      detailJson: JSON.stringify({ scenario, fixture: "phase2g" }),
+      reason: `Phase 2G fixture release (${scenario})`,
     },
   });
 
@@ -1124,8 +1122,6 @@ async function phase2gSeed(scenario) {
   await prisma.subscriptionPaymentMandate.create({
     data: {
       signupRegistrationId: reg.id,
-      clubId: null,
-      stripeCustomerId: `cus_mock_${scenario}_${reg.id.slice(-6)}`,
       stripeMandateId: `mandate_mock_${scenario}_${reg.id.slice(-6)}`,
       stripePaymentMethodId: `pm_mock_${scenario}_${reg.id.slice(-6)}`,
       mandateType: "ACSS_DEBIT",
@@ -1361,7 +1357,7 @@ async function phase2gInspect(scenario) {
     provisionedUser: user,
     userClubRole: userRole,
     job,
-  }, null, 2));
+  }));
 }
 
 async function phase2gReverse(scenario) {
