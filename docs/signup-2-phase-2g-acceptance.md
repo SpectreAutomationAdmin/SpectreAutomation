@@ -1,6 +1,6 @@
 # SIGNUP-2 Phase 2G — Acceptance Evidence
 
-**Status.** READY FOR FOUNDER ACCEPTANCE (STAGING, MOCK-BACKED).
+**Status.** CONDITIONALLY ACCEPTED AND CLOSED (STAGING, MOCK-BACKED, 2026-10-26).
 Phase 2G durable tenant provisioning is implemented, deployed to
 `spectre-staging`, migrated, and validated under a controlled flag
 window with a 5-scenario deployed Playwright + 90-assertion contract
