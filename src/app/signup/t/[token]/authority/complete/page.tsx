@@ -122,7 +122,7 @@ export default async function AuthorityCompletePage({
                 subscription.  We&rsquo;ll be in touch when the next step is
                 ready.
               </p>
-            ) : verification.verificationVerdict === "PASS_AUTOMATED" ? (
+            ) : verification.verificationVerdict === "PASS_AUTOMATED" || verification.verificationVerdict === "MANUAL_RELEASE" ? (
               <p data-testid="signup-verification-pass">
                 Verification is complete.  The next step &mdash; secure
                 collection of the pre-authorised debit mandate &mdash; is

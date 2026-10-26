@@ -8288,6 +8288,10 @@ model BillingCycle {
   reversedAt                 DateTime?
   reversalReason             String?
 
+  // SIGNUP-2 Phase 2E (2026-10-26) -- Phase 2D trust anchor FK.
+  releasedByOperatorRecordId String?
+  releasedByOperatorRecord   OperatorVerificationRecord? @relation(fields: [releasedByOperatorRecordId], references: [id])
+
   provisioningJob       TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
 
@@ -8295,6 +8299,7 @@ model BillingCycle {
   @@index([clubId, status])
   @@index([subscriptionStatus])
   @@index([stripePaymentIntentId])
+  @@index([releasedByOperatorRecordId])
 }
 
 // =========================================================================
@@ -10588,6 +10593,9 @@ model OperatorVerificationRecord {
   expiresAt             DateTime?
   createdAt             DateTime @default(now())
 
+  // SIGNUP-2 Phase 2E (2026-10-26) -- back-relation for BillingCycle FK.
+  cycles                BillingCycle[]
+
   @@index([signupRegistrationId, createdAt])
   @@index([operatorUserId, createdAt])
   @@index([concept, createdAt])
@@ -10689,8 +10697,9 @@ model SubscriptionAuthorisationAttestation {
 
 model SubscriptionPaymentMandate {
   id                       String   @id @default(cuid())
-  clubId                   String
-  clubSubscription         ClubSubscription  @relation(fields: [clubId], references: [clubId])
+  // SIGNUP-2 Phase 2E (2026-10-26) -- clubId made nullable (pre-tenancy writes).
+  clubId                   String?
+  clubSubscription         ClubSubscription? @relation(fields: [clubId], references: [clubId])
   signupRegistrationId     String?
   stripePaymentMethodId    String   @unique
   stripeMandateId          String   @unique

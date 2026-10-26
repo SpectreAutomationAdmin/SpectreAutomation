@@ -8504,6 +8504,14 @@ model BillingCycle {
   reversedAt             DateTime?
   reversalReason         String?
 
+  // SIGNUP-2 Phase 2E (2026-10-26) -- Phase 2D trust anchor.
+  // Nullable FK to the OperatorVerificationRecord(concept=RELEASE)
+  // row that authorised this cycle.  Populated by Phase 2E when
+  // the first cycle is created at mandate signing.  Null for
+  // legacy / pre-2E cycles.
+  releasedByOperatorRecordId String?
+  releasedByOperatorRecord   OperatorVerificationRecord? @relation(fields: [releasedByOperatorRecordId], references: [id])
+
   provisioningJob   TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
 
@@ -8511,6 +8519,7 @@ model BillingCycle {
   @@index([clubId, status])
   @@index([subscriptionStatus])
   @@index([stripePaymentIntentId])
+  @@index([releasedByOperatorRecordId])
 }
 
 // =========================================================================
@@ -10775,6 +10784,12 @@ model OperatorVerificationRecord {
   expiresAt             DateTime? // freshness window (STANDING defaults verifiedAt + 24h; AUTHORITY optional)
   createdAt             DateTime @default(now())
 
+  // SIGNUP-2 Phase 2E (2026-10-26) -- back-relation for the FK on
+  // BillingCycle.releasedByOperatorRecordId.  Phase 2E's first-cycle
+  // writer attaches this release record to the cycle; downstream
+  // audits reach the full operator provenance chain from the cycle.
+  cycles                BillingCycle[]
+
   @@index([signupRegistrationId, createdAt])
   @@index([operatorUserId, createdAt])
   @@index([concept, createdAt])
@@ -10863,8 +10878,15 @@ model SubscriptionAuthorisationAttestation {
 // text + bank account details.
 model SubscriptionPaymentMandate {
   id                       String   @id @default(cuid())
-  clubId                   String
-  clubSubscription         ClubSubscription  @relation(fields: [clubId], references: [clubId])
+  // SIGNUP-2 Phase 2E (2026-10-26) -- clubId made nullable so
+  // Phase 2E can persist a signed mandate BEFORE Phase 2G provisions
+  // the Club shell.  Pre-2E rows (none exist on staging today) keep
+  // whatever value they had; Phase 2E rows start with null.  Phase
+  // 2G backfills clubId when the Club shell is created.  This
+  // mirrors the Phase 2B SubscriptionAuthorisationAttestation
+  // pattern.
+  clubId                   String?
+  clubSubscription         ClubSubscription? @relation(fields: [clubId], references: [clubId])
   signupRegistrationId     String?
   stripePaymentMethodId    String   @unique
   stripeMandateId          String   @unique

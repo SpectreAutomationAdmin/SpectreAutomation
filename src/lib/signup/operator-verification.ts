@@ -345,8 +345,20 @@ export async function releaseRegistration(
   const reg = await loadRegistrationForOperator(registrationId);
   assertNotApplicant(principal, reg);
 
-  // Idempotent-replay: already-released returns a no-op.
-  if (reg.verificationVerdict === "PASS_AUTOMATED") {
+  // SIGNUP-2 Phase 2E correction (founder §2, 2026-10-26):
+  //   Do NOT set verificationVerdict = PASS_AUTOMATED for a manual
+  //   three-operator release.  PASS_AUTOMATED is reserved for
+  //   future automated-corroborator PASS outcomes (Phase 2C
+  //   routing matrix rule 8).  Manual operator releases use the
+  //   distinct MANUAL_RELEASE verdict so Phase 2E downstream can
+  //   distinguish the two provenance classes.
+  //
+  // Both verdicts are terminal AUTHORISED-equivalent outputs that
+  // Phase 2E's mandate-collection accepts; Phase 2E's acceptance
+  // doc records which path produced the authorisation.
+  //
+  // Idempotent-replay: already-released (either verdict) returns a no-op.
+  if (reg.verificationVerdict === "MANUAL_RELEASE" || reg.verificationVerdict === "PASS_AUTOMATED") {
     logger.info("signup.operator.release.replay", {
       registrationIdTail: registrationId.slice(-6),
     });
@@ -405,7 +417,9 @@ export async function releaseRegistration(
     const applied = await tx.signupRegistration.updateMany({
       where: { id: registrationId, verificationVerdict: "HOLD_FOR_REVIEW" },
       data: {
-        verificationVerdict: "PASS_AUTOMATED",
+        // Phase 2E correction (founder §2): manual-release path writes
+        // MANUAL_RELEASE, not PASS_AUTOMATED.
+        verificationVerdict: "MANUAL_RELEASE",
         verificationDecidedAt: now,
         verificationDeciderUserId: principal.id,
         signingAuthoritySignal: "OPERATOR_RELEASE",
@@ -436,7 +450,7 @@ export async function releaseRegistration(
       },
       select: { id: true },
     });
-    return { noop: false as const, verdict: "PASS_AUTOMATED" as const, recordId: row.id };
+    return { noop: false as const, verdict: "MANUAL_RELEASE" as const, recordId: row.id };
   });
 
   if (!result.noop) {
@@ -483,7 +497,7 @@ export async function rejectRegistration(
     });
     return { noop: true as const, verdict: reg.verificationVerdict };
   }
-  if (reg.verificationVerdict === "PASS_AUTOMATED") {
+  if (reg.verificationVerdict === "MANUAL_RELEASE" || reg.verificationVerdict === "PASS_AUTOMATED") {
     throw new AppError(
       "SIGNUP_2D_REGISTRATION_AUTHORISED",
       "Registration is already AUTHORISED; reject refused",
@@ -607,7 +621,7 @@ export function computeQueueState(args: {
   standingVerified: boolean;
   authorityVerified: boolean;
 }): string {
-  if (args.verdict === "PASS_AUTOMATED") return "RELEASED";
+  if (args.verdict === "PASS_AUTOMATED" || args.verdict === "MANUAL_RELEASE") return "RELEASED";
   if (args.verdict === "REJECT") return "REJECTED";
   if (args.holdCategory === "SUSPECTED_IMPERSONATION") return "SUSPECTED_IMPERSONATION";
   if (args.holdCategory === "CONFLICTING_EVIDENCE") return "CONFLICTING_EVIDENCE";

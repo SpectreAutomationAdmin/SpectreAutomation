@@ -116,9 +116,22 @@ describe("SIGNUP-2 Phase 2D · service enforces every entry-point invariant (sou
     expect(SERVICE).toMatch(/data:\s*\{[\s\S]+?verificationVerdict:\s*"REJECT"[\s\S]+?status:\s*"ABANDONED"/);
   });
 
-  it("idempotent-replay guard: already-released returns noop without re-writing", () => {
-    expect(SERVICE).toMatch(/reg\.verificationVerdict === "PASS_AUTOMATED"[\s\S]+?return \{ noop: true as const/);
+  it("idempotent-replay guard: already-released (either verdict) returns noop without re-writing", () => {
+    // Phase 2E correction (founder §2): the release path now writes
+    // MANUAL_RELEASE (not PASS_AUTOMATED).  The replay guard accepts
+    // both verdicts as terminal.
+    expect(SERVICE).toMatch(/reg\.verificationVerdict === "MANUAL_RELEASE" \|\| reg\.verificationVerdict === "PASS_AUTOMATED"/);
     expect(SERVICE).toMatch(/reg\.verificationVerdict === "REJECT"[\s\S]+?return \{ noop: true as const/);
+  });
+
+  it("release transition writes verificationVerdict = MANUAL_RELEASE (not PASS_AUTOMATED)", () => {
+    // Founder §2 of Phase 2E planning email: a manual three-operator
+    // release must NOT set PASS_AUTOMATED (reserved for automated
+    // corroborator pass).
+    expect(SERVICE).toMatch(/verificationVerdict:\s*"MANUAL_RELEASE"/);
+    // Not accidentally writing PASS_AUTOMATED in the release path.
+    const releaseBlock = SERVICE.match(/export async function releaseRegistration[\s\S]+?^}/m)!;
+    expect(releaseBlock[0]).not.toMatch(/verificationVerdict:\s*"PASS_AUTOMATED"/);
   });
 
   it("evidence-reference length cap enforced server-side", () => {
@@ -163,6 +176,9 @@ describe("SIGNUP-2 Phase 2D · service enforces every entry-point invariant (sou
 describe("SIGNUP-2 Phase 2D · computeQueueState covers all eight UI states", () => {
   it("verdict PASS_AUTOMATED → RELEASED", () => {
     expect(computeQueueState({ verdict: "PASS_AUTOMATED", holdCategory: null, standingVerified: true, authorityVerified: true })).toBe("RELEASED");
+  });
+  it("verdict MANUAL_RELEASE → RELEASED (Phase 2E §2 correction)", () => {
+    expect(computeQueueState({ verdict: "MANUAL_RELEASE", holdCategory: null, standingVerified: true, authorityVerified: true })).toBe("RELEASED");
   });
   it("verdict REJECT → REJECTED", () => {
     expect(computeQueueState({ verdict: "REJECT", holdCategory: null, standingVerified: false, authorityVerified: false })).toBe("REJECTED");
