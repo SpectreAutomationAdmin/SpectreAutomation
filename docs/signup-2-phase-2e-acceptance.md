@@ -1,6 +1,14 @@
 # SIGNUP-2 Phase 2E — Acceptance Evidence
 
-**Status.** READY FOR FOUNDER ACCEPTANCE.
+**Status.** TECHNICALLY ACCEPTED BY FOUNDER 2026-10-26
+(MOCK-BACKED STAGING BASELINE).  Covers the payment-architecture +
+tested controls as implemented against the mock StripeAdapter.
+Does NOT constitute acceptance of a live Stripe integration,
+payment collection, or tenant activation.
+**Follow-up tracker.** Live Stripe integration dependencies are
+tracked in [signup-2-phase-2e-stripe-followup.md](signup-2-phase-2e-stripe-followup.md).
+**Final baseline.** `sha-993e5fd` (implementation) + `sha-0249aed`
+(acceptance evidence) on Fly image `sha-993e5fd77ceb`.
 **Authored branch.** `staging-deploy/web1b1-framer-fidelity`.
 **Depends on.** Phase 2A (sha-c3e337e / v870), Phase 2B
 (sha-9c717e1 / v875), Phase 2C (sha-adfe13c / v877), Phase 2D
