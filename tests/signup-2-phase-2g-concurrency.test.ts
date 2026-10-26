@@ -63,8 +63,31 @@ describe("SIGNUP-2 Phase 2G · idempotency anchors", () => {
     const step = SERVICE.match(/async function stepRolesAssigned[\s\S]+?^}/m)![0];
     expect(step).toMatch(/job\?\.rolesAssignedBatchKey/);
   });
-  it("stub steps all stamp an anchor key", () => {
-    const stub = SERVICE.match(/function makeStubStep[\s\S]+?^}/m)![0];
+  it("stub steps stamp an anchor key when permitted", () => {
+    const startIdx = SERVICE.indexOf("function makeStubStep");
+    const after = SERVICE.slice(startIdx);
+    const endRel = after.search(/\nconst STEP_HANDLERS/);
+    const stub = endRel === -1 ? after : after.slice(0, endRel);
     expect(stub).toMatch(/idempotencyAnchor: \{ \[anchorField\]: batchKey \}/);
+  });
+});
+
+describe("SIGNUP-2 Phase 2G · stub step production-safety (founder closure §4)", () => {
+  it("stub steps refuse unless mock-backed AND testOnly env is set", () => {
+    const startIdx = SERVICE.indexOf("function makeStubStep");
+    const after = SERVICE.slice(startIdx);
+    const endRel = after.search(/\nconst STEP_HANDLERS/);
+    const stub = endRel === -1 ? after : after.slice(0, endRel);
+    expect(stub).toMatch(/SIGNUP_2G_STUB_STEP_PRODUCTION_REFUSED/);
+    expect(stub).toMatch(/authorisationEvidenceSource === "mock-stripe"/);
+    expect(stub).toMatch(/process\.env\[PHASE_2G_TESTONLY_ENV\] === "1"/);
+    expect(stub).toMatch(/if \(!isMockBacked \|\| !testOnlyEnabled\)/);
+  });
+  it("refusal is 501 (Not Implemented) -- real importer wiring deferred", () => {
+    const startIdx = SERVICE.indexOf("function makeStubStep");
+    const after = SERVICE.slice(startIdx);
+    const endRel = after.search(/\nconst STEP_HANDLERS/);
+    const stub = endRel === -1 ? after : after.slice(0, endRel);
+    expect(stub).toMatch(/501/);
   });
 });

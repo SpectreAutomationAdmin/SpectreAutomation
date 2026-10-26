@@ -301,6 +301,113 @@ runAt(
     }
 
     // ============================================================
+    // F. Mock-evidence rejection by production-capable path
+    //    (founder closure §3).
+    //
+    //    1. Seed a fresh mock-backed job (phase2g-seed happy).
+    //    2. Flip SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING OFF
+    //       on the deployed container (simulating production).
+    //    3. Wait for the Fly machine to restart with the new env.
+    //    4. Tick WITHOUT a testOnly query param (there is no such
+    //       param in Phase 2G -- the service controls isolation
+    //       via env, which this scenario proves).
+    //    5. Assert the tick response records
+    //       outcome.ok=false, reason="MOCK_EVIDENCE_REJECTED".
+    //    6. Inspect: NO club was created, no user was created, no
+    //       Tier 2 granted (ClubSubscription for the fixture Club
+    //       remains STAGED).
+    //    7. Also test the production-safety stub-step refusal:
+    //       even if a caller sets testOnly on the URL (we never
+    //       accept it anyway), a stub step called in production
+    //       mode would refuse with 501.
+    //    8. Restore the env var + confirm teardown is clean.
+    // ============================================================
+    sshExec("phase2g-teardown"); // fresh state
+    const fSeed = parseFirstJson(sshExec("phase2g-seed happy"));
+    writeFileSync(path.join(outDir, "signup-2-2g-F-seed.json"), JSON.stringify(fSeed, null, 2));
+    const fJobId = fSeed.tenantProvisioningJobId;
+
+    // Flip the mock-isolation env var OFF.
+    execSync(
+      `"${FLYCTL}" secrets unset --app spectre-staging SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING`,
+      { encoding: "utf8", timeout: 180_000 },
+    );
+    // The unset triggers a rolling restart; wait for /api/health.
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      try {
+        const h = await page.request.get(`${BASE}/api/health`, { failOnStatusCode: false });
+        if (h.status() === 200) break;
+      } catch { /* keep waiting */ }
+    }
+
+    // The founder's SUPER_ADMIN session may be invalidated by the
+    // restart (Session cache resets).  Re-login as the synthetic
+    // SUPER_ADMIN to drive the next calls cleanly.
+    await ctx.close();
+    const fCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const fPage = await fCtx.newPage();
+    await fPage.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+    await fPage.locator('input[name="email"]').fill(operatorFixture.email);
+    await fPage.locator('input[name="password"]').fill(operatorFixture.password);
+    await Promise.all([
+      fPage.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 30_000 }),
+      fPage.locator('form button[type="submit"]').first().click(),
+    ]);
+
+    const fTick = await fPage.request.post(`${tickUrl}?jobId=${fJobId}`, { failOnStatusCode: false });
+    const fBody = await fTick.text();
+    writeFileSync(path.join(outDir, "signup-2-2g-F-production-tick.json"), JSON.stringify({
+      status: fTick.status(),
+      body: fBody,
+    }, null, 2));
+    expect(fTick.status(), "F: tick status 200").toBe(200);
+    const fParsed = JSON.parse(fBody);
+    expect(fParsed.outcome.ok, "F: production path refused the mock job").toBe(false);
+    expect(fParsed.outcome.reason, "F: refusal reason = MOCK_EVIDENCE_REJECTED").toBe("MOCK_EVIDENCE_REJECTED");
+
+    // Also try adding a testOnly query param -- Phase 2G routes do
+    // NOT accept such a parameter; the service controls isolation
+    // via env only.  The result must still be MOCK_EVIDENCE_REJECTED.
+    const fTickBypass = await fPage.request.post(`${tickUrl}?jobId=${fJobId}&testOnly=1`, { failOnStatusCode: false });
+    const fBypassBody = await fTickBypass.text();
+    writeFileSync(path.join(outDir, "signup-2-2g-F-testOnly-bypass.json"), JSON.stringify({
+      status: fTickBypass.status(),
+      body: fBypassBody,
+    }, null, 2));
+    const fBypassParsed = JSON.parse(fBypassBody);
+    expect(fBypassParsed.outcome.ok, "F: testOnly query param cannot bypass").toBe(false);
+    expect(fBypassParsed.outcome.reason).toBe("MOCK_EVIDENCE_REJECTED");
+
+    // Inspect: no User created, no new Club, no Tier 2 grant.
+    const fInspect = parseFirstJson(sshExec("phase2g-inspect happy"));
+    writeFileSync(path.join(outDir, "signup-2-2g-F-inspect.json"), JSON.stringify(fInspect, null, 2));
+    expect(fInspect.job.provisionedUserId, "F: no user created").toBeNull();
+    expect(fInspect.job.provisionedClubId, "F: no club created").toBeNull();
+    expect(fInspect.job.state).toBe("CREATED");
+    // No ClubSubscription was activated (the fixture's seed
+    // ClubSubscription has accessTier=STAGED by construction).
+    if (fInspect.clubSubscription) {
+      expect(fInspect.clubSubscription.accessTier).not.toBe("FULL");
+      expect(fInspect.clubSubscription.subscriptionStatus).not.toBe("ACTIVE");
+    }
+
+    // Restore the mock-isolation env var (so the acceptance can
+    // complete + the final flag-off step clears everything).
+    execSync(
+      `"${FLYCTL}" secrets set --app spectre-staging SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING=1`,
+      { encoding: "utf8", timeout: 180_000 },
+    );
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      try {
+        const h = await fPage.request.get(`${BASE}/api/health`, { failOnStatusCode: false });
+        if (h.status() === 200) break;
+      } catch { /* keep waiting */ }
+    }
+    await fCtx.close();
+
+    // ============================================================
     // Teardown summary + explicit per-scenario teardown.
     // ============================================================
     const teardownBody = sshExec("phase2g-teardown");
@@ -310,7 +417,7 @@ runAt(
     const opJson = parseFirstJson(operatorTeardown);
     expect(opJson.remainingSyntheticSuperAdmins, "zero synthetic admins remain").toBe(0);
     expect(opJson.tosRemoval.removed).toBe(true);
-
-    await ctx.close();
+    // ctx was already closed inside scenario F; fCtx was closed
+    // after the env restore.  Nothing left to close here.
   },
 );

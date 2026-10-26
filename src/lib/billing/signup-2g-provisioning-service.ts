@@ -374,9 +374,33 @@ async function stepRolesAssigned(ctx: StepHandlerContext): Promise<{ idempotency
 /** Mock-stub steps.  Phase 2G baseline stamps the per-step batch
  *  key so replay is a no-op; the live COA import / branding upload
  *  / invitation delivery / welcome-mail wiring is deferred to the
- *  live-tenant acceptance slice.  Each step still writes an audit. */
+ *  live-tenant acceptance slice.
+ *
+ *  Production-safety (founder §4 of the Phase 2G closure, 2026-10-26):
+ *  these stub handlers REFUSE to stamp a placeholder anchor unless
+ *  BOTH (a) the job's evidence is mock-backed (`mock-stripe`) AND
+ *  (b) the staging-only testOnly env var is set.  Any job on a
+ *  production-capable path (live-stripe evidence, or mock-stripe
+ *  without the testOnly env) is refused with
+ *  `SIGNUP_2G_STUB_STEP_PRODUCTION_REFUSED` so a real tenant can
+ *  never reach FULL / ACTIVE via a placeholder step completion.
+ *  The real importer / mailer wiring will replace these stubs in
+ *  a separately-authorised live-tenant slice. */
 function makeStubStep(anchorField: string, label: string): StepHandler {
   return async (_state, ctx) => {
+    const job = await prisma.tenantProvisioningJob.findUnique({
+      where: { id: ctx.jobId },
+      select: { authorisationEvidenceSource: true },
+    });
+    const isMockBacked = job?.authorisationEvidenceSource === "mock-stripe";
+    const testOnlyEnabled = process.env[PHASE_2G_TESTONLY_ENV] === "1";
+    if (!isMockBacked || !testOnlyEnabled) {
+      throw new AppError(
+        "SIGNUP_2G_STUB_STEP_PRODUCTION_REFUSED",
+        `step ${label} is an acceptance-only stub; production provisioning requires the real implementation (deferred residual in Phase 2G acceptance doc)`,
+        501,
+      );
+    }
     const batchKey = `${label}:${ctx.jobId.slice(-12)}`;
     return { idempotencyAnchor: { [anchorField]: batchKey } };
   };
