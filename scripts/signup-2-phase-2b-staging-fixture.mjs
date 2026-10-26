@@ -1696,6 +1696,199 @@ async function phase2hAdminFixtureTeardown() {
   console.log(JSON.stringify({ destroyed, remainingPhase2hFixtureUsers: remaining }));
 }
 
+// ---------------------------------------------------------------
+// M1 (2026-10-26) fixtures.  Covers founder §5 scenarios:
+//   active -- a Phase 2H-enrolled tenant in ACTIVE/FULL ready to
+//     be suspended by a webhook event.
+// Fixture Club + ClubSubscription + BillingCycle created with a
+// mock payment-intent id so the webhook dispatcher can correlate
+// a replayed Stripe event back to it.
+// ---------------------------------------------------------------
+const M1_FIXTURE_PREFIX = "signup-2-m1-fixture-";
+const M1_SCENARIOS = {
+  "active": {},
+};
+
+async function m1Seed(scenario) {
+  if (!(scenario in M1_SCENARIOS)) {
+    console.error(`[m1-seed] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  await m1TeardownScenario(scenario, { silent: true });
+  const now = new Date();
+  const slug = `${M1_FIXTURE_PREFIX}${scenario}-${now.getTime().toString(36).slice(-8)}`;
+  const club = await prisma.club.create({
+    data: {
+      slug,
+      name: `M1 Fixture Club (${scenario})`,
+      region: "AB",
+      salesTaxRegion: "GST",
+      foundedYear: 2026,
+      timezone: "America/Edmonton",
+      stagingDataMode: "SYNTHETIC_DEMO",
+    },
+  });
+  await prisma.clubSubscription.create({
+    data: {
+      clubId: club.id,
+      status: "ACTIVE",
+      subscriptionStatus: "ACTIVE",
+      accessTier: "FULL",
+      activatedAt: now,
+    },
+  });
+  // Deterministic payment-intent + charge ids so the webhook event
+  // JSON can address them.
+  const paymentIntentId = `pi_mock_m1_${club.id.slice(-6)}`;
+  const chargeId = `ch_mock_m1_${club.id.slice(-6)}`;
+  const cycle = await prisma.billingCycle.create({
+    data: {
+      clubId: club.id,
+      periodLabel: `${M1_FIXTURE_PREFIX}cycle-${scenario}-${club.id.slice(-6)}`,
+      startDate: now,
+      endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+      totalDue: 38000.00,
+      totalPaid: 38000.00,
+      status: "OPEN",
+      subscriptionStatus: "ACTIVE",
+      source: "STRIPE_ACSS",
+      stripePaymentIntentId: paymentIntentId,
+      stripeChargeId: chargeId,
+      stripeBalanceTransactionId: `btxn_mock_m1_${club.id.slice(-6)}`,
+      expectedDebitDate: now,
+      settlementConfirmedAt: now,
+    },
+    select: { id: true },
+  });
+  console.log(JSON.stringify({
+    scenario,
+    clubId: club.id,
+    slug,
+    billingCycleId: cycle.id,
+    paymentIntentId,
+    chargeId,
+  }));
+}
+
+async function m1TeardownScenario(scenario, { silent = false } = {}) {
+  if (!(scenario in M1_SCENARIOS)) {
+    if (!silent) console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  const clubs = await prisma.club.findMany({
+    where: { slug: { startsWith: `${M1_FIXTURE_PREFIX}${scenario}-` } },
+    select: { id: true },
+  });
+  const clubIds = clubs.map((c) => c.id);
+  if (clubIds.length === 0) {
+    if (!silent) console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  await prisma.tenantLifecycleTransition.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.paymentReconciliationEntry.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.operatorInboxEntry.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.billingCycle.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.userClubRole.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.clubSubscription.deleteMany({ where: { clubId: { in: clubIds } } });
+  // Delete any webhook events we persisted via m1-persist-webhook-event.
+  await prisma.stripeWebhookEvent.deleteMany({
+    where: { payloadJson: { contains: clubIds[0].slice(-6) } },
+  }).catch(() => {});
+  await prisma.club.deleteMany({ where: { id: { in: clubIds } } });
+  if (!silent) console.log(JSON.stringify({ destroyed: clubIds.length }));
+}
+
+async function m1TeardownAll() {
+  let total = 0;
+  for (const key of Object.keys(M1_SCENARIOS)) {
+    await m1TeardownScenario(key, { silent: true });
+    total++;
+  }
+  console.log(JSON.stringify({ scenariosDestroyed: total }));
+}
+
+async function m1Inspect(scenario) {
+  if (!(scenario in M1_SCENARIOS)) {
+    console.error(`[m1-inspect] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const club = await prisma.club.findFirst({
+    where: { slug: { startsWith: `${M1_FIXTURE_PREFIX}${scenario}-` } },
+    select: { id: true, slug: true, name: true },
+  });
+  if (!club) {
+    console.log(JSON.stringify({ scenario, missing: true }));
+    return;
+  }
+  const sub = await prisma.clubSubscription.findUnique({
+    where: { clubId: club.id },
+    select: {
+      subscriptionStatus: true,
+      accessTier: true,
+      status: true,
+      activatedAt: true,
+      provisioningCancelledAt: true,
+    },
+  });
+  const cycle = await prisma.billingCycle.findFirst({
+    where: { clubId: club.id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      subscriptionStatus: true,
+      reversedAt: true,
+      stripeChargeId: true,
+      stripePaymentIntentId: true,
+    },
+  });
+  const transitions = await prisma.tenantLifecycleTransition.findMany({
+    where: { clubId: club.id },
+    orderBy: { effectiveAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      previousStatus: true,
+      newStatus: true,
+      trigger: true,
+      operatorUserId: true,
+      authoriserUserId: true,
+      reasonCode: true,
+      effectiveAt: true,
+    },
+  });
+  const webhookEvents = await prisma.stripeWebhookEvent.findMany({
+    where: { payloadJson: { contains: club.id.slice(-6) } },
+    orderBy: { receivedAt: "desc" },
+    take: 20,
+    select: { id: true, eventType: true, processedAt: true, processingResult: true, receivedAt: true },
+  });
+  console.log(JSON.stringify({
+    scenario,
+    club,
+    subscription: sub,
+    billingCycle: cycle,
+    transitions,
+    webhookEvents,
+  }));
+}
+
+async function m1PersistWebhookEvent(payloadJson) {
+  const parsed = JSON.parse(payloadJson);
+  const existing = await prisma.stripeWebhookEvent.findUnique({ where: { id: parsed.id } });
+  if (existing) {
+    console.log(JSON.stringify({ eventId: parsed.id, replay: true }));
+    return;
+  }
+  await prisma.stripeWebhookEvent.create({
+    data: {
+      id: parsed.id,
+      eventType: parsed.type,
+      payloadJson: JSON.stringify(parsed),
+    },
+  });
+  console.log(JSON.stringify({ eventId: parsed.id, persisted: true }));
+}
+
 async function main() {
   const action = process.argv[2];
   if (action === "create") {
@@ -1815,6 +2008,29 @@ async function main() {
     await phase2hAdminFixtureSetup();
   } else if (action === "phase2h-admin-fixture-teardown") {
     await phase2hAdminFixtureTeardown();
+  } else if (action === "m1-seed") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... m1-seed <active>");
+      process.exit(2);
+    }
+    await m1Seed(scenario);
+  } else if (action === "m1-teardown") {
+    await m1TeardownAll();
+  } else if (action === "m1-inspect") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... m1-inspect <scenario>");
+      process.exit(2);
+    }
+    await m1Inspect(scenario);
+  } else if (action === "m1-persist-webhook-event") {
+    const payloadJson = process.argv[3];
+    if (!payloadJson) {
+      console.error("Usage: ... m1-persist-webhook-event <json>");
+      process.exit(2);
+    }
+    await m1PersistWebhookEvent(payloadJson);
   } else {
     console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict|super-admin-list|phase2d-setup|phase2d-teardown}");
     process.exit(2);

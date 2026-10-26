@@ -151,10 +151,19 @@ export async function suspendTenant(args: SuspendArgs): Promise<LifecycleResult>
   // transaction, so an in-flight write will see the new state).
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const sub = await tx.clubSubscription.findUnique({
-        where: { clubId: args.clubId },
-        select: { subscriptionStatus: true, accessTier: true },
-      });
+      // M1 (2026-10-26): SELECT ... FOR UPDATE acquires a row-level
+      // write lock on the ClubSubscription.  The posting-guard
+      // (withPostingGuard / assertPostingAllowed({tx})) takes the
+      // same lock on the same row inside the write's transaction,
+      // so a protected write + a suspension cannot interleave.
+      const rows = (await tx.$queryRawUnsafe(
+        `SELECT "subscriptionStatus", "accessTier"
+           FROM "ClubSubscription"
+           WHERE "clubId" = $1
+           FOR UPDATE`,
+        args.clubId,
+      )) as Array<{ subscriptionStatus: string | null; accessTier: string | null }>;
+      const sub = rows[0] ?? null;
       if (!sub) {
         return { ok: false as const, reason: "NO_SUBSCRIPTION" as const, detail: "no ClubSubscription row for clubId" };
       }
@@ -423,11 +432,17 @@ export async function reinstateTenant(args: ReinstateArgs): Promise<LifecycleRes
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // Re-read inside tx (TOCTOU defence).
-      const relock = await tx.clubSubscription.findUnique({
-        where: { clubId: args.clubId },
-        select: { subscriptionStatus: true, accessTier: true },
-      });
+      // M1 (2026-10-26): FOR UPDATE on ClubSubscription row.
+      // Serialises reinstatement against any protected write that
+      // took the same lock through withPostingGuard.
+      const rows = (await tx.$queryRawUnsafe(
+        `SELECT "subscriptionStatus", "accessTier"
+           FROM "ClubSubscription"
+           WHERE "clubId" = $1
+           FOR UPDATE`,
+        args.clubId,
+      )) as Array<{ subscriptionStatus: string | null; accessTier: string | null }>;
+      const relock = rows[0] ?? null;
       if (!relock || relock.subscriptionStatus !== previousStatus) {
         return {
           ok: false as const,

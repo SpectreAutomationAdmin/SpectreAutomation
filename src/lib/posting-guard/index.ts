@@ -20,6 +20,19 @@ import type { Principal } from "../rbac";
 import { assertNotTraining } from "../training";
 import { assertAllowedAction } from "../support-access";
 import { assertAccessTierForPosting } from "../billing/access-tier";
+import { prisma } from "../prisma";
+
+/** M1 (2026-10-26) -- `tx` passes a Prisma transaction client into
+ *  the access-tier check so the ClubSubscription row is row-locked
+ *  with `SELECT ... FOR UPDATE` for the duration of the caller's
+ *  transaction.  Suspension (Phase 2H) takes the same lock, so the
+ *  race between a protected write and a suspension flip is closed.
+ *  Legacy call-sites that don't yet pass `tx` keep the pre-M1
+ *  Phase 2B semantics (no lock); migration to withPostingGuard() is
+ *  tracked per the M1 acceptance doc. */
+type MinimalTxClient = {
+  $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]>;
+};
 
 export async function assertPostingAllowed(
   principal: Principal,
@@ -27,6 +40,7 @@ export async function assertPostingAllowed(
   action: string,
   entityType?: string,
   entityId?: string,
+  opts?: { tx?: MinimalTxClient },
 ) {
   // Training-mode gate (per-club).
   await assertNotTraining(clubId, action);
@@ -41,13 +55,49 @@ export async function assertPostingAllowed(
     entityId,
   });
   // SIGNUP-2 Phase 2B (2026-10-25) -- subscription access-tier gate.
-  // Legacy ClubSubscription rows have accessTier=null, which the
-  // gate treats as grandfathered PASS; existing tenants are
-  // unaffected.  New SIGNUP-2 tenants in STAGED tier (Phase 2G+)
-  // will be refused here with ForbiddenError, preventing posting
-  // on any Phase-2B+ Club that has not reached FULL (or operator-
-  // elected MANUAL_INVOICE).  See docs/signup-2-phase-2b-capability-matrix.md.
-  await assertAccessTierForPosting(clubId);
+  // M1 (2026-10-26): when a tx is provided, the gate takes
+  // SELECT ... FOR UPDATE on the ClubSubscription row for the
+  // duration of the caller's transaction.  Phase 2H suspendTenant +
+  // reinstateTenant take the same lock, closing the posting-vs-
+  // suspension race.  Legacy tenants (null subscriptionStatus)
+  // remain grandfathered.
+  await assertAccessTierForPosting(clubId, { tx: opts?.tx });
+}
+
+/** M1 (2026-10-26) -- the preferred posting-guard surface.
+ *
+ *  Opens a Prisma transaction, runs the posting-guard IN-TRANSACTION
+ *  with the row-lock on ClubSubscription, then runs the caller's
+ *  work with the same transaction client.  Suspension cannot
+ *  interleave with the protected write: either the suspension
+ *  commits first (and the guard refuses) or the write commits first
+ *  (and the suspension waits).
+ *
+ *  Usage:
+ *    return withPostingGuard(principal, clubId, "ar.charge.post", async (tx) => {
+ *      await tx.charge.create({ ... });
+ *      await tx.ledgerEntry.createMany({ ... });
+ *      return result;
+ *    }, { entityType: "Charge", entityId: chargeId });
+ *
+ *  The function MUST return the tx callback's result; it propagates
+ *  through unchanged.
+ */
+export async function withPostingGuard<T>(
+  principal: Principal,
+  clubId: string,
+  action: string,
+  work: (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => Promise<T>,
+  opts?: { entityType?: string; entityId?: string },
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await assertPostingAllowed(principal, clubId, action, opts?.entityType, opts?.entityId, {
+      // The $queryRawUnsafe method exists on the Prisma TransactionClient; cast
+      // through the structural type our evaluateAccessTierGate expects.
+      tx: tx as unknown as MinimalTxClient,
+    });
+    return work(tx);
+  });
 }
 
 // Sensitive (non-financial) actions where we want support-readonly to block

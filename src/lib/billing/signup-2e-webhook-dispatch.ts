@@ -25,6 +25,7 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/observability/logger";
 import { resolveStripeAdapter } from "./stripe-adapter";
 import type { StripeEventShape } from "./stripe-adapter";
+import { suspendTenant, type SuspensionTrigger } from "./signup-2h-tenant-lifecycle-service";
 
 export async function dispatchStripeEvent(event: StripeEventShape): Promise<void> {
   switch (event.type) {
@@ -142,6 +143,18 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
     body: `BillingCycle ${cycle.id.slice(-6)} received payment_intent.payment_failed.  Operator remediation required (Phase 2H).`,
     providerEventId: event.id,
   });
+  // M1 (2026-10-26): Phase 2H wiring.  A FAILED_RENEWAL trigger is
+  // raised when the FIRST cycle fails or a renewal cycle fails.
+  // Treat all payment_intent.payment_failed as FAILED_RENEWAL (the
+  // first-cycle case does not deliver settlement, so suspension
+  // only materialises if the tenant was previously ACTIVE -- i.e.
+  // this is a renewal failure).  Suspension is best-effort + idempotent.
+  await trySuspendFromWebhook({
+    clubId: cycle.clubId,
+    trigger: "FAILED_RENEWAL",
+    stripeEventId: event.id,
+    cycleId: cycle.id,
+  });
   logger.warn("stripe.webhook.payment_failed", { cycleIdTail: cycle.id.slice(-6) });
 }
 
@@ -216,6 +229,13 @@ async function onChargeRefunded(event: StripeEventShape) {
     body: `BillingCycle ${cycle.id.slice(-6)} received charge.refunded.  Activation signal revoked per Phase 2E §5.`,
     providerEventId: event.id,
   });
+  // M1 (2026-10-26): Phase 2H suspension wiring on confirmed reversal.
+  await trySuspendFromWebhook({
+    clubId: cycle.clubId,
+    trigger: "REFUND",
+    stripeEventId: event.id,
+    cycleId: cycle.id,
+  });
 }
 
 async function onChargeDisputeCreated(event: StripeEventShape) {
@@ -245,6 +265,99 @@ async function onChargeDisputeCreated(event: StripeEventShape) {
     title: "Charge disputed; activation signal revoked",
     body: `BillingCycle ${cycle.id.slice(-6)} received charge.dispute.created.  10 bd window begins; activation signal revoked per Phase 2E §5.`,
     providerEventId: event.id,
+  });
+  // M1 (2026-10-26): Phase 2H suspension wiring on confirmed dispute.
+  await trySuspendFromWebhook({
+    clubId: cycle.clubId,
+    trigger: "DISPUTE",
+    stripeEventId: event.id,
+    cycleId: cycle.id,
+  });
+}
+
+/** M1 (2026-10-26) -- try to call Phase 2H suspendTenant for a
+ *  confirmed reversal / dispute / failed-renewal event.  Suspension
+ *  is best-effort + idempotent + fail-closed on non-tenant errors:
+ *   - A tenant with subscriptionStatus=null (legacy) is skipped.
+ *   - A tenant already in UNDER_REVIEW / SUSPENDED / CANCELLED is
+ *     a no-op (returns INVALID_TRANSITION; we log + swallow).
+ *   - A real failure (e.g. Phase 2H flag OFF) is LOGGED but does
+ *     NOT re-raise -- the webhook event is already persisted + the
+ *     operator inbox entry is already written.
+ *
+ *  The suspendTenant call is OUTSIDE any DB transaction (never
+ *  holds a lock during a cross-service call) and NEVER contacts
+ *  Stripe (contrast with Phase 2F authoriseActivation).
+ */
+async function trySuspendFromWebhook(args: {
+  clubId: string;
+  trigger: SuspensionTrigger;
+  stripeEventId: string;
+  cycleId: string;
+}): Promise<void> {
+  // Correlation + enrollment check: skip legacy tenants (null
+  // subscriptionStatus) and tenants with no ClubSubscription row.
+  const sub = await prisma.clubSubscription.findUnique({
+    where: { clubId: args.clubId },
+    select: { subscriptionStatus: true, accessTier: true },
+  });
+  if (!sub) {
+    logger.info("stripe.webhook.suspension_skipped", {
+      reason: "no-subscription-row",
+      clubIdTail: args.clubId.slice(-6),
+      trigger: args.trigger,
+    });
+    return;
+  }
+  if (sub.subscriptionStatus === null) {
+    logger.info("stripe.webhook.suspension_skipped", {
+      reason: "legacy-tenant-grandfathered",
+      clubIdTail: args.clubId.slice(-6),
+      trigger: args.trigger,
+    });
+    return;
+  }
+  if (sub.subscriptionStatus !== "ACTIVE") {
+    // Already in a non-active state (UNDER_REVIEW, SUSPENDED,
+    // CANCELLED, REVERSED, PAYMENT_FAILED, etc.).  Suspension is
+    // idempotent -- a second reversal webhook for the same cycle
+    // does not re-suspend.  Log + skip.
+    logger.info("stripe.webhook.suspension_skipped", {
+      reason: `subscription-status-${sub.subscriptionStatus}`,
+      clubIdTail: args.clubId.slice(-6),
+      trigger: args.trigger,
+    });
+    return;
+  }
+
+  const outcome = await suspendTenant({
+    clubId: args.clubId,
+    trigger: args.trigger,
+    operatorUserId: "SYSTEM_PHASE_2E_WEBHOOK",
+    reasonCode: `WEBHOOK_${args.trigger}`,
+    reasonNotes: `Automatic suspension from Stripe webhook event ${args.stripeEventId.slice(-12)} for BillingCycle ${args.cycleId.slice(-6)}.`,
+    triggerEvidence: {
+      stripeEventId: args.stripeEventId,
+      billingCycleId: args.cycleId,
+    },
+  });
+
+  if (!outcome.ok) {
+    // INVALID_TRANSITION (already non-active), LEGACY_TENANT_PROTECTED,
+    // FLAG_OFF, or VALIDATION_FAILED -- all survivable from the
+    // webhook path.  Operator alerts are already written upstream.
+    logger.warn("stripe.webhook.suspension_refused", {
+      clubIdTail: args.clubId.slice(-6),
+      trigger: args.trigger,
+      reason: outcome.reason,
+      detail: outcome.detail,
+    });
+    return;
+  }
+  logger.info("stripe.webhook.suspension_triggered", {
+    clubIdTail: args.clubId.slice(-6),
+    trigger: args.trigger,
+    transitionIdTail: outcome.transitionId.slice(-6),
   });
 }
 

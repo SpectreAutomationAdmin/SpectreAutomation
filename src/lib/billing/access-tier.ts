@@ -198,16 +198,71 @@ export function readAccessTier(subscriptionAccessTier: string | null): AccessTie
 // trail is captured by the posting-guard seam's audit() call
 // (unchanged).
 
-/** Internal shared check used by both outward-facing asserts. */
-async function evaluateAccessTierGate(clubId: string): Promise<{ pass: boolean; detail: string }> {
-  const sub = await prisma.clubSubscription.findUnique({
-    where: { clubId },
-    select: { accessTier: true, subscriptionStatus: true },
-  });
+/** Transaction-aware access-tier evaluator.
+ *
+ *  When invoked WITHOUT a tx (legacy call-site), it reads the
+ *  ClubSubscription row with plain findUnique.  This preserves the
+ *  Phase 2B behaviour for the ~50 pre-existing posting-guard
+ *  call-sites that have not yet migrated.
+ *
+ *  When invoked WITH a tx (M1 call-site -- e.g. via
+ *  withPostingGuard() in src/lib/posting-guard), the evaluator issues
+ *  `SELECT ... FOR UPDATE` on ClubSubscription so the subscription
+ *  row is row-locked for the duration of the caller's transaction.
+ *  Phase 2H's suspendTenant + reinstateTenant use the same lock on
+ *  the same row, so suspension cannot interleave with a protected
+ *  write.  Legacy tenants (subscriptionStatus=null) short-circuit
+ *  with the same grandfather-PASS semantics.
+ *
+ *  The lock is a per-row Postgres advisory via FOR UPDATE; it does
+ *  NOT block reads from other transactions, only writes.  Suspension
+ *  and the protected write both take the lock; whichever acquires
+ *  first dictates ordering.
+ */
+async function evaluateAccessTierGate(
+  clubId: string,
+  opts?: { tx?: { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+): Promise<{ pass: boolean; detail: string }> {
+  let sub: { accessTier: string | null; subscriptionStatus: string | null } | null = null;
+  if (opts?.tx) {
+    // Transaction-bound read with FOR UPDATE.  Row-level lock held
+    // until the caller's tx commits or rolls back.
+    const rows = (await opts.tx.$queryRawUnsafe(
+      `SELECT "accessTier", "subscriptionStatus"
+         FROM "ClubSubscription"
+         WHERE "clubId" = $1
+         FOR UPDATE`,
+      clubId,
+    )) as Array<{ accessTier: string | null; subscriptionStatus: string | null }>;
+    sub = rows[0] ?? null;
+  } else {
+    sub = await prisma.clubSubscription.findUnique({
+      where: { clubId },
+      select: { accessTier: true, subscriptionStatus: true },
+    });
+  }
   if (!sub) return { pass: true, detail: "no-subscription-row" };
+  // Founder closure §1.5 preserved: legacy tenants with null
+  // subscriptionStatus pass regardless of accessTier.
+  if (sub.subscriptionStatus === null) return { pass: true, detail: "legacy-grandfather-status-null" };
   const tier = readAccessTier(sub.accessTier);
   if (tier === null) return { pass: true, detail: "legacy-grandfather" };
-  if (tier === "FULL") return { pass: true, detail: "full" };
+  if (tier === "FULL") {
+    // Phase 2H addition: refuse when status is UNDER_REVIEW /
+    // SUSPENDED / CANCELLED even if tier was never flipped (defence
+    // in depth; a correctly-flipped tenant has tier=SUSPENDED_READ_ONLY).
+    if (
+      sub.subscriptionStatus === "UNDER_REVIEW" ||
+      sub.subscriptionStatus === "SUSPENDED" ||
+      sub.subscriptionStatus === "CANCELLED"
+    ) {
+      return {
+        pass: false,
+        detail: `tier=FULL status=${sub.subscriptionStatus} (Phase 2H blocked)`,
+      };
+    }
+    return { pass: true, detail: "full" };
+  }
   if (sub.subscriptionStatus === "MANUAL_INVOICE") {
     return { pass: true, detail: "manual-invoice" };
   }
@@ -217,8 +272,11 @@ async function evaluateAccessTierGate(clubId: string): Promise<{ pass: boolean; 
   };
 }
 
-export async function assertAccessTierForPosting(clubId: string): Promise<void> {
-  const result = await evaluateAccessTierGate(clubId);
+export async function assertAccessTierForPosting(
+  clubId: string,
+  opts?: { tx?: { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+): Promise<void> {
+  const result = await evaluateAccessTierGate(clubId, opts);
   if (result.pass) return;
   throw new ForbiddenError(
     `SIGNUP-2 access-tier: posting-tier action rejected for Club ${clubId} (${result.detail})`,
