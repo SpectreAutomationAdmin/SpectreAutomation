@@ -296,3 +296,265 @@ The safeguard activates immediately on the first scheduled run; next scheduled r
 ---
 
 **End of acceptance evidence.**
+
+---
+
+## 12. Closure addendum (founder closure email, 2026-10-26)
+
+**Status.** CONDITIONALLY TECHNICALLY ACCEPTED by founder on
+2026-10-26 as the mock-backed staging orchestration baseline.
+Closure follow-up delivered per founder §1-§7.
+
+### 12.1 Runtime image provenance (§2)
+
+The baseline runtime remains `sha-3efc0ac` on Fly release **v897**
+for the Playwright evidence in §4 above.  Follow-up commit
+`sha-66f01c5` changed only:
+
+- `docs/signup-2-phase-2g-acceptance.md` (documentation).
+- `scripts/signup-2-phase-2b-staging-fixture.mjs` (test fixture
+  script; uploaded via SFTP for acceptance runs, **never baked
+  into the deployed image**).
+
+No application code changed.  **v897 is the valid accepted
+runtime baseline.**
+
+The closure follow-up itself ships as `sha-5e60715` → Fly release
+**v901** (image `sha-5e6071507187`), covered by §12.3 below.
+That commit extends the runtime (stub-step production refusal
++ TTL safeguard redesign + Playwright scenario F); it is a
+superset of v897 and the new accepted runtime baseline for the
+closure deliverable.
+
+### 12.2 Provisioning completion semantics (§4)
+
+The founder's three-tier definition is now enforced:
+
+| Tier | Signal | Phase 2G mechanism |
+|---|---|---|
+| 1 — Provisioning orchestration completed | `TenantProvisioningJob.state = "COMPLETED"` + `completedAt` set | Only reachable via `completeProvisioningAtomically` inside a transaction whose inside-tx revalidation passes |
+| 2 — Mandatory tenant configuration completed | **(Deferred.)**  The current baseline treats step-anchor stamping as a sufficient signal **ONLY on the mock-backed acceptance path**; a production-capable path (live-stripe evidence OR missing testOnly env) **refuses** to stamp placeholder anchors | Enforced by the new 501 refusal in `makeStubStep` (§12.3.1 below) |
+| 3 — Tenant operational activation completed | `ClubSubscription.subscriptionStatus = ACTIVE` + `accessTier = FULL` + `activatedAt` set | Only reachable via step 9's atomic transaction, which can only run after all 8 prior-step anchors are stamped |
+
+**Combined guarantee.** A production tenant cannot reach Tier 3
+until Tier 2 is complete, and Tier 2 cannot complete via
+placeholder anchors.  Therefore a real tenant cannot reach
+FULL / ACTIVE until the real importer / mailer wiring is
+authorised + shipped in a separate slice.
+
+### 12.3 Closure code changes
+
+Baseline for §12.3-§12.5 evidence: `sha-5e60715` on Fly release
+**v901** (image `sha-5e6071507187`).  DRH-1 run 40356294595 —
+conclusion: success.
+
+#### 12.3.1 Stub-step production refusal (service change)
+
+`src/lib/billing/signup-2g-provisioning-service.ts`
+`makeStubStep` now refuses with
+`SIGNUP_2G_STUB_STEP_PRODUCTION_REFUSED` (HTTP 501) unless BOTH:
+
+- the job's `authorisationEvidenceSource === "mock-stripe"`
+  AND
+- the staging-only env var
+  `SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING === "1"`.
+
+A production container never sets the env var, so even a job
+somehow carrying `evidenceSource = "mock-stripe"` on production
+will refuse at the stub step.  A production job carrying
+`evidenceSource = "live-stripe"` will refuse the same way.
+
+Contract tests extended to lock the invariant: see
+`tests/signup-2-phase-2g-concurrency.test.ts` §"stub step
+production-safety (founder closure §4)" — **92/92** passing.
+
+#### 12.3.2 TTL safeguard honours per-activation expiry (§6)
+
+`.github/workflows/staging-flag-ttl.yml` rewritten.  The
+previous "unset unconditionally every 15 min" has been replaced
+with:
+
+- Cron tightened to every 5 minutes (cleanup lands shortly after
+  expiry, not merely at next tick).
+- For each allowlisted flag that is set, read Fly's exposed
+  `CreatedAt` as the per-activation set-time proxy.
+- Compute `age = now - CreatedAt`.  If `age ≥ 120 min` → the flag
+  (and its sibling `*_EXPIRES_AT` secret if present) is unset.
+- If `age < 120 min` → keep the flag; a valid in-window
+  acceptance test is NOT interrupted.
+- Flags with no `CreatedAt` or an unparsable timestamp are
+  treated as EXPIRED (safe default).
+- Still staging-only; no production secret access
+  (`environment: staging`).
+- Health probe after each unset.
+
+The next scheduled run (every 5 min from GitHub Actions, on the
+default branch once this follow-up is merged) will post an
+informational "no allowlisted flags set" step summary — the
+closure window closed clean.
+
+#### 12.3.3 Playwright scenario F — deployed mock-isolation (§3)
+
+`tests/e2e/signup-2-phase-2g-provisioning-acceptance.staging.spec.ts`
+extended with scenario F:
+
+1. Seed a fresh mock-backed job (`phase2g-seed happy`).
+2. Flip `SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING` OFF on
+   the deployed container via `flyctl secrets unset`.
+3. Wait for the Fly machine to restart with the new env.
+4. Re-upload the fixture (ephemeral filesystem resets on
+   restart).
+5. Re-login as the synthetic SUPER_ADMIN (session cache resets).
+6. POST `/api/admin/signup-ops/provisioning-tick?jobId=<...>`
+   → assert `outcome.ok = false, reason =
+   "MOCK_EVIDENCE_REJECTED"`.
+7. Attempt a `testOnly=1` query-param bypass → same refusal
+   (the Phase 2G routes never read a `testOnly` param; the
+   gate is server-side only).
+8. Inspect: no User, no Club, state remains CREATED, no Tier 2
+   grant.
+9. Restore the env var + re-upload + verify health 200 before
+   teardown.
+
+**Deployed evidence captured** in
+`test-results/signup-2-2g-F-production-tick.json`:
+
+```
+{"status":200,
+ "body":"{\"ok\":true,\"mode\":\"single\",\"outcome\":{\"ok\":false,
+         \"reason\":\"MOCK_EVIDENCE_REJECTED\",
+         \"detail\":\"authorisationEvidenceSource=mock-stripe;
+                     SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING not set\"}}"}
+```
+
+And the testOnly-bypass attempt
+(`signup-2-2g-F-testOnly-bypass.json`) returned the **same**
+refusal — the query param had zero effect.
+
+Inspect (`signup-2-2g-F-inspect.json`):
+
+```
+provisionedClub        : null
+clubSubscription       : null
+provisionedUser        : null
+userClubRole           : null
+job.state              : CREATED
+job.provisionedUserId  : null
+job.provisionedClubId  : null
+```
+
+**Zero operational tenant was created; zero Tier 2 was granted;
+the caller-supplied testOnly parameter could not bypass the
+protection.**
+
+### 12.4 Second controlled staging activation window (closure deliverable)
+
+Second controlled window for the closure follow-up (sha-5e60715,
+v901):
+
+| Flag | ON (UTC) | OFF (UTC) | Window |
+|---|---|---|---|
+| `SPECTRE_SIGNUP_2F_ACTIVATION_LIVE` | 2026-10-26 16:25:19 | 2026-10-26 16:50:16 | 24 m 57 s |
+| `SPECTRE_SIGNUP_2F_ALLOW_TESTONLY_SWEEP` | 2026-10-26 16:25:19 | 2026-10-26 16:50:16 | 24 m 57 s |
+| `SPECTRE_SIGNUP_2G_PROVISIONING_LIVE` | 2026-10-26 16:25:19 | 2026-10-26 16:50:16 | 24 m 57 s |
+| `SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING` | 2026-10-26 16:25:19 (reset at 16:33:11 during scenario F; restored by scenario F's cleanup) | 2026-10-26 16:50:16 | 24 m 57 s (minus the brief scenario-F OFF stretch) |
+
+All four flags unset in a single `flyctl secrets unset` after
+acceptance; `flyctl secrets list | grep SIGNUP_2` returns empty;
+`/api/health` 200 at 2026-10-26 16:50:16 UTC post-restart.
+
+Playwright acceptance (second run, with scenario F): **1 passed
+(4.6m)** on sha-5e60715 / v901.
+
+### 12.5 Reversal-after-activation posture (§5)
+
+Phase 2G's responsibility ends at the atomic Tier 2 grant.  **A
+reversal after activation remains a Phase 2H responsibility** and
+is formally recorded as a **PRODUCTION LAUNCH BLOCKER**:
+
+- Phase 2G never deletes `Club`, `User`, `UserClubRole`,
+  `ClubSubscription`, `BillingCycle`, or
+  `PaymentReconciliationEntry` on reversal.
+- Phase 2G stamps `provisioningCancelledAt` on touched rows
+  during cancellation (pre-COMPLETED paths).
+- Phase 2E's reversal webhook writes
+  `BillingCycle.reversedAt + subscriptionStatus = REVERSED`.
+- **A separate Phase 2H "suspension handler" is required to**
+  flip `ClubSubscription.subscriptionStatus = SUSPENDED` +
+  reduce `accessTier` to a read-only Tier 1 on
+  post-COMPLETED reversal.  **Until that handler ships, a real
+  tenant must not be activated via Phase 2G.**
+- Job cancellation (`TenantProvisioningJob.cancelledAt`) is
+  **NOT** equivalent to operational suspension; cancellation
+  only applies to a pre-COMPLETED job.  Post-COMPLETED
+  cancellation is NOT implemented in Phase 2G.
+
+### 12.6 Updated validation summary
+
+| Check | Result |
+|---|---|
+| `npm run typecheck` | clean |
+| `npx vitest run tests/signup-2-phase-2g-*.test.ts` | **92/92 pass** (8 suites; +2 for stub production refusal) |
+| Full SIGNUP-2 regression | 840/840 pass (unchanged) |
+| Deployed Playwright on sha-5e60715/v901 | **1 passed (4.6m)** covering A + B + C + D + E + **F** + G + RBAC |
+| DRH-1 run 40356294595 | success |
+| `/api/health` post-OFF | 200 |
+| `flyctl secrets list | grep SIGNUP_2` post-OFF | empty |
+| `remainingSyntheticSuperAdmins` at teardown | **0** |
+
+### 12.7 Production launch blockers (consolidated)
+
+Phase 2G is **NOT PRODUCTION-READY** in its current form.  The
+following items MUST be completed + separately authorised before
+a real tenant can be activated:
+
+1. **Steps 4-7 real importers** — COA / opening-balance /
+   branding / invitations.  Current baseline refuses with 501
+   on any non-mock-backed path.
+2. **Step 8 real welcome-email delivery** — Microsoft Graph
+   `sendMail` via the SIGNUP-1G adapter.  Current baseline
+   refuses with 501 on any non-mock-backed path.
+3. **Post-COMPLETED suspension handler (Phase 2H)** —
+   must flip `subscriptionStatus = SUSPENDED` + reduce
+   `accessTier` to read-only Tier 1 on post-COMPLETED reversal
+   webhooks.  See §12.5.
+4. **Live Stripe integration** — items 1.1-1.8 of
+   `docs/signup-2-phase-2e-stripe-followup.md`.
+5. **User reuse by Microsoft identity** — currently always
+   refuses on email collision; a real second-club applicant
+   with the same Microsoft identity would need manual
+   remediation.  A `User.microsoftOid + microsoftTenantId`
+   schema extension + reuse policy requires a separately
+   authorised slice.
+6. **Automatic Fly-worker cron for operator-tick** — Phase 2G
+   currently ships operator-tick only.
+7. **Rich operator remediation UI (Phase 2H)** — collision
+   remediation, cancellation retry, slug rename.
+8. **A real, legally-reviewed Terms of Service v1 doc** at
+   `docs/legal/terms-of-service-v1.md` — the staging-only
+   acceptance fixture is removed at every teardown; without the
+   real doc Phase 2F's G7 gate refuses in production.
+9. **Pre-existing placeholder-scan allowlist cleanup** — not
+   introduced by Phase 2G but surfaces as a quality-gate
+   warning.
+
+**None of these can be shipped under this closure
+authorisation.**  Each requires its own founder authorisation.
+
+### 12.8 Non-authorisations preserved (reaffirmed)
+
+- No Phase 2H implementation.
+- No live Stripe integration.
+- No real tenant activation.
+- No modification of existing tenants.
+- No production deployment.
+- No government-identification collection.
+- No initiation of Phase 2H or later.
+
+---
+
+**End of closure addendum.**  The full onboarding workflow is
+**NOT PRODUCTION-READY**.  Phase 2G is CONDITIONALLY
+TECHNICALLY ACCEPTED as the mock-backed staging orchestration
+baseline; §12.7 lists what must land before any real tenant can
+be activated through this pipeline.
