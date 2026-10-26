@@ -1,6 +1,9 @@
 # SIGNUP-2 Phase 2C — Acceptance Evidence
 
-**Status.** READY FOR FOUNDER ACCEPTANCE.
+**Status.** ACCEPTED BY FOUNDER 2026-10-25.
+**Final baseline.** `sha-adfe13c` (implementation) + `sha-34a1411`
+(acceptance evidence) on Fly `spectre-staging v877`.  Preserved per
+the Phase 2D authorisation email.
 **Authored branch.** `staging-deploy/web1b1-framer-fidelity`.
 **Depends on.** Phase 2A (sha-c3e337e / v870), Phase 2B
 (sha-9c717e1 / v875).
