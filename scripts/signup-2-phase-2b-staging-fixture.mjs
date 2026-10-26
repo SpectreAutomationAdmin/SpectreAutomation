@@ -346,7 +346,8 @@ const PHASE_2D_TRIO = [
 const PHASE_2D_REGISTRATION_OID = "00000000-2d2d-2d2d-2d2d-000000000000";
 
 async function phase2dSetup() {
-  const bcrypt = await import("bcryptjs");
+  const bcryptModule = await import("bcryptjs");
+  const bcrypt = bcryptModule.default ?? bcryptModule;
   const password = `Phase2D-Fixture-Password-${Date.now()}`;
   const passwordHash = await bcrypt.hash(password, 4); // low rounds for test fixture only
 
