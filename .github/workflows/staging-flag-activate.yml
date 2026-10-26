@@ -1,0 +1,139 @@
+# SIGNUP-2 Phase 2H closure (2026-10-26) -- staging flag ACTIVATION
+# workflow with explicit per-activation expiry record.
+#
+# Operator contract (replaces the manual `flyctl secrets set`):
+#   1. Dispatch this workflow with `flag_name` + `minutes` (default 60,
+#      max 120).
+#   2. Workflow sets the Fly secret to `1`, computes
+#      expires_at = now + minutes, and WRITES a GitHub Actions
+#      *variable* (not a secret) `STAGING_FLAG_<FLAG>_WINDOW` with
+#      value `<activation_iso>|<expiry_iso>`.
+#   3. The sibling `.github/workflows/staging-flag-ttl.yml` scheduled
+#      workflow reads these variables + unsets Fly flags whose
+#      expiry has passed, then clears the variable.
+#
+# Why GitHub Actions variables (not secrets, not a staging HTTP
+# endpoint)?  Per founder closure §8: "Prefer a GitHub Actions-
+# managed staging test-window expiry record."  Variables are:
+#   - Mutable via gh CLI with the ACTIONS_VARIABLES_TOKEN GitHub-
+#     scoped token (not Fly, not production).
+#   - Visible in Actions logs (expiry timestamps are not sensitive).
+#   - Durable across workflow runs.
+#   - Scoped to the `staging` environment (no production access).
+#
+# Scope:
+#   - Allowlist: six SIGNUP-2 + Phase 2H test-only flags.
+#   - Only writes Fly secrets of value `1` on the allowlist.
+#   - Max window: 120 minutes.
+#   - Zero production surface.
+
+name: Staging Flag Activate
+
+on:
+  workflow_dispatch:
+    inputs:
+      flag_name:
+        description: "Allowlisted Phase-2 test flag to activate."
+        required: true
+        type: choice
+        options:
+          - SPECTRE_SIGNUP_2B_ATTESTATION_LIVE
+          - SPECTRE_SIGNUP_2D_OPERATOR_RELEASE_LIVE
+          - SPECTRE_SIGNUP_2F_ACTIVATION_LIVE
+          - SPECTRE_SIGNUP_2F_ALLOW_TESTONLY_SWEEP
+          - SPECTRE_SIGNUP_2G_PROVISIONING_LIVE
+          - SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING
+          - SPECTRE_SIGNUP_2H_SUSPENSION_LIVE
+      minutes:
+        description: "Window length in minutes (1-120)."
+        required: true
+        default: "60"
+        type: string
+
+concurrency:
+  group: staging-flag-activate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Validate inputs
+        id: validate
+        env:
+          FLAG: ${{ inputs.flag_name }}
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          case "$MINUTES" in ''|*[!0-9]*)
+            echo "::error::minutes must be a positive integer"
+            exit 1 ;;
+          esac
+          if [ "$MINUTES" -lt 1 ] || [ "$MINUTES" -gt 120 ]; then
+            echo "::error::minutes must be between 1 and 120 (requested=$MINUTES)"
+            exit 1
+          fi
+          now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          exp_iso=$(date -u -d "+${MINUTES} minutes" +%Y-%m-%dT%H:%M:%SZ)
+          echo "now=$now_iso"       >> "$GITHUB_OUTPUT"
+          echo "exp=$exp_iso"       >> "$GITHUB_OUTPUT"
+          # Variable name is derived from the flag + a fixed suffix.
+          echo "var_name=STAGING_FLAG_${FLAG}_WINDOW" >> "$GITHUB_OUTPUT"
+
+      - name: Install flyctl
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN missing"; exit 2
+          fi
+          curl -sSfL https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> $GITHUB_PATH
+
+      - name: Set Fly secret to 1
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLAG: ${{ inputs.flag_name }}
+        run: |
+          set -euo pipefail
+          flyctl secrets set --app spectre-staging "${FLAG}=1"
+
+      - name: Write GitHub Actions variable with activation + expiry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VAR_NAME: ${{ steps.validate.outputs.var_name }}
+          NOW: ${{ steps.validate.outputs.now }}
+          EXP: ${{ steps.validate.outputs.exp }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          value="${NOW}|${EXP}"
+          # Delete-then-create to handle both first-set + overwrite.
+          gh variable delete --repo "$REPO" "$VAR_NAME" 2>/dev/null || true
+          echo -n "$value" | gh variable set --repo "$REPO" "$VAR_NAME" --body "$value"
+          echo "::notice::Activated $VAR_NAME = $value"
+
+      - name: Summary
+        if: always()
+        env:
+          FLAG: ${{ inputs.flag_name }}
+          MINUTES: ${{ inputs.minutes }}
+          NOW: ${{ steps.validate.outputs.now }}
+          EXP: ${{ steps.validate.outputs.exp }}
+          VAR_NAME: ${{ steps.validate.outputs.var_name }}
+        run: |
+          {
+            echo "### Staging Flag Activate — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "- Flag:      \`$FLAG\`"
+            echo "- Minutes:   \`$MINUTES\`"
+            echo "- Activated: \`$NOW\`"
+            echo "- Expires:   \`$EXP\`"
+            echo "- Variable:  \`$VAR_NAME\`"
+          } >> "$GITHUB_STEP_SUMMARY"

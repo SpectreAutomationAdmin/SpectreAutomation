@@ -306,6 +306,22 @@ export const PERMISSIONS = {
     category: "PLATFORM_SIGNUPS",
   },
 
+  // SIGNUP-2 Phase 2H (2026-10-26) -- Tenant lifecycle (suspension,
+  // reinstatement, remediation).  Granted ONLY to SUPER_ADMIN at
+  // launch per founder closure §7 "least-privilege RBAC".
+  "platform:tenants:suspend": {
+    name: "Suspend an operational tenant (ACTIVE -> UNDER_REVIEW -> SUSPENDED)",
+    category: "PLATFORM_TENANT_LIFECYCLE",
+  },
+  "platform:tenants:reinstate": {
+    name: "Reinstate a suspended tenant (SUSPENDED -> UNDER_REVIEW -> ACTIVE); SoD required for the final step",
+    category: "PLATFORM_TENANT_LIFECYCLE",
+  },
+  "platform:tenants:remediate": {
+    name: "Resolve operator alerts + retry/cancel Phase 2G provisioning jobs",
+    category: "PLATFORM_TENANT_LIFECYCLE",
+  },
+
   // Member portal (granted to MEMBER role)
   "self:account:read": { name: "View own member account", category: "MEMBER_PORTAL" },
   "self:profile:write": { name: "Edit own profile/household/preferences", category: "MEMBER_PORTAL" },

@@ -1,50 +1,40 @@
-# SIGNUP-2 Phase 2F / 2G safeguard (2026-10-26, closure-verified).
+# SIGNUP-2 Phase 2H closure (2026-10-26) -- staging flag TTL safeguard.
 #
-# ------ KNOWN DESIGN LIMITATION ------
-# `flyctl secrets list --app spectre-staging --json` returns only
-# {name, digest, status} per secret.  Fly does NOT expose a
-# per-secret `CreatedAt` / set-time timestamp.  The TTL safeguard
-# can therefore NOT determine a flag's age purely from flyctl
-# output.
+# Scheduled every 5 minutes.  Reads GitHub Actions variables of the
+# form `STAGING_FLAG_<FLAG>_WINDOW` with value `<activation>|<expiry>`
+# (written by `.github/workflows/staging-flag-activate.yml`).  For
+# each variable:
+#   - If expiry < now: unset the matching Fly secret + delete the
+#     variable.
+#   - If expiry >= now: keep the Fly secret (valid in-window test).
+#   - If value malformed OR missing expiry: treat as EXPIRED (safe
+#     default); unset + delete.
+#   - If a Fly secret is set on the allowlist WITHOUT a matching
+#     variable: safe default is to unset (operator did not follow
+#     the activation workflow contract).
 #
-# Pending the smallest corrective slice (a staging-only diagnostic
-# endpoint on spectre-staging that returns the ISO-8601 value of
-# the sibling `<FLAG>_EXPIRES_AT` env var, with a shared-secret
-# header gate; proposed in docs/signup-2-phase-2g-closure-ttl-verification.md),
-# the scheduled TTL path would have no reliable age proxy.
+# Protection against stale cleanup disabling a newly-activated test
+# (founder closure §8): the variable is RE-WRITTEN by the activate
+# workflow on every re-activation, so the new expiry replaces the
+# old one before this TTL job runs.  There is no path where a stale
+# variable can cause a newly-activated flag to be unset.
 #
-# Rather than:
-#   - unconditionally unset every tick (interrupts valid tests), OR
-#   - treat "no age proxy" as EXPIRED (interrupts valid tests), OR
-#   - treat "no age proxy" as INFINITE-WINDOW (defeats the safeguard),
+# Emergency cleanup: dispatch with `confirm_emergency_unset=true` to
+# unset ALL allowlisted flags regardless of expiry, and delete every
+# matching variable.
 #
-# this workflow currently runs in SAFE DIAGNOSTIC MODE:
-#   - cron trigger is DISABLED.
-#   - the workflow only runs on explicit workflow_dispatch.
-#   - the workflow lists allowlisted flags + their sibling expiry
-#     secret names, logs them, and takes NO destructive action
-#     unless the operator passes `confirm_unset=true` on dispatch.
-#   - the operator-triggered mode is itself gated on an inputs
-#     allowlist so an accidental dispatch cannot unset arbitrary
-#     secrets.
-#
-# When the corrective slice lands, re-enable the cron trigger + wire
-# in the real age-proxy source.  Until then, operators continue to
-# unset test flags manually at the end of each controlled window.
-#
-# Scope (unchanged):
-#   - Allowlist: six SIGNUP-2 test-only flags (2B / 2D / 2F x 2 / 2G x 2).
-#   - Only touches the `spectre-staging` app.
-#   - Only UNSETS secrets; never SETs.
-#   - environment: staging  (no production secret access).
+# Zero production access.  Allowlist-gated.  Failure propagates via
+# standard GitHub Actions failure notification.
 
-name: Staging Flag TTL Safeguard (safe-diagnostic mode)
+name: Staging Flag TTL Safeguard
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
-      confirm_unset:
-        description: "Pass 'true' to unset the allowlisted flags; otherwise this is a read-only diagnostic."
+      confirm_emergency_unset:
+        description: "Pass 'true' to UNSET every allowlisted flag regardless of expiry (emergency cleanup)."
         required: false
         default: "false"
         type: string
@@ -55,9 +45,10 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
-  diagnose-or-unset:
+  cleanup-expired-flags:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     environment: staging
@@ -67,8 +58,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::error::FLY_API_TOKEN secret is missing on the staging environment."
-            exit 2
+            echo "::error::FLY_API_TOKEN missing"; exit 2
           fi
 
       - name: Install flyctl
@@ -78,93 +68,123 @@ jobs:
           curl -sSfL https://fly.io/install.sh | sh
           echo "$HOME/.fly/bin" >> $GITHUB_PATH
 
-      - name: Enumerate currently-set allowlisted flags
-        id: snapshot
+      - name: Decide expired flags
+        id: decide
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FORCE: ${{ inputs.confirm_emergency_unset }}
         run: |
           set -euo pipefail
-          raw=$(flyctl secrets list --app spectre-staging --json)
-          printf '%s' "$raw" > /tmp/secrets.json
-          names=$(printf '%s' "$raw" | jq -r '.[].name')
-          flags=(
+          allowlist=(
             SPECTRE_SIGNUP_2B_ATTESTATION_LIVE
             SPECTRE_SIGNUP_2D_OPERATOR_RELEASE_LIVE
             SPECTRE_SIGNUP_2F_ACTIVATION_LIVE
             SPECTRE_SIGNUP_2F_ALLOW_TESTONLY_SWEEP
             SPECTRE_SIGNUP_2G_PROVISIONING_LIVE
             SPECTRE_SIGNUP_2G_ALLOW_TESTONLY_PROVISIONING
+            SPECTRE_SIGNUP_2H_SUSPENSION_LIVE
           )
-          present=""
-          expiry_present=""
-          for n in "${flags[@]}"; do
-            if echo "$names" | grep -qx "$n"; then
-              present+=" $n"
-              exp="${n}_EXPIRES_AT"
-              if echo "$names" | grep -qx "$exp"; then
-                expiry_present+=" $exp"
+          fly_secrets=$(flyctl secrets list --app spectre-staging --json)
+          gh_vars=$(gh variable list --repo "$REPO" --json name,value)
+          now_epoch=$(date -u +%s)
+          to_unset=""
+          vars_to_delete=""
+          for flag in "${allowlist[@]}"; do
+            fly_set=$(printf '%s' "$fly_secrets" | jq -r --arg n "$flag" '[.[] | select(.name==$n)] | length')
+            var_name="STAGING_FLAG_${flag}_WINDOW"
+            var_val=$(printf '%s' "$gh_vars" | jq -r --arg n "$var_name" '.[] | select(.name==$n) | .value // ""')
+            if [ "$FORCE" = "true" ]; then
+              if [ "$fly_set" != "0" ]; then to_unset+=" $flag"; fi
+              if [ -n "$var_val" ]; then vars_to_delete+=" $var_name"; fi
+              continue
+            fi
+            if [ "$fly_set" = "0" ]; then
+              # Fly secret not set.  If a variable still exists (stale),
+              # delete it.
+              if [ -n "$var_val" ]; then
+                echo "::notice::$flag not set on Fly; deleting stale var $var_name"
+                vars_to_delete+=" $var_name"
               fi
+              continue
+            fi
+            # Fly secret is set.  Decide via variable's expiry.
+            if [ -z "$var_val" ]; then
+              echo "::notice::$flag set on Fly WITHOUT matching variable; treating as EXPIRED"
+              to_unset+=" $flag"
+              continue
+            fi
+            expiry=$(echo "$var_val" | awk -F'|' '{print $2}')
+            if [ -z "$expiry" ]; then
+              echo "::notice::$flag variable malformed (no expiry portion); treating as EXPIRED"
+              to_unset+=" $flag"
+              vars_to_delete+=" $var_name"
+              continue
+            fi
+            exp_epoch=$(date -u -d "$expiry" +%s 2>/dev/null || echo 0)
+            if [ "$exp_epoch" = "0" ]; then
+              echo "::notice::$flag variable has unparsable expiry '$expiry'; treating as EXPIRED"
+              to_unset+=" $flag"
+              vars_to_delete+=" $var_name"
+              continue
+            fi
+            if [ "$exp_epoch" -le "$now_epoch" ]; then
+              echo "::notice::$flag expired at $expiry; unsetting"
+              to_unset+=" $flag"
+              vars_to_delete+=" $var_name"
+            else
+              echo "::notice::$flag within window (expires $expiry); keeping"
             fi
           done
-          present="$(echo "$present" | tr -s ' ' | sed 's/^ //')"
-          expiry_present="$(echo "$expiry_present" | tr -s ' ' | sed 's/^ //')"
-          echo "Allowlisted flags set on staging: ${present:-<none>}"
-          echo "Sibling expiry secrets set:       ${expiry_present:-<none>}"
-          echo "present=$present" >> $GITHUB_OUTPUT
-          echo "expiry_present=$expiry_present" >> $GITHUB_OUTPUT
+          to_unset="$(echo "$to_unset" | tr -s ' ' | sed 's/^ //')"
+          vars_to_delete="$(echo "$vars_to_delete" | tr -s ' ' | sed 's/^ //')"
+          echo "to_unset=$to_unset" >> $GITHUB_OUTPUT
+          echo "vars_to_delete=$vars_to_delete" >> $GITHUB_OUTPUT
 
-      - name: Safe-diagnostic report (no destructive action by default)
-        if: ${{ inputs.confirm_unset != 'true' }}
-        env:
-          PRESENT: ${{ steps.snapshot.outputs.present }}
-          EXPIRIES: ${{ steps.snapshot.outputs.expiry_present }}
-        run: |
-          echo "::notice::Running in SAFE DIAGNOSTIC mode -- no secrets will be unset."
-          echo "::notice::Allowlisted flags present: ${PRESENT:-<none>}"
-          echo "::notice::Sibling expiry secrets present: ${EXPIRIES:-<none>}"
-          echo "::notice::flyctl secrets list does not expose a per-secret CreatedAt timestamp."
-          echo "::notice::To actually unset flags, dispatch with confirm_unset=true."
-          echo "::notice::See docs/signup-2-phase-2g-closure-ttl-verification.md for the full writeup."
-
-      - name: Unset allowlisted flags (operator-confirmed only)
-        if: ${{ inputs.confirm_unset == 'true' }}
+      - name: Unset expired Fly secrets
+        if: ${{ steps.decide.outputs.to_unset != '' }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          PRESENT: ${{ steps.snapshot.outputs.present }}
-          EXPIRIES: ${{ steps.snapshot.outputs.expiry_present }}
+          TO_UNSET: ${{ steps.decide.outputs.to_unset }}
         run: |
           set -euo pipefail
-          to_unset="$(echo "$PRESENT $EXPIRIES" | tr -s ' ' | sed 's/^ //')"
-          if [ -z "$(echo "$to_unset" | tr -d '[:space:]')" ]; then
-            echo "No allowlisted flags present -- nothing to unset."
-            exit 0
-          fi
-          echo "::notice::Operator-confirmed unset of: $to_unset"
+          echo "::notice::Unsetting expired staging flags: $TO_UNSET"
           # shellcheck disable=SC2086
-          flyctl secrets unset --app spectre-staging $to_unset
+          flyctl secrets unset --app spectre-staging $TO_UNSET
           sleep 30
           code=$(curl -sS -o /dev/null -w "%{http_code}" https://staging.spectreautomation.com/api/health)
           if [ "$code" != "200" ]; then
-            echo "::warning::/api/health returned $code within 30s after flag unset"
+            echo "::warning::/api/health returned $code within 30s of flag unset"
           fi
+
+      - name: Delete expired variables
+        if: ${{ steps.decide.outputs.vars_to_delete != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VARS: ${{ steps.decide.outputs.vars_to_delete }}
+        run: |
+          set -euo pipefail
+          for v in $VARS; do
+            gh variable delete --repo "$REPO" "$v" 2>&1 || true
+          done
 
       - name: Summary
         if: always()
         env:
-          PRESENT: ${{ steps.snapshot.outputs.present }}
-          EXPIRIES: ${{ steps.snapshot.outputs.expiry_present }}
-          CONFIRM: ${{ inputs.confirm_unset }}
+          TO_UNSET: ${{ steps.decide.outputs.to_unset }}
+          VARS: ${{ steps.decide.outputs.vars_to_delete }}
+          FORCE: ${{ inputs.confirm_emergency_unset }}
         run: |
           {
             echo "### Staging flag TTL safeguard — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
-            echo "- Mode: $([ "$CONFIRM" = "true" ] && echo "UNSET (operator-confirmed)" || echo "SAFE DIAGNOSTIC (read-only)")"
-            if [ -z "$(echo "$PRESENT" | tr -d '[:space:]')" ]; then
-              echo "- No allowlisted flags set on \`spectre-staging\`."
+            echo "- Mode:            $([ "$FORCE" = "true" ] && echo "EMERGENCY UNSET" || echo "SCHEDULED / NORMAL")"
+            if [ -z "$TO_UNSET" ] && [ -z "$VARS" ]; then
+              echo "- Nothing expired."
             else
-              echo "- Allowlisted flags present: \`$PRESENT\`"
-              echo "- Sibling expiry secrets present: \`${EXPIRIES:-<none>}\`"
+              echo "- Flags unset:     \`${TO_UNSET:-<none>}\`"
+              echo "- Vars deleted:    \`${VARS:-<none>}\`"
             fi
-            echo
-            echo "See \`docs/signup-2-phase-2g-closure-ttl-verification.md\` for the design-limitation writeup."
           } >> "$GITHUB_STEP_SUMMARY"

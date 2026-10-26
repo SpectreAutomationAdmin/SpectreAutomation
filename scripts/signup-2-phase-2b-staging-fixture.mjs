@@ -1420,6 +1420,282 @@ async function phase2gInvalidate(scenario) {
   console.log(JSON.stringify({ scenario, invalidated: r.count }));
 }
 
+// ---------------------------------------------------------------
+// Phase 2H lifecycle fixtures.
+// Shape: creates a club in a specific lifecycle state so the
+// Playwright acceptance can exercise suspension + reinstatement
+// paths without going through the full Phase 2A-2G flow.
+//
+// Scenarios:
+//   active            -- ACTIVE / FULL baseline (ready to suspend)
+//   legacy            -- subscriptionStatus=null (grandfathered)
+//                        used to prove Phase 2H refuses to touch
+//                        legacy tenants
+//   suspended-pending -- UNDER_REVIEW / SUSPENDED_READ_ONLY  (ready
+//                        to escalate to SUSPENDED or reinstate to
+//                        ACTIVE via a second-operator authoriser)
+// Every fixture Club carries slug prefix `signup-2h-fixture-*`
+// + stagingDataMode = SYNTHETIC_DEMO.
+// ---------------------------------------------------------------
+const PHASE_2H_FIXTURE_PREFIX = "signup-2h-fixture-";
+const PHASE_2H_SCENARIOS = {
+  "active":            { subscriptionStatus: "ACTIVE",       accessTier: "FULL" },
+  "legacy":            { subscriptionStatus: null,            accessTier: null },
+  "suspended-pending": { subscriptionStatus: "UNDER_REVIEW",  accessTier: "SUSPENDED_READ_ONLY" },
+};
+
+async function phase2hSeed(scenario) {
+  const spec = PHASE_2H_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2h-seed] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  await phase2hTeardownScenario(scenario, { silent: true });
+  const now = new Date();
+  const slug = `${PHASE_2H_FIXTURE_PREFIX}${scenario}-${now.getTime().toString(36).slice(-8)}`;
+  const club = await prisma.club.create({
+    data: {
+      slug,
+      name: `Phase 2H Fixture Club (${scenario})`,
+      region: "AB",
+      salesTaxRegion: "GST",
+      foundedYear: 2026,
+      timezone: "America/Edmonton",
+      stagingDataMode: "SYNTHETIC_DEMO",
+    },
+  });
+  const sub = await prisma.clubSubscription.create({
+    data: {
+      clubId: club.id,
+      status: "ACTIVE",
+      subscriptionStatus: spec.subscriptionStatus,
+      accessTier: spec.accessTier,
+      activatedAt: spec.subscriptionStatus === "ACTIVE" ? now : null,
+    },
+    select: { id: true },
+  });
+  // Create a BillingCycle in good standing so the reinstatement
+  // eligibility checks pass for the "active" scenario (will be
+  // flipped to REVERSED for the suspension test case).
+  let cycleId = null;
+  if (spec.subscriptionStatus !== null) {
+    const cycle = await prisma.billingCycle.create({
+      data: {
+        clubId: club.id,
+        periodLabel: `${PHASE_2H_FIXTURE_PREFIX}cycle-${scenario}-${now.getTime().toString(36).slice(-8)}`,
+        startDate: now,
+        endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+        totalDue: 38000.00,
+        totalPaid: 38000.00,
+        status: "OPEN",
+        subscriptionStatus: "ACTIVE",
+        source: "STRIPE_ACSS",
+        stripePaymentIntentId: `pi_mock_2h_${scenario}_${club.id.slice(-6)}`,
+        stripeChargeId: `ch_mock_2h_${scenario}_${club.id.slice(-6)}`,
+        stripeBalanceTransactionId: `btxn_mock_2h_${scenario}_${club.id.slice(-6)}`,
+        expectedDebitDate: now,
+        settlementConfirmedAt: now,
+      },
+      select: { id: true },
+    });
+    cycleId = cycle.id;
+  }
+  console.log(JSON.stringify({
+    scenario,
+    clubId: club.id,
+    slug,
+    subscriptionId: sub.id,
+    billingCycleId: cycleId,
+    subscriptionStatus: spec.subscriptionStatus,
+    accessTier: spec.accessTier,
+  }));
+}
+
+async function phase2hTeardownScenario(scenario, { silent = false } = {}) {
+  const spec = PHASE_2H_SCENARIOS[scenario];
+  if (!spec) {
+    if (!silent) console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  const clubs = await prisma.club.findMany({
+    where: { slug: { startsWith: `${PHASE_2H_FIXTURE_PREFIX}${scenario}-` } },
+    select: { id: true },
+  });
+  const clubIds = clubs.map((c) => c.id);
+  if (clubIds.length === 0) {
+    if (!silent) console.log(JSON.stringify({ destroyed: 0 }));
+    return;
+  }
+  await prisma.tenantLifecycleTransition.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.tenantProvisioningJob.deleteMany({
+    where: { billingCycle: { clubId: { in: clubIds } } },
+  });
+  await prisma.paymentReconciliationEntry.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.operatorInboxEntry.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.billingCycle.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.userClubRole.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.clubSubscription.deleteMany({ where: { clubId: { in: clubIds } } });
+  await prisma.club.deleteMany({ where: { id: { in: clubIds } } });
+  if (!silent) console.log(JSON.stringify({ destroyed: clubIds.length }));
+}
+
+async function phase2hTeardownAll() {
+  let total = 0;
+  for (const key of Object.keys(PHASE_2H_SCENARIOS)) {
+    await phase2hTeardownScenario(key, { silent: true });
+    total++;
+  }
+  console.log(JSON.stringify({ scenariosDestroyed: total }));
+}
+
+async function phase2hInspect(scenario) {
+  const spec = PHASE_2H_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2h-inspect] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const club = await prisma.club.findFirst({
+    where: { slug: { startsWith: `${PHASE_2H_FIXTURE_PREFIX}${scenario}-` } },
+    select: { id: true, slug: true, name: true },
+  });
+  if (!club) {
+    console.log(JSON.stringify({ scenario, missing: true }));
+    return;
+  }
+  const sub = await prisma.clubSubscription.findUnique({
+    where: { clubId: club.id },
+    select: {
+      id: true,
+      subscriptionStatus: true,
+      accessTier: true,
+      status: true,
+      activatedAt: true,
+    },
+  });
+  const cycle = await prisma.billingCycle.findFirst({
+    where: { clubId: club.id },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, subscriptionStatus: true, reversedAt: true, stripeChargeId: true },
+  });
+  const transitions = await prisma.tenantLifecycleTransition.findMany({
+    where: { clubId: club.id },
+    orderBy: { effectiveAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      previousStatus: true,
+      newStatus: true,
+      previousAccessTier: true,
+      newAccessTier: true,
+      trigger: true,
+      operatorUserId: true,
+      authoriserUserId: true,
+      reasonCode: true,
+      effectiveAt: true,
+    },
+  });
+  console.log(JSON.stringify({
+    scenario,
+    club,
+    subscription: sub,
+    billingCycle: cycle,
+    transitions,
+  }));
+}
+
+async function phase2hMarkReversal(scenario) {
+  const spec = PHASE_2H_SCENARIOS[scenario];
+  if (!spec) {
+    console.error(`[phase2h-mark-reversal] unknown scenario: ${scenario}`);
+    process.exit(2);
+  }
+  const club = await prisma.club.findFirst({
+    where: { slug: { startsWith: `${PHASE_2H_FIXTURE_PREFIX}${scenario}-` } },
+    select: { id: true },
+  });
+  if (!club) {
+    console.log(JSON.stringify({ scenario, reversed: 0, missing: true }));
+    return;
+  }
+  const now = new Date();
+  const r = await prisma.billingCycle.updateMany({
+    where: { clubId: club.id },
+    data: {
+      reversedAt: now,
+      reversalReason: "phase2h-fixture-mark-reversal",
+      subscriptionStatus: "REVERSED",
+    },
+  });
+  console.log(JSON.stringify({ scenario, reversed: r.count }));
+}
+
+// Phase 2H synthetic SUPER_ADMIN pair (operator + authoriser) for
+// the SoD-enforced reinstatement scenario.  Mirrors the Phase 2F
+// super-admin fixture pattern.  Teardown destroys both.
+const PHASE_2H_OPERATOR_EMAIL = `${PHASE_2H_FIXTURE_PREFIX}operator@spectre.test`;
+const PHASE_2H_AUTHORISER_EMAIL = `${PHASE_2H_FIXTURE_PREFIX}authoriser@spectre.test`;
+
+async function phase2hAdminFixtureSetup() {
+  const bcryptModule = await import("bcryptjs");
+  const bcrypt = bcryptModule.default ?? bcryptModule;
+  const password = "Phase2H-Fixture-Operator-Password";
+  const passwordHash = await bcrypt.hash(password, 4);
+
+  const results = [];
+  for (const email of [PHASE_2H_OPERATOR_EMAIL, PHASE_2H_AUTHORISER_EMAIL]) {
+    const existing = await prisma.user.findUnique({ where: { email } });
+    let userId;
+    if (existing) {
+      await prisma.user.update({
+        where: { id: existing.id },
+        data: { passwordHash, status: "ACTIVE", role: "SUPER_ADMIN" },
+      });
+      userId = existing.id;
+    } else {
+      const u = await prisma.user.create({
+        data: {
+          email,
+          name: email === PHASE_2H_OPERATOR_EMAIL ? "Phase 2H Operator (fixture)" : "Phase 2H Authoriser (fixture)",
+          role: "SUPER_ADMIN",
+          passwordHash,
+          status: "ACTIVE",
+        },
+      });
+      userId = u.id;
+    }
+    const existingRole = await prisma.userClubRole.findFirst({
+      where: { userId, clubId: null, roleKey: "SUPER_ADMIN" },
+    });
+    if (!existingRole) {
+      await prisma.userClubRole.create({
+        data: { userId, clubId: null, roleKey: "SUPER_ADMIN" },
+      });
+    }
+    results.push({ email, userId });
+  }
+  console.log(JSON.stringify({
+    operator: results[0],
+    authoriser: results[1],
+    password,
+  }));
+}
+
+async function phase2hAdminFixtureTeardown() {
+  let destroyed = 0;
+  for (const email of [PHASE_2H_OPERATOR_EMAIL, PHASE_2H_AUTHORISER_EMAIL]) {
+    const u = await prisma.user.findUnique({ where: { email } });
+    if (!u) continue;
+    await prisma.userClubRole.deleteMany({ where: { userId: u.id } });
+    await prisma.session.deleteMany({ where: { userId: u.id } }).catch(() => {});
+    await prisma.user.delete({ where: { id: u.id } });
+    destroyed++;
+  }
+  const remaining = await prisma.user.count({
+    where: { email: { startsWith: PHASE_2H_FIXTURE_PREFIX } },
+  });
+  console.log(JSON.stringify({ destroyed, remainingPhase2hFixtureUsers: remaining }));
+}
+
 async function main() {
   const action = process.argv[2];
   if (action === "create") {
@@ -1512,6 +1788,33 @@ async function main() {
       process.exit(2);
     }
     await phase2gInvalidate(scenario);
+  } else if (action === "phase2h-seed") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2h-seed <active|legacy|suspended-pending>");
+      process.exit(2);
+    }
+    await phase2hSeed(scenario);
+  } else if (action === "phase2h-teardown") {
+    await phase2hTeardownAll();
+  } else if (action === "phase2h-inspect") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2h-inspect <scenario>");
+      process.exit(2);
+    }
+    await phase2hInspect(scenario);
+  } else if (action === "phase2h-mark-reversal") {
+    const scenario = process.argv[3];
+    if (!scenario) {
+      console.error("Usage: ... phase2h-mark-reversal <scenario>");
+      process.exit(2);
+    }
+    await phase2hMarkReversal(scenario);
+  } else if (action === "phase2h-admin-fixture-setup") {
+    await phase2hAdminFixtureSetup();
+  } else if (action === "phase2h-admin-fixture-teardown") {
+    await phase2hAdminFixtureTeardown();
   } else {
     console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict|super-admin-list|phase2d-setup|phase2d-teardown}");
     process.exit(2);

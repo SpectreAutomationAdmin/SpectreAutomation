@@ -568,6 +568,9 @@ model Club {
   // invalidation requires the Club shell to be marked unreachable
   // by posting-guard, without destroying the row.  Null = normal.
   provisioningCancelledAt DateTime?
+
+  // SIGNUP-2 Phase 2H (2026-10-26) — tenant lifecycle transitions.
+  lifecycleTransitions TenantLifecycleTransition[]
 }
 
 // ---------------------------------------------------------------------
@@ -10950,6 +10953,32 @@ model EntityStandingCheck {
 // first BillingCycle so the ACTIVATION_READY -> ACTIVE transition
 // is idempotent.  Each step has its own idempotency anchor; retries
 // resume from the last completed step.
+// SIGNUP-2 Phase 2H (2026-10-26) -- tenant lifecycle transition log.
+model TenantLifecycleTransition {
+  id                  String   @id @default(cuid())
+  clubId              String
+  club                Club     @relation(fields: [clubId], references: [id])
+  previousStatus      String
+  newStatus           String
+  previousAccessTier  String?
+  newAccessTier       String?
+  trigger             String
+  triggerEvidenceJson String?
+  operatorUserId      String
+  authoriserUserId    String?
+  reasonCode          String?
+  reasonNotes         String?
+  effectiveAt         DateTime @default(now())
+  reversedAt          DateTime?
+  reversedReason      String?
+  createdAt           DateTime @default(now())
+
+  @@index([clubId, effectiveAt])
+  @@index([newStatus, effectiveAt])
+  @@index([trigger, effectiveAt])
+  @@index([operatorUserId, effectiveAt])
+}
+
 model TenantProvisioningJob {
   id                               String       @id @default(cuid())
   billingCycleId                   String       @unique
