@@ -259,35 +259,16 @@ export async function authoriseActivation(
     };
   }
 
-  // Load dependent domain evidence BEFORE opening the transaction
-  // (reads only; recheck inside the transaction).
-  const [mandate, releaseRecord, attestation, registration, approvedToS] = await Promise.all([
-    prisma.subscriptionPaymentMandate.findFirst({
-      where: { signupRegistrationId: cycle.clubId },
-      orderBy: { acceptedAt: "desc" },
-      select: { id: true, revokedAt: true },
-    }),
-    cycle.releasedByOperatorRecordId
-      ? prisma.operatorVerificationRecord.findUnique({
-          where: { id: cycle.releasedByOperatorRecordId },
-          select: { id: true, concept: true },
-        })
-      : Promise.resolve(null),
-    prisma.subscriptionAuthorisationAttestation.findFirst({
-      where: { signupRegistrationId: cycle.clubId },
-      orderBy: { acceptedAt: "desc" },
-      select: { id: true, supersededAt: true, termsVersionSha256: true },
-    }),
-    prisma.signupRegistration.findUnique({
-      where: { id: cycle.clubId },
-      select: { id: true, status: true, verificationVerdict: true },
-    }),
-    loadApprovedToS(),
-  ]);
-
-  if (!mandate || mandate.revokedAt) {
-    return { ok: false, gate: "G5_MANDATE_REVOKED", detail: "mandate missing or revoked", transient: false };
-  }
+  // Resolve the signupRegistrationId via the Phase 2D release record
+  // (the ONLY reliable Phase 2F→applicant linkage).  Phase 2E's
+  // "clubId stores reg.id" convention is being retired; Phase 2F
+  // uses the release record's own signupRegistrationId column.
+  const releaseRecord = cycle.releasedByOperatorRecordId
+    ? await prisma.operatorVerificationRecord.findUnique({
+        where: { id: cycle.releasedByOperatorRecordId },
+        select: { id: true, concept: true, signupRegistrationId: true },
+      })
+    : null;
   if (!releaseRecord || releaseRecord.concept !== "RELEASE") {
     return {
       ok: false,
@@ -296,6 +277,33 @@ export async function authoriseActivation(
       transient: false,
     };
   }
+  const signupRegistrationId = releaseRecord.signupRegistrationId;
+
+  // Load dependent domain evidence BEFORE opening the transaction
+  // (reads only; recheck inside the transaction).
+  const [mandate, attestation, registration, approvedToS] = await Promise.all([
+    prisma.subscriptionPaymentMandate.findFirst({
+      where: { signupRegistrationId },
+      orderBy: { acceptedAt: "desc" },
+      select: { id: true, revokedAt: true },
+    }),
+    prisma.subscriptionAuthorisationAttestation.findFirst({
+      where: { signupRegistrationId },
+      orderBy: { acceptedAt: "desc" },
+      select: { id: true, supersededAt: true, termsVersionSha256: true },
+    }),
+    prisma.signupRegistration.findUnique({
+      where: { id: signupRegistrationId },
+      select: { id: true, status: true, verificationVerdict: true },
+    }),
+    loadApprovedToS(),
+  ]);
+
+  if (!mandate || mandate.revokedAt) {
+    return { ok: false, gate: "G5_MANDATE_REVOKED", detail: "mandate missing or revoked", transient: false };
+  }
+  // G6 (release-record presence) already verified above during the
+  // signupRegistrationId resolution.
   if (!attestation || attestation.supersededAt) {
     return { ok: false, gate: "G7_TOS_MISMATCH", detail: "attestation missing or superseded", transient: false };
   }
@@ -393,7 +401,7 @@ export async function authoriseActivation(
       const job = await tx.tenantProvisioningJob.create({
         data: {
           billingCycleId: cycle.id,
-          signupRegistrationId: cycle.clubId, // Phase 2E stores regId in clubId
+          signupRegistrationId,
           state: "CREATED",
           attempts: 0,
           nextAttemptAt: now,
@@ -404,7 +412,9 @@ export async function authoriseActivation(
       });
 
       // Write a PaymentReconciliationEntry with the exact evidence
-      // ids used.
+      // ids used.  PaymentReconciliationEntry.clubId is nullable per
+      // Phase 2A; we persist the actual cycle clubId (fixture Club
+      // on staging; real Club in Phase 2G).
       await tx.paymentReconciliationEntry.create({
         data: {
           clubId: cycle.clubId,
