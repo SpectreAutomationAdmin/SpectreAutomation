@@ -153,17 +153,36 @@ runAt(
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     await loginAsFounder(ctx);
 
+    // Pre-set the signing secret so webhook signature verification
+    // can succeed before any flag flip.  Phase 2E + 2H flags remain
+    // OFF for scenario L.
+    execSync(
+      `"${FLYCTL}" secrets set --app spectre-staging STRIPE_WEBHOOK_SIGNING_SECRET=${MOCK_SIGNING_SECRET}`,
+      { encoding: "utf8", timeout: 180_000 },
+    );
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5_000));
+      try {
+        const h = await ctx.request.get(`${BASE}/api/health`, { failOnStatusCode: false });
+        if (h.status() === 200) break;
+      } catch {}
+    }
+    uploadFixtureScript();
+    // Re-login (restart may have reset session).
+    await ctx.close();
+    const ctxL = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await loginAsFounder(ctxL);
+
     // ============================================================
     // L. Feature flags OFF -- event persisted, dispatcher skipped.
-    //    Current staging state: SPECTRE_SIGNUP_2E_PAYMENT_LIVE OFF
-    //    by default; SPECTRE_SIGNUP_2H_SUSPENSION_LIVE OFF.
+    //    Phase 2E + 2H flags OFF; signing secret SET.
     // ============================================================
     const lEvent = makeEvent(
       `evt_m1_flagoff_${seed.clubId.slice(-6)}`,
       "charge.refunded",
       { id: seed.chargeId, payment_intent: seed.paymentIntentId, amount_refunded: 3800000 },
     );
-    const lResp = await postWebhook(ctx.request, lEvent);
+    const lResp = await postWebhook(ctxL.request, lEvent);
     writeFileSync(path.join(outDir, "signup-2-m1-L-flagoff.json"), JSON.stringify(lResp, null, 2));
     expect(lResp.status).toBe(200);
     expect(lResp.body).toContain("received_disabled");
@@ -174,9 +193,9 @@ runAt(
     expect(lInspect.subscription.accessTier).toBe("FULL");
     expect(lInspect.transitions.length).toBe(0);
 
-    // Enable Phase 2E + Phase 2H flags + mock webhook signing secret.
+    // Enable Phase 2E + Phase 2H flags for the rest of the run.
     execSync(
-      `"${FLYCTL}" secrets set --app spectre-staging SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1 SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1 STRIPE_WEBHOOK_SIGNING_SECRET=${MOCK_SIGNING_SECRET}`,
+      `"${FLYCTL}" secrets set --app spectre-staging SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1 SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1`,
       { encoding: "utf8", timeout: 180_000 },
     );
     for (let i = 0; i < 24; i++) {
@@ -188,7 +207,7 @@ runAt(
     }
     uploadFixtureScript();
     // Rebuild session (restart may have reset).
-    await ctx.close();
+    await ctxL.close();
     const ctx2 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     await loginAsFounder(ctx2);
     const req2 = ctx2.request;
