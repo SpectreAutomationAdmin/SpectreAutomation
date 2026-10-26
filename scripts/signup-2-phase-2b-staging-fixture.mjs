@@ -668,6 +668,20 @@ async function phase2fSeed(scenario) {
     },
   });
 
+  // ClubSubscription row -- PaymentReconciliationEntry.clubId FK
+  // references ClubSubscription.clubId (not Club.id).  Phase 2F's
+  // authoriseActivation writes a PRE with evidenceSource=mock-stripe
+  // + entryType=ACTIVATION_AUTHORISED, so the fixture must provide
+  // a ClubSubscription for the fixture Club.  accessTier=STAGED
+  // keeps the fixture out of Tier 2 reach.
+  await prisma.clubSubscription.create({
+    data: {
+      clubId: fixtureClub.id,
+      subscriptionStatus: "ACTIVATION_READY",
+      accessTier: "STAGED",
+    },
+  });
+
   // Phase 2E BillingCycle in ACTIVATION_READY (mock-backed; the
   // Phase 2F sweep + authoriseActivation will re-fetch via the
   // mock adapter which always returns status="available").
@@ -733,6 +747,7 @@ async function phase2fTeardownScenario(scenario, { silent = false } = {}) {
     await prisma.paymentReconciliationEntry.deleteMany({ where: { clubId: { in: clubIds } } });
     await prisma.operatorInboxEntry.deleteMany({ where: { clubId: { in: clubIds } } });
     await prisma.billingCycle.deleteMany({ where: { clubId: { in: clubIds } } });
+    await prisma.clubSubscription.deleteMany({ where: { clubId: { in: clubIds } } });
   }
   if (ids.length) {
     await prisma.subscriptionPaymentMandate.deleteMany({ where: { signupRegistrationId: { in: ids } } });
