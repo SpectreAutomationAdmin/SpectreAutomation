@@ -575,12 +575,19 @@ async function phase2fSeed(scenario) {
 
   // Phase 2B attestation.  Tos SHA matches dev fixture by default;
   // tos-mismatch scenario deliberately uses the wrong SHA.
-  const devFixtureSha = await (async () => {
+  // Compute the attestation SHA from the SAME file Spectre's
+  // activation-gate loadApprovedToS resolver reads at runtime.
+  // Prefer the staging-acceptance ToS at docs/legal/terms-of-service-v1.md
+  // when it exists (installed by phase2f-super-admin-setup); otherwise
+  // fall back to the committed dev fixture.
+  const resolvedTosSha = await (async () => {
     try {
       const fs = await import("node:fs");
       const path = await import("node:path");
       const { createHash } = await import("node:crypto");
-      const p = path.resolve(process.cwd(), "docs", "legal", "terms-of-service-fixture-dev.md");
+      const prod = path.resolve(process.cwd(), "docs", "legal", "terms-of-service-v1.md");
+      const fixture = path.resolve(process.cwd(), "docs", "legal", "terms-of-service-fixture-dev.md");
+      const p = fs.existsSync(prod) ? prod : fixture;
       if (fs.existsSync(p)) {
         const body = fs.readFileSync(p, "utf8");
         return createHash("sha256").update(body, "utf8").digest("hex");
@@ -588,7 +595,7 @@ async function phase2fSeed(scenario) {
     } catch {}
     return "ee".repeat(32);
   })();
-  const attestationTosSha = spec.tosMismatch ? "ff".repeat(32) : devFixtureSha;
+  const attestationTosSha = spec.tosMismatch ? "ff".repeat(32) : resolvedTosSha;
 
   await prisma.subscriptionAuthorisationAttestation.create({
     data: {
@@ -751,6 +758,118 @@ async function phase2fTeardownAll() {
   console.log(JSON.stringify({ scenariosDestroyed: total }));
 }
 
+// Phase 2F synthetic super-admin for the staging acceptance.
+// Isolated to the signup-2f-fixture-sweep-operator@spectre.test
+// identity; teardown is deterministic + idempotent.
+const PHASE_2F_SUPER_ADMIN_EMAIL = `${PHASE_2F_FIXTURE_PREFIX}sweep-operator@spectre.test`;
+
+// Staging acceptance ToS doc.  Writing this to the resolver's prod
+// path flips `loadApprovedToS` to return a non-null SHA (the Phase
+// 2F activation gate otherwise refuses with G7_TOS_MISMATCH because
+// the committed dev fixture is Status: DEVELOPMENT_FIXTURE).
+// Teardown removes the file; no production ToS state persists.
+const ACCEPTANCE_TOS_RELATIVE = "docs/legal/terms-of-service-v1.md";
+const ACCEPTANCE_TOS_LABEL = "ToS-staging-acceptance-2026-10-26";
+const ACCEPTANCE_TOS_BODY = `# Terms of Service (Spectre Staging Acceptance Fixture)\n\n` +
+  `## Version metadata\n\n` +
+  `- **Label:** \`${ACCEPTANCE_TOS_LABEL}\`\n` +
+  `- **Status:** \`APPROVED\`\n\n` +
+  `## Scope\n\n` +
+  `This document is a staging-only Terms of Service fixture used\n` +
+  `exclusively by the SIGNUP-2 Phase 2F activation-gate acceptance\n` +
+  `Playwright run.  It is NEVER served to real applicants and is\n` +
+  `deleted at the end of each acceptance window by\n` +
+  `\`phase2f-super-admin-teardown\`.  It carries APPROVED status so\n` +
+  `the activation-gate's \`loadApprovedToS\` returns a hashable value\n` +
+  `against which the synthetic attestations in the Phase 2F fixture\n` +
+  `can reconcile.  No production ToS obligation attaches to this doc.\n`;
+
+async function phase2fInstallAcceptanceTos() {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const target = path.resolve(process.cwd(), ACCEPTANCE_TOS_RELATIVE);
+  if (fs.existsSync(target)) {
+    // Preserve any committed real v1 doc; refuse to overwrite.
+    const existing = fs.readFileSync(target, "utf8");
+    if (!existing.includes(ACCEPTANCE_TOS_LABEL)) {
+      throw new Error(`refusing to overwrite non-acceptance ToS at ${target}`);
+    }
+  }
+  fs.writeFileSync(target, ACCEPTANCE_TOS_BODY, "utf8");
+  return target;
+}
+
+async function phase2fUninstallAcceptanceTos() {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const target = path.resolve(process.cwd(), ACCEPTANCE_TOS_RELATIVE);
+  if (fs.existsSync(target)) {
+    const existing = fs.readFileSync(target, "utf8");
+    if (existing.includes(ACCEPTANCE_TOS_LABEL)) {
+      fs.unlinkSync(target);
+      return { removed: true };
+    }
+    return { removed: false, reason: "not-acceptance-fixture" };
+  }
+  return { removed: false, reason: "absent" };
+}
+
+async function phase2fSuperAdminSetup() {
+  const bcryptModule = await import("bcryptjs");
+  const bcrypt = bcryptModule.default ?? bcryptModule;
+  const password = "Phase2F-Sweep-Operator-Fixture";
+  const passwordHash = await bcrypt.hash(password, 4);
+
+  const existing = await prisma.user.findUnique({
+    where: { email: PHASE_2F_SUPER_ADMIN_EMAIL },
+  });
+  let userId;
+  if (existing) {
+    await prisma.user.update({
+      where: { id: existing.id },
+      data: { passwordHash, status: "ACTIVE", role: "SUPER_ADMIN" },
+    });
+    userId = existing.id;
+  } else {
+    const u = await prisma.user.create({
+      data: {
+        email: PHASE_2F_SUPER_ADMIN_EMAIL,
+        name: "Phase 2F Sweep Operator (fixture)",
+        role: "SUPER_ADMIN",
+        passwordHash,
+        status: "ACTIVE",
+      },
+    });
+    userId = u.id;
+  }
+  const existingRole = await prisma.userClubRole.findFirst({
+    where: { userId, clubId: null, roleKey: "SUPER_ADMIN" },
+  });
+  if (!existingRole) {
+    await prisma.userClubRole.create({
+      data: { userId, clubId: null, roleKey: "SUPER_ADMIN" },
+    });
+  }
+  const tosPath = await phase2fInstallAcceptanceTos();
+  console.log(JSON.stringify({ userId, email: PHASE_2F_SUPER_ADMIN_EMAIL, password, tosPath }));
+}
+
+async function phase2fSuperAdminTeardown() {
+  const u = await prisma.user.findUnique({ where: { email: PHASE_2F_SUPER_ADMIN_EMAIL } });
+  const tosRemoval = await phase2fUninstallAcceptanceTos();
+  if (!u) {
+    console.log(JSON.stringify({ destroyed: 0, remainingSyntheticSuperAdmins: 0, tosRemoval }));
+    return;
+  }
+  await prisma.userClubRole.deleteMany({ where: { userId: u.id } });
+  await prisma.session.deleteMany({ where: { userId: u.id } }).catch(() => {});
+  await prisma.user.delete({ where: { id: u.id } });
+  const remaining = await prisma.user.count({
+    where: { email: { startsWith: PHASE_2F_FIXTURE_PREFIX } },
+  });
+  console.log(JSON.stringify({ destroyed: 1, remainingSyntheticSuperAdmins: remaining, tosRemoval }));
+}
+
 async function phase2fReverse(scenario) {
   const spec = PHASE_2F_SCENARIOS[scenario];
   if (!spec) {
@@ -873,6 +992,10 @@ async function main() {
       process.exit(2);
     }
     await phase2fInspectJob(scenario);
+  } else if (action === "phase2f-super-admin-setup") {
+    await phase2fSuperAdminSetup();
+  } else if (action === "phase2f-super-admin-teardown") {
+    await phase2fSuperAdminTeardown();
   } else {
     console.error("Usage: node scripts/signup-2-phase-2b-staging-fixture.mjs {create|destroy|verify|phase2c-create|phase2c-destroy|phase2c-verdict|super-admin-list|phase2d-setup|phase2d-teardown}");
     process.exit(2);

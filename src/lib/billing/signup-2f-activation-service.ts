@@ -583,8 +583,17 @@ export async function sweepActivationCandidates(opts: AuthoriseActivationOpts = 
   let refused = 0;
   for (const c of candidates) {
     const result = await authoriseActivation(c.id, opts);
-    if (result.ok) authorised += 1;
-    else refused += 1;
+    if (result.ok) {
+      authorised += 1;
+    } else {
+      refused += 1;
+      logger.info("signup.activation.sweep_refused", {
+        cycleIdTail: c.id.slice(-6),
+        gate: result.gate,
+        detail: result.detail,
+        transient: result.transient,
+      });
+    }
   }
   logger.info("signup.activation.sweep_tick", {
     attempted: candidates.length,

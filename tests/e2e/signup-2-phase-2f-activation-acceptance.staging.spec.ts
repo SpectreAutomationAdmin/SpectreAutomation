@@ -33,6 +33,21 @@ const FLYCTL = "C:/Users/cturcato/.fly/bin/flyctl.exe";
 const FIXTURE_SCRIPT = "scripts/signup-2-phase-2b-staging-fixture.mjs";
 const FIXTURE_BASENAME = path.basename(FIXTURE_SCRIPT);
 
+// Failure-safe teardown: destroys the synthetic SUPER_ADMIN and
+// every fixture scenario EVEN IF the test body throws before its
+// own teardown block.
+test.afterAll(async () => {
+  if (!stagingCredsAvailable().ready) return;
+  try {
+    execSync(
+      `"${FLYCTL}" ssh console --app spectre-staging --command "sh -c 'cd /app && node ${FIXTURE_BASENAME} phase2f-teardown && node ${FIXTURE_BASENAME} phase2f-super-admin-teardown'"`,
+      { encoding: "utf8", timeout: 120_000 },
+    );
+  } catch (e) {
+    console.error("afterAll teardown failed:", (e as Error).message);
+  }
+});
+
 function sshExec(cmd: string): string {
   const full = `"${FLYCTL}" ssh console --app spectre-staging --command "sh -c 'cd /app && node ${FIXTURE_BASENAME} ${cmd}'"`;
   try {
@@ -84,15 +99,49 @@ runAt(
 
     // ============================================================
     // Setup: fresh fixture harness upload + teardown prior state.
+    //
+    // We ALSO seed a synthetic SUPER_ADMIN operator (Phase 2F
+    // sweep is isSuperAdmin-gated); the Controller founder cannot
+    // drive the endpoint, so the Playwright drives the sweep as
+    // the synthetic operator.  Teardown destroys the operator at
+    // the END of the spec regardless of pass/fail (via
+    // test.afterAll below).
     // ============================================================
     uploadFixtureScript();
     sshExec("phase2f-teardown");
+    sshExec("phase2f-super-admin-teardown");
+    const operatorFixtureRaw = sshExec("phase2f-super-admin-setup");
+    const operatorFixture = parseFirstJson(operatorFixtureRaw);
+    writeFileSync(path.join(outDir, "signup-2-2f-operator-fixture.json"), JSON.stringify(operatorFixture, null, 2));
+    expect(operatorFixture.userId, "setup: synthetic operator created").toBeTruthy();
+    expect(operatorFixture.email, "setup: synthetic operator email").toContain("sweep-operator@spectre.test");
 
-    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-    const page = await loginAsFounder(ctx);
-    void BASE; // reference preserved for readability of URLs below
     const sweepUrlProd = `${BASE}/api/admin/signup-ops/activation-sweep`;
     const sweepUrlTestOnly = `${BASE}/api/admin/signup-ops/activation-sweep?testOnly=1`;
+
+    // Login the Controller founder first; verify the sweep is 403
+    // for a non-super-admin (RBAC assertion required by founder §4).
+    const founderCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const founderPage = await loginAsFounder(founderCtx);
+    const founderSweep = await founderPage.request.post(sweepUrlTestOnly, { failOnStatusCode: false });
+    const founderSweepBody = await founderSweep.text();
+    writeFileSync(path.join(outDir, "signup-2-2f-controller-forbidden.json"), JSON.stringify({
+      status: founderSweep.status(),
+      body: founderSweepBody,
+    }, null, 2));
+    expect(founderSweep.status(), "CONTROLLER identity receives 403").toBe(403);
+    await founderCtx.close();
+
+    // Now log in as the synthetic SUPER_ADMIN for the actual run.
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+    await page.locator('input[name="email"]').fill(operatorFixture.email);
+    await page.locator('input[name="password"]').fill(operatorFixture.password);
+    await Promise.all([
+      page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 30_000 }),
+      page.locator('form button[type="submit"]').first().click(),
+    ]);
 
     // ============================================================
     // E. Feature flag OFF (if staging is not in the activation
@@ -237,6 +286,10 @@ runAt(
     // ============================================================
     const teardown = sshExec("phase2f-teardown");
     writeFileSync(path.join(outDir, "signup-2-2f-teardown.json"), teardown);
+    const operatorTeardown = sshExec("phase2f-super-admin-teardown");
+    writeFileSync(path.join(outDir, "signup-2-2f-operator-teardown.json"), operatorTeardown);
+    const operatorTeardownJson = parseFirstJson(operatorTeardown);
+    expect(operatorTeardownJson.remainingSyntheticSuperAdmins, "zero synthetic SUPER_ADMINs remain after teardown").toBe(0);
 
     await ctx.close();
   },
