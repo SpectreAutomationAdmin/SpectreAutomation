@@ -1,6 +1,18 @@
 # SIGNUP-2 Phase 2F — Acceptance Evidence
 
-**Status.** READY FOR FOUNDER ACCEPTANCE.
+**Status.** FULLY ACCEPTED BY FOUNDER 2026-10-26 as the
+MOCK-BACKED STAGING BASELINE for Phase 2F.  Covers (a) the
+activation-gate architecture, (b) mock-backed contract tests, AND
+(c) the 6-scenario deployed Playwright acceptance under a
+controlled staging flag window (see
+[signup-2-phase-2f-staging-acceptance.md](signup-2-phase-2f-staging-acceptance.md)).
+Does NOT authorise live Stripe integration, real payment
+processing, tenant provisioning, or production activation.
+**Final baseline.** `sha-cccb190` on Fly image
+`sha-cccb1907c6d6` + Fly release **v893**.  (Intermediate
+builds `sha-6aa940c` + `sha-99df266` + `sha-4fc21c7` are
+preserved in `git log` but have been superseded by
+`sha-cccb190`.)
 **Authored branch.** `staging-deploy/web1b1-framer-fidelity`.
 **Depends on.** Phase 2A `sha-c3e337e / v870`, Phase 2B
 `sha-9c717e1 / v875`, Phase 2C `sha-adfe13c / v877`, Phase 2D

@@ -1,9 +1,10 @@
 # SIGNUP-2 Phase 2F — Deployed Staging Acceptance Evidence
 
-**Status.** ACCEPTED — deployed-staging Playwright acceptance of
-the Phase 2F activation-authorisation surface completed on
-2026-10-26 under a controlled staging activation window per
-founder §2 of the Phase 2G authorisation.
+**Status.** FULLY ACCEPTED BY FOUNDER 2026-10-26 — part of the
+mock-backed Phase 2F staging baseline.  Deployed-staging
+Playwright acceptance of the Phase 2F activation-authorisation
+surface completed under a controlled staging activation window
+per founder §2 of the Phase 2G authorisation.
 
 **Scope.** Six scenarios covering the deployed HTTP sweep path
 against mock-backed staging fixtures.  Mock-evidence only; no
