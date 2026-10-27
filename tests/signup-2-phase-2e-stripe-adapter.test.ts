@@ -153,8 +153,16 @@ describe("SIGNUP-2 Phase 2E · factory", () => {
     }
   });
 
-  it("factory does NOT import a live-adapter module (Phase 2E baseline ships none)", () => {
-    expect(FACTORY).not.toMatch(/from "\.\/live"/);
+  // M2 (2026-10-27): the factory now imports `./live` for the live
+  // adapter.  The factory ITSELF does NOT import the raw Stripe SDK
+  // (that import lives in live.ts); the factory only re-exports.
+  it("factory imports ./live (M2) and ./mock, both re-exported", () => {
+    expect(FACTORY).toMatch(/from "\.\/live"/);
+    expect(FACTORY).toMatch(/from "\.\/mock"/);
+    expect(FACTORY).toMatch(/createLiveStripeAdapter/);
+    expect(FACTORY).toMatch(/createMockStripeAdapter/);
+  });
+  it("factory does NOT import the raw Stripe SDK directly (that import belongs in live.ts)", () => {
     expect(FACTORY).not.toMatch(/import.*Stripe.*from "stripe"/);
   });
 

@@ -17,19 +17,34 @@ function listTsFiles(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
+// M2 (2026-10-27): the live adapter (`src/lib/billing/stripe-adapter/live.ts`)
+// is the ONE authorised Stripe-SDK import site.  The factory (`index.ts`)
+// also legitimately imports it to construct the live adapter.  Both are
+// excluded from the Phase 2E "no Stripe SDK" grep sweep; the sweep still
+// covers the mandate service, webhook dispatch, mock adapter, webhook
+// route, and all signup pages so no new Stripe-SDK import can sneak in
+// anywhere else.
+const STRIPE_ADAPTER_FILES = listTsFiles(join(ROOT, "src/lib/billing/stripe-adapter"));
+const M2_EXEMPT_SDK_IMPORT = new Set(
+  [
+    join(ROOT, "src/lib/billing/stripe-adapter/live.ts"),
+    join(ROOT, "src/lib/billing/stripe-adapter/index.ts"),
+  ].map((p) => p.replace(/\\/g, "/")),
+);
+
 const PHASE_2E_FILES = [
   "src/lib/billing/signup-2e-mandate-service.ts",
   "src/lib/billing/signup-2e-webhook-dispatch.ts",
-  ...listTsFiles(join(ROOT, "src/lib/billing/stripe-adapter")),
+  ...STRIPE_ADAPTER_FILES,
   ...listTsFiles(join(ROOT, "src/app/api/signup/mandate")),
   ...listTsFiles(join(ROOT, "src/app/api/webhooks/stripe")),
   "src/app/signup/t/[token]/mandate/page.tsx",
 ].map((p) => (p.startsWith(ROOT) ? p : join(ROOT, p)));
 
 describe("SIGNUP-2 Phase 2E · forbidden patterns absent from every Phase 2E source file", () => {
-  const forbidden: Array<{ pattern: RegExp; label: string }> = [
-    { pattern: /from "stripe"/, label: "import from 'stripe' SDK" },
-    { pattern: /from "@stripe\//, label: "import from @stripe/* package" },
+  const forbidden: Array<{ pattern: RegExp; label: string; m2Exempt?: boolean }> = [
+    { pattern: /from "stripe"/, label: "import from 'stripe' SDK", m2Exempt: true },
+    { pattern: /from "@stripe\//, label: "import from @stripe/* package", m2Exempt: true },
     { pattern: /govId/i, label: "gov-ID surface" },
     { pattern: /government[-_ ]?id/i, label: "government-id surface" },
     { pattern: /\bpassport\b/i, label: "passport reference" },
@@ -46,7 +61,9 @@ describe("SIGNUP-2 Phase 2E · forbidden patterns absent from every Phase 2E sou
   for (const path of PHASE_2E_FILES) {
     const content = readFileSync(path, "utf8");
     const rel = path.replace(ROOT, "").replace(/\\/g, "/");
-    for (const { pattern, label } of forbidden) {
+    const normalised = path.replace(/\\/g, "/");
+    for (const { pattern, label, m2Exempt } of forbidden) {
+      if (m2Exempt && M2_EXEMPT_SDK_IMPORT.has(normalised)) continue;
       it(`${rel} does NOT ${label}`, () => {
         expect(content).not.toMatch(pattern);
       });

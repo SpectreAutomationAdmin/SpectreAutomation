@@ -35,9 +35,15 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/observability/logger";
 import { AppError, ForbiddenError } from "@/lib/errors";
 import { env } from "@/lib/env";
-import { resolveStripeAdapter } from "./stripe-adapter";
+import { resolveStripeAdapter, resolveAcssPriceId, stripeAdapterMode } from "./stripe-adapter";
 
-const PRICE_ID = "price_signup2e_mock_38kcad_annual"; // mock-adapter stable id
+// M2 (2026-10-27): when the adapter is live, read the real Stripe
+// Price id from STRIPE_ACSS_PRICE_ID.  When mock, fall back to the
+// deterministic Phase 2E placeholder.
+const MOCK_PRICE_ID = "price_signup2e_mock_38kcad_annual";
+function priceId(): string {
+  return stripeAdapterMode() === "live" ? (resolveAcssPriceId() ?? MOCK_PRICE_ID) : MOCK_PRICE_ID;
+}
 
 export function assertPhase2ePaymentFlag(): void {
   if (process.env.SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1") {
@@ -222,7 +228,7 @@ export async function persistSignedMandate(args: {
   const subscription = await stripe.createSubscription({
     idempotencyKey: `signup-2e-subscription:${reg.id}:first`,
     stripeCustomerId: sessionResult.customerId,
-    stripePriceId: PRICE_ID,
+    stripePriceId: priceId(),
     defaultPaymentMethodId: sessionResult.paymentMethodId,
     metadata: { signupRegistrationIdTail: reg.id.slice(-6) },
   });
