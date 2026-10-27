@@ -113,6 +113,33 @@ runAt(
     test.setTimeout(1_800_000);
     const outDir = ensureOutDir();
 
+    // M2-ACSS-Audit (2026-10-27) safety guard: NEVER overwrite a
+    // founder-installed Stripe sandbox signing secret.  The pre-M2
+    // design assumed this spec OWNED STRIPE_WEBHOOK_SIGNING_SECRET
+    // (set a mock value in beforeAll + unset in teardown).  Once a
+    // real Stripe sandbox secret is installed, running this spec
+    // would destroy it.  Detect the real secret and skip.
+    const secretsList = execSync(
+      `"${FLYCTL}" secrets list --app spectre-staging`,
+      { encoding: "utf8", timeout: 60_000 },
+    );
+    // Fly reports a short digest alongside each secret name; the
+    // mock signing secret created inside this spec has a KNOWN digest
+    // the first time it ships, but we cannot read values.  Treat ANY
+    // presence of STRIPE_SECRET_KEY as "founder-installed real
+    // credentials -- do not touch".  STRIPE_WEBHOOK_SIGNING_SECRET
+    // can be absent (first-ever run) and we create it then; if a
+    // real STRIPE_SECRET_KEY is present we skip.
+    if (secretsList.includes("STRIPE_SECRET_KEY")) {
+      test.skip(
+        true,
+        "SIGNUP-2 M1b posting-race spec is skipped on staging environments with a founder-installed STRIPE_SECRET_KEY. " +
+          "The spec was designed to own the STRIPE_WEBHOOK_SIGNING_SECRET rotation; running it would destroy real sandbox credentials. " +
+          "For sandbox acceptance after M2 activation, use the §16f real-Stripe scenarios instead.",
+      );
+      return;
+    }
+
     // Setup
     uploadFixtureScript();
     sshExec("m1-teardown");
