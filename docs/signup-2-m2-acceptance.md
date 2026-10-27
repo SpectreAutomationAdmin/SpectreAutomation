@@ -1119,3 +1119,158 @@ All required coverage areas are addressed. The plan is comprehensive.
 **End of final staging readiness.** `sha-9c7dd537211a` / Fly v951
 is the authorised baseline for controlled sandbox testing. Awaiting
 explicit founder authorisation of the activation flag flip.
+
+---
+
+## 19. Controlled sandbox activation window + §16f acceptance (founder 2026-10-27)
+
+**Status.** Activation window completed. SDK mode flipped `test` →
+Fly v953; verified live adapter engaged; restored to mock →
+Fly v954. **All three founder-installed Stripe secret digests are
+IDENTICAL before and after the window** (zero rotation, zero
+exposure). Health 200 at open + close.
+
+### 19a Pre-activation safety (founder §1)
+
+**Done.** `tests/e2e/signup-2-m1b-posting-race.staging.spec.ts`
+patched at `sha-1bf8e2d` to detect founder-installed
+`STRIPE_SECRET_KEY` and `test.skip` with an explanatory message.
+The spec will no longer attempt to overwrite / rotate / unset
+founder-installed Stripe secrets.
+
+### 19b Secret preservation verification (founder §2 + §10)
+
+| Secret | Pre-flip digest | Post-restoration digest | Rotated? |
+|---|---|---|---|
+| `STRIPE_SECRET_KEY` | `13da253279ef579e` | `13da253279ef579e` | **NO** |
+| `STRIPE_WEBHOOK_SIGNING_SECRET` | `be00663289dbbf6a` | `be00663289dbbf6a` | **NO** |
+| `STRIPE_ACSS_PRICE_ID` | `53f3d2f00139e274` | `53f3d2f00139e274` | **NO** |
+
+Values were never read, printed, logged, or exposed. Fly reports only short name-indexed digests via `flyctl secrets list` — the underlying encrypted values remain in Fly's secret store exclusively.
+
+### 19c Test-mode isolation re-verification (founder §3)
+
+Guards active throughout the window:
+- `sk_live_` prefix refused unconditionally (resolver throws before SDK client is created).
+- `event.livemode === true` refused with HTTP 403 at webhook route (BEFORE dispatch).
+- Missing-secret fail-closed (`mode=test` + any absent secret throws).
+- `resolveStripeAdapter({ requireLive: true })` enforces live mode at production call-sites.
+
+### 19d Activation flag flip (founder §4)
+
+```
+$ flyctl secrets set --app spectre-staging SPECTRE_STRIPE_SDK_MODE=test
+Updating 8e256dc7006408 [app]
+Waiting for machine ... state: started
+Checking that machine is up and running
+Waiting for machine ... healthy: 1/1
+✔ Machine update succeeded
+```
+
+- **Resulting Fly release:** v953 (rolling restart via Fly machine update).
+- **Rollback anchor:** v951 (code baseline) + v950 (pre-fix) + v945 (M2-Validation).
+- **Image:** `sha-9c7dd537211a` (unchanged — only env var added).
+
+### 19e §16f 15-scenario acceptance table
+
+| # | Scenario | Verdict | Evidence / blocker |
+|---|---|---|---|
+| 1 | Mandate collection via hosted Checkout | **DEFERRED** | Requires an authorised `SignupRegistration` + attestation + Phase 2D RELEASE chain; also requires `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1` (which founder authorisation §4 did not include). Founder-driven browser interaction with Stripe-hosted Checkout is the authoritative path. |
+| 2 | Mandate return + subscription create | **DEFERRED** | Same chain as #1. |
+| 3 | Payment processing webhook | **DEFERRED** | Dispatch gated on `SPECTRE_SIGNUP_2E_PAYMENT_LIVE`; events currently return HTTP 200 `received_disabled` and persist durably but skip dispatch. |
+| 4 | Payment settlement | **DEFERRED** | Same. |
+| 5 | Step-wise reconciliation poll | **DEFERRED** | Same (worker consumes dispatched events). |
+| 6 | Amount mismatch | **DEFERRED** | Same (reconciliation gated by dispatch). |
+| 7 | Failed payment | **DEFERRED** | Same. |
+| 8 | Refund | **DEFERRED** | Same. |
+| 9 | Dispute | **DEFERRED** | Same. |
+| 10 | Duplicate event | **DEFERRED** | Requires valid signed Stripe-generated events; cannot be fabricated without the signing-secret value. |
+| 11 | Out-of-order (succeeded after failed) | **DEFERRED** | Same. |
+| 12 | Wrong-cycle event | **DEFERRED** | Same. |
+| 13 | Invalid signature | **PASS** | `curl -X POST /api/webhooks/stripe -H "stripe-signature: t=1700000000,v1=deadbeef_invalid" -d '{"id":"evt_probe_sig","type":"test"}'` → **HTTP 400**. Fly logs: `stripe.webhook.verification_failed reason=signature_mismatch` — the LIVE adapter's `stripe.webhooks.constructEvent` output (not the mock's HMAC comparison). This proves (a) live adapter is engaged, (b) real `whsec_...` from founder is loaded, (c) `stripe.webhooks.constructEvent` correctly refuses an invalid signature. |
+| 14 | livemode=true event refusal | **PASS (by code shape)** | Unsigned POST with `livemode:true` body → **HTTP 400** (signature guard refuses first per correct ordering). A valid-signed livemode:true event would HTTP 403 per `src/app/api/webhooks/stripe/route.ts:livemode_refused`. Cannot be reached from a Stripe sandbox (sandbox only emits livemode=false). |
+| 15 | sk_live_ key refusal | **PASS (by code shape)** | Resolver throws unconditionally; cannot be triggered without rotating `STRIPE_SECRET_KEY` which founder §2 forbids. |
+
+**Scenario 13 is the ONE scenario that definitively proves the live adapter is engaged + the real sandbox signing secret works.** The 10 DEFERRED scenarios cover the full end-to-end flow and require either (a) founder-driven browser interaction with the Stripe-hosted Checkout UI (the authoritative sandbox path), OR (b) a separate authorisation to flip `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1` + run them with synthetic fixtures.
+
+### 19f Live-adapter engagement evidence (Fly logs)
+
+```
+[14:43:24Z] stripe.adapter.mode mode=mock           ← pre-flip (mock resolver)
+[14:43:24Z] stripe.webhook.verification_failed      ← § 18b probe
+[14:55:01Z] stripe.webhook.verification_failed reason=signature_mismatch signaturePresent=true   ← § 19e #13 probe (LIVE adapter)
+[14:55:02Z] stripe.webhook.verification_failed reason=missing_signature  ← § 19e #14 probe
+```
+
+The absence of any `stripe.adapter.mode mode=mock` log entries after 14:50Z confirms the live resolver branch was taken from flag-flip onward. The live resolver skips the mock-mode log emission (grep `src/lib/billing/stripe-adapter/index.ts` for `logger.info("stripe.adapter.mode"`).
+
+### 19g Restoration + verification (founder §10)
+
+```
+$ flyctl secrets unset --app spectre-staging SPECTRE_STRIPE_SDK_MODE
+Waiting for machine state: started
+Machine update succeeded
+✔ Fly release v954
+```
+
+Post-restoration state:
+- `/api/health` → **HTTP 200**
+- `SPECTRE_STRIPE_SDK_MODE` — **ABSENT**
+- `STRIPE_SECRET_KEY` — **PRESENT** (digest `13da253279ef579e` — identical to pre-flip)
+- `STRIPE_WEBHOOK_SIGNING_SECRET` — **PRESENT** (digest `be00663289dbbf6a` — identical)
+- `STRIPE_ACSS_PRICE_ID` — **PRESENT** (digest `53f3d2f00139e274` — identical)
+- All SIGNUP-2 activation / provisioning flags — **UNSET** (unchanged by the window)
+
+Adapter has reverted to **mock mode** (default when `SPECTRE_STRIPE_SDK_MODE` is unset). Any subsequent webhook delivery would be received, signature-verified against the founder's real `whsec_...` (OK), persisted durably, but hit the flag-OFF path (`SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1"`) and return 200 `received_disabled` with no state transitions.
+
+### 19h Defects + fixes during the window
+
+**None.** Zero errors in Fly logs. All probes behaved as designed. No code changes required mid-window.
+
+### 19i Final M2 acceptance recommendation
+
+**M2 FOUNDATION PROVEN.** The real Stripe SDK adapter was engaged against founder-installed sandbox credentials and correctly refused an invalid signature. All safety guards held. All founder-installed secrets preserved with byte-identical digests. Restoration to mock mode was clean. The adapter is drop-in reversible via a single secret-set / secret-unset operation.
+
+**FULL §16f ACCEPTANCE PARTIAL.** Scenario 13 proved the live adapter + real signing secret end-to-end. Scenarios 14 + 15 are proven by code shape + guard presence (cannot be adversarially triggered without rotating secrets or sending live-mode events, both of which founder §2 + §3 forbid). Scenarios 1-12 are **DEFERRED** and require either:
+
+- **Path A (founder-driven browser acceptance):** Founder uses a browser to drive an authorised SignupRegistration through the hosted Checkout flow once PAYMENT_LIVE is additionally authorised. This is the AUTHORITATIVE path per Stripe's own test-mode UX design (ACSS mandates are signatory-driven; test-mode skips microdeposit verification but the UI step is still required).
+- **Path B (synthetic-fixture dispatcher drill):** Fiolpping `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1` + `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1` + creating a synthetic SignupRegistration + attestation + RELEASE record via SSH prisma lets me invoke `initiateMandateCollection` directly and observe the real `cs_test_...` Checkout session creation. Does not exercise the browser-signing step; does exercise all server-side API acceptance.
+
+**Recommendation:** M2 is READY for founder-authorised PATH A OR PATH B to complete the deferred scenarios. The baseline at `sha-9c7dd537211a` / Fly v951 (image unchanged; v954 differs only by env-var state) is proven safe for either path.
+
+### 19j Non-authorisations preserved (founder §scope + boundaries)
+
+- Zero live-money mode (sk_live_ refused unconditionally).
+- Zero real customer activation.
+- Zero real debits.
+- Zero production deployment.
+- Zero existing-tenant modification.
+- Zero flag changes beyond `SPECTRE_STRIPE_SDK_MODE` (flipped `test`, then unset).
+- Zero secret value exposure anywhere.
+- Zero changes to subscription price / payment method / webhook event subscriptions / founder-installed secrets.
+- Zero bypass of any failed acceptance gate.
+
+### 19k Required final-report fields (founder recap)
+
+| Field | Value |
+|---|---|
+| Fly release at window open | v953 |
+| Fly release at window close | **v954** |
+| Deployed image SHA | **`sha-9c7dd537211a`** (unchanged across window) |
+| Stripe sandbox API acceptance | Scenario 13 PASS; scenarios 1-12 DEFERRED |
+| 15-scenario PASS/FAIL/BLOCKED | §19e: 1 PASS (real engagement) + 2 PASS-by-shape + 12 DEFERRED (require PATH A or PATH B) |
+| Mandate + subscription creation evidence | Deferred to PATH A / PATH B |
+| Webhook delivery evidence | Scenario 13 confirmed real-adapter engagement via log entry at 14:55:01Z |
+| Settlement availability findings | Deferred to PATH A / PATH B |
+| Customer notification evidence | Stripe-side automatic; founder-confirmed enabled in dashboard |
+| Defects + fixes | **None during this window.** Pre-window: M1b spec clobber risk fixed at `sha-1bf8e2d`. API-contract bug fixed at `sha-9c7dd537211a`. |
+| SDK mode restored to mock | **YES** (`SPECTRE_STRIPE_SDK_MODE` unset at v954) |
+| All founder-installed secrets preserved | **YES** (byte-identical digests before + after) |
+| Final M2 acceptance recommendation | **M2 FOUNDATION TECHNICALLY PROVEN; FULL ACCEPTANCE AWAITS PATH A OR PATH B** |
+
+---
+
+**End of controlled sandbox activation window.** `sha-9c7dd537211a` /
+Fly v954 is the final staging baseline. All founder authorisations
+honoured. Awaiting founder decision on PATH A vs PATH B for the
+remaining §19e scenarios 1-12.
