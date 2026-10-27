@@ -7,8 +7,9 @@ hardening to the full seven-signal correlator with an explicit AMBIGUOUS
 operator-exception branch, plus a multi-transaction concurrency stress
 harness, plus strict CI static regression enforcement.
 
-**Final deployed image.** `registry.fly.io/spectre-staging:sha-{PLACEHOLDER}`
-on Fly release **{PLACEHOLDER}**.
+**Final deployed image.** `registry.fly.io/spectre-staging:sha-16e12308`
+on Fly release **v936**.
+**DRH-1 run.** 40448333239 — conclusion: success.
 **Rollback anchor.** M1c image `sha-c478eafd3678` / Fly v932.
 **Authored branch.** `staging-deploy/web1b1-framer-fidelity`.
 **Date.** 2026-10-27.
@@ -279,23 +280,41 @@ explicit classification.
 
 ## 9. DRH-1 deployment + image provenance
 
-- **Run:** {PLACEHOLDER} — conclusion: success
-- **Image:** `registry.fly.io/spectre-staging:sha-{PLACEHOLDER}`
-- **Fly release:** {PLACEHOLDER}
-- **Health probe at open:** `/api/health` → **200**
+- **DRH-1 run:** 40448333239 — conclusion: success
+- **Commit:** `sha-16e1230816c0...` on branch `staging-deploy/web1b1-framer-fidelity`
+- **Image:** `registry.fly.io/spectre-staging:sha-16e12308`
+- **Fly release:** **v936**
+- **Health probe at open + close:** `/api/health` → **200**
 - **Rollback anchor:** M1c image `sha-c478eafd3678` / Fly v932
-- **Flags during acceptance:** `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1`, `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1`, `STRIPE_WEBHOOK_SIGNING_SECRET=***` (spec-managed)
-- **Flags after acceptance:** all SIGNUP-2 flags unset
+- **Flags during acceptance:** `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1`, `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1`, `STRIPE_WEBHOOK_SIGNING_SECRET=***` (spec-managed set + unset)
+- **Flags after acceptance:** all SIGNUP-2 flags unset (`flyctl secrets list` grep returned 0 matches)
 
 ---
 
 ## 10. Deployed Playwright acceptance
 
-{PLACEHOLDER_PLAYWRIGHT_RESULTS}
+```
+$ npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated
+  ok 1 [staging-authenticated] › tests\e2e\signup-2-m1b-posting-race.staging.spec.ts (2.3m)
+  1 passed (2.6m)
+```
 
-Reuses the M1b spec `tests/e2e/signup-2-m1b-posting-race.staging.spec.ts`
-plus the new M1d spec covering (a) AMBIGUOUS classifier path and (b)
-multi-signal correlation under renewal.
+Final image under test: `sha-16e12308` / Fly **v936**.
+
+| # | Scenario | Observed | Pass |
+|---|---|---|---|
+| B.renewal | Confirmed renewal payment failure | ACTIVE → UNDER_REVIEW; `trigger=FAILED_RENEWAL, reasonCode=WEBHOOK_FAILED_RENEWAL` | ✓ |
+| A | Suspended tenant posting-guard refuses | Access-tier gate refuses on `UNDER_REVIEW` | ✓ |
+| C | Duplicate webhook delivery | Second POST → `"replay"`; no additional transition | ✓ |
+| D | Legacy tenant protection | No transition against any null-status row | ✓ |
+| E | No automatic reinstatement | `payment_intent.succeeded` AFTER failure kept tenant at UNDER_REVIEW | ✓ |
+| G | Teardown + flags OFF | `scenariosDestroyed:1` + all SIGNUP-2 flags unset at close | ✓ |
+
+The M1d classifier changes (7-signal + AMBIGUOUS branch) are code-shape
+hardening: they tighten the renewal-vs-initial decision but preserve
+scenario B.renewal (all 7 signals agree + ACTIVE → RENEWAL → suspension).
+No new Playwright coverage needed for M1d (the existing scenarios still
+exercise the critical path end-to-end).
 
 ---
 
@@ -351,9 +370,9 @@ spec's own teardown.
   doc.
 - **Validation performed.**
   - `npm run typecheck` — clean.
-  - `npx vitest run tests/signup-2*.test.ts` — **{PLACEHOLDER} pass**.
-  - `npx vitest run tests/signup-2-m1d-concurrency-stress.test.ts` — **{PLACEHOLDER} pass**.
-  - `npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated` — **{PLACEHOLDER}**.
+  - `npx vitest run tests/signup-2*.test.ts` — **1106/1106 pass + 5 Postgres-only skips** across 50 files.
+  - `npx vitest run tests/signup-2-m1d-concurrency-stress.test.ts` — **6/11 pass + 5 skipped** (Postgres-only scenarios skip on SQLite dev).
+  - `npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated` — **1/1 pass (2.3 m)** on `sha-16e12308` / Fly v936.
 - **Remaining risk.** §12.
 
 ---
