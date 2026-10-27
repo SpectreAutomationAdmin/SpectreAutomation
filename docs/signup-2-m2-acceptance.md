@@ -413,3 +413,155 @@ The resolver defaults to mock when the mode flag is unset.
 ACCEPTANCE as the mock-backed staging baseline with a drop-in live
 adapter. Live-mode activation requires only the four secrets listed
 in §12 — no further code changes.
+
+---
+
+## 15. M2-Validation hardening (founder 2026-10-27 §2 + §3)
+
+Shipped as `sha-10a63aa365f4` / Fly release **v945** / DRH-1 run
+40507115246.  M1 baseline (`sha-16e12308` / v936) remains the
+rollback anchor.
+
+### 15a Test-mode-only operation (founder §2)
+
+1. **`sk_live_` keys refused unconditionally.** `resolveStripeAdapter`
+   throws when `STRIPE_SECRET_KEY` begins with `sk_live_`.  Unknown
+   prefixes (`rk_test_` restricted keys, malformed strings) also
+   throw.  Only `sk_test_` is accepted.  Staging physically cannot
+   mount a live-money key regardless of operator action.
+2. **Live-mode webhook events refused.**
+   `src/app/api/webhooks/stripe/route.ts` returns HTTP **403**
+   `livemode_refused` for any event with `event.livemode === true`.
+   The guard runs AFTER signature verification but BEFORE durable
+   persistence + dispatch, so a mistakenly-sent live-money event is
+   never stored and never dispatched to the Phase 2H suspension path.
+3. **Mode-flag rename (preserve compatibility).**  New primary
+   flag `SPECTRE_STRIPE_SDK_MODE` with values `"mock"` or `"test"`
+   replaces the ambiguous legacy `SPECTRE_SIGNUP_2E_STRIPE_MODE=live`
+   (where "live" historically meant "real SDK against test
+   credentials", NOT "real money mode").  Both flags remain accepted;
+   primary wins when both are set + a warning logs.  Legacy
+   `stripeAdapterMode()` function retained for existing callers;
+   delegates to new `stripeSdkMode()`.
+4. **Fail-closed on mismatch.**  Mode=test + missing `STRIPE_SECRET_KEY`
+   OR `STRIPE_WEBHOOK_SIGNING_SECRET` throws (no silent mock
+   fallback).  Mode=test + sk_live_ throws (see §15a.1).  Mode=test
+   + missing `STRIPE_ACSS_PRICE_ID` throws from `resolveAcssPriceId()`.
+
+**Clear SDK-vs-live-money distinction:** the real Stripe SDK is now
+pinned to **test credentials** in every mode this codebase supports.
+"Live money mode" (production, real debits) is an entirely separate
+authorisation path that will require explicit founder-signed code
+changes to this guard set — the sk_live_ refusal is unconditional
+at the current baseline.
+
+### 15b Reconciliation design verification (founder §3)
+
+Refactored from a single long-poll to a **durably-recoverable
+step-wise state machine** at
+[src/lib/billing/signup-2m2-reconciliation-service.ts](src/lib/billing/signup-2m2-reconciliation-service.ts).
+
+| § | Requirement | Implementation |
+|---|---|---|
+| §3.a | Successful payment state required independently of balance availability | `stepReconcile*` refuses to proceed unless `cycle.subscriptionStatus ∈ {AWAITING_SETTLEMENT, SETTLED}` — returns `preconditions_failed` otherwise |
+| §3.b | Balance transaction authoritative, correctly correlated, available | The caller provides the `balance_transaction_id` that the webhook dispatcher recorded against the cycle; the service re-reads via `retrieveBalanceTransaction` and matches amount+currency before writing |
+| §3.c | Amount + currency match CAD $38,000 | `EXPECTED_AMOUNT_MINOR = 3_800_000`, `EXPECTED_CURRENCY = "cad"`.  Mismatch writes a `RECONCILIATION_MISMATCH` ledger entry + refuses to flip `settlementConfirmedAt` + returns non-terminal `amount_mismatch` / `currency_mismatch` so an operator must triage |
+| §3.d | Returns / refunds / disputes / negative adjustments checked | `stepReconcile*` short-circuits with `already_reversed` / `already_refunded` / `already_disputed` if the cycle has `reversedAt` set OR a REFUND/CHARGE_REFUNDED/DISPUTE_OPENED/CHARGE_DISPUTED/PAYMENT_RETURNED/ACSS_RETURN ledger entry exists |
+| §3.e | Durable + idempotent | Existing `PAYMENT_SETTLED` entry short-circuits; terminal write wraps `PaymentReconciliationEntry.create` + `BillingCycle.update` in one `prisma.$transaction` so a crash between the two writes rolls both back |
+| §3.f | Pending transactions remain pending without premature activation | `status === "pending" OR availableAt > now()` → returns `{ terminal: false, nextCheckAt }` without touching `settlementConfirmedAt` or `subscriptionStatus` |
+| §3.g | 6h polling limit cannot permanently strand a valid payment | **Hard 6h cap removed.** Reconciliation is now scheduled per-step; the worker re-invokes at `nextCheckAt` indefinitely.  After `STALL_THRESHOLD_ATTEMPTS=24` (~24h of attempts) a `RECONCILIATION_STALLED` ledger entry raises an operator warning — but the worker **continues probing**, not halting |
+| §3.h | Activation subject to all legal, org, signing, operator, provisioning gates | Service writes `PAYMENT_SETTLED` + flips `BillingCycle.subscriptionStatus = "SETTLED"` ONLY.  Does NOT write `ClubSubscription.subscriptionStatus = "ACTIVE"`, does NOT create a `TenantProvisioningJob`, does NOT touch any legal/org/signing gates.  Phase 2F's 9-gate activation decision remains authoritative |
+
+**Legacy single-shot entry point preserved** for backwards compat
+(`reconcileBalanceTransaction`); delegates to `stepReconcile*` and
+maps non-terminal outcomes to the pre-M2-Validation shape.
+
+### 15c Deployed Playwright acceptance (post-hardening)
+
+```
+$ npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated
+  ok 1 [staging-authenticated] › tests\e2e\signup-2-m1b-posting-race.staging.spec.ts (2.4m)
+  1 passed (2.8m)
+```
+
+Final hardened image under test: **`sha-10a63aa365f4`** / Fly **v945**.
+All six M1b scenarios green (B.renewal + A + C + D + E + G).  The
+new M2-Validation guards + reconciliation refactor cause no
+regressions.  Mode remains **mock** on staging (`SPECTRE_STRIPE_SDK_MODE`
+unset).
+
+### 15d Final feature-flag + secret state
+
+```
+$ flyctl secrets list --app spectre-staging | grep -iE "STRIPE|SIGNUP_2"
+(no output)
+```
+
+- `STRIPE_SECRET_KEY` — UNSET (founder dependency, §12)
+- `STRIPE_WEBHOOK_SIGNING_SECRET` — UNSET (founder dependency, §12)
+- `STRIPE_ACSS_PRICE_ID` — UNSET (founder dependency, §12)
+- `SPECTRE_STRIPE_SDK_MODE` — UNSET → **mock** (resolver default)
+- `SPECTRE_SIGNUP_2E_STRIPE_MODE` — UNSET (legacy flag)
+- `SPECTRE_SIGNUP_2E_PAYMENT_LIVE` — UNSET
+- `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE` — UNSET
+
+### 15e Validation (post-hardening)
+
+- `npm run typecheck` — clean
+- `npx vitest run tests/signup-2*.test.ts` — **1158/1158 pass + 5 Postgres-only skips** across 52 files (M2-Validation added 16 new scenarios in `tests/signup-2-m2-validation-guards.test.ts`)
+- `npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated` — **1/1 pass (2.4 m)** on `sha-10a63aa365f4` / v945
+
+### 15f Current limitations — genuine Stripe test-mode acceptance deferred
+
+Per founder §4: "Determine whether authorized Stripe test-mode access
+already exists.  If it does, configure the test-mode product, annual
+price, webhook endpoint, and credentials securely.  If it does not,
+provide the founder with the minimum required Stripe Dashboard
+actions."
+
+**Claude does NOT have Stripe dashboard access.** The founder has
+not provisioned Stripe test-mode API keys, a Product + Price, or a
+webhook endpoint on behalf of this project.  Without those, the
+following scenarios (founder §5) cannot be executed:
+
+- CAD $38,000 annual subscription creation via real Stripe test mode.
+- Real ACSS PAD mandate collection via Stripe hosted Checkout.
+- Real payment initiation + processing.
+- Stripe-generated webhook delivery with real signatures.
+- Real settlement + balance_transaction availability.
+- Real failure / refund / return / dispute drills.
+
+These are the acceptance scenarios **deferred** to the live-mode
+window.  The autonomous slice (§1–§14) + the M2-Validation hardening
+(§15a-§15e) are the SMALLEST technical artefacts that let the
+founder (a) grant Stripe dashboard access OR (b) execute §12 themselves,
+with ZERO code-change gates in the way.
+
+### 15g Precise outstanding founder actions (unchanged from §12)
+
+See **§12 Precise founder-action instructions for live-mode activation**
+above — unchanged.  The resolver now additionally:
+- Refuses any `STRIPE_SECRET_KEY` beginning with `sk_live_`.
+- Requires `SPECTRE_STRIPE_SDK_MODE=test` (preferred) OR
+  `SPECTRE_SIGNUP_2E_STRIPE_MODE=live` (legacy) to engage the SDK
+  adapter.  Mock mode is the default and happens when neither flag
+  is set.
+
+### 15h Non-authorisations preserved (founder §7)
+
+- No live-money mode (`sk_live_` physically refused).
+- No real debits.
+- No real customer activation.
+- No production deploy.
+- No existing-tenant modification.
+- No unapproved legal terms (ACSS mandate wording).
+- No M3-M6 begun.
+
+---
+
+**End of M2-Validation hardening.** M2 remains READY FOR FOUNDER
+ACCEPTANCE as the mock-backed staging baseline with (a) the drop-in
+real SDK adapter, (b) unconditional `sk_live_` + `livemode=true`
+refusal guards, and (c) a durably-recoverable scheduled
+reconciliation design.  Live-mode acceptance requires only §12 —
+no further code changes.
