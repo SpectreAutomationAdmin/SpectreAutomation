@@ -1760,6 +1760,29 @@ async function m1Seed(scenario) {
     },
     select: { id: true },
   });
+  // M1c (2026-10-27) -- seed the PaymentReconciliationEntry row that
+  // `onPaymentIntentSucceeded` would have persisted during the real
+  // settlement.  The webhook dispatcher's multi-signal renewal
+  // classifier (M1c, founder §5) requires BOTH `settlementConfirmedAt`
+  // AND a reconciliation-ledger `PAYMENT_SETTLED` entry to classify a
+  // subsequent `payment_intent.payment_failed` as a renewal failure
+  // rather than an initial-collection failure.  Omitting this entry
+  // would cause the active-scenario fixture to simulate an incomplete
+  // settlement state (timestamp present, ledger entry absent), which
+  // the classifier correctly refuses to treat as renewal.
+  await prisma.paymentReconciliationEntry.create({
+    data: {
+      clubId: club.id,
+      billingCycleId: cycle.id,
+      entryType: "PAYMENT_SETTLED",
+      amountMinorUnits: 3800000n,
+      currency: "cad",
+      providerEventId: `evt_mock_m1_seed_${club.id.slice(-6)}`,
+      providerPaymentIntentId: paymentIntentId,
+      providerChargeId: chargeId,
+      occurredAt: now,
+    },
+  });
   console.log(JSON.stringify({
     scenario,
     clubId: club.id,
