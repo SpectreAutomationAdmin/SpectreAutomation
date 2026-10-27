@@ -8313,6 +8313,9 @@ model BillingCycle {
   releasedByOperatorRecordId String?
   releasedByOperatorRecord   OperatorVerificationRecord? @relation(fields: [releasedByOperatorRecordId], references: [id])
 
+  // SIGNUP-2 M2-SyntheticSandbox marker.
+  syntheticTestOnly Boolean @default(false)
+
   provisioningJob       TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
 
@@ -8321,6 +8324,7 @@ model BillingCycle {
   @@index([subscriptionStatus])
   @@index([stripePaymentIntentId])
   @@index([releasedByOperatorRecordId])
+  @@index([syntheticTestOnly])
 }
 
 // =========================================================================
@@ -10583,6 +10587,9 @@ model SignupRegistration {
   verificationHoldCategory    String?
   signingAuthoritySignal      String?
 
+  // SIGNUP-2 M2-SyntheticSandbox (2026-10-27) marker.
+  syntheticTestOnly           Boolean   @default(false)
+
   microsoftTransactions SignupOAuthTransaction[]
   recoveryLinks         SignupRecoveryLink[]
   operatorVerificationRecords OperatorVerificationRecord[]
@@ -10593,6 +10600,7 @@ model SignupRegistration {
   @@index([legalNameNormalized])
   @@index([operatingNameNormalized])
   @@index([verificationVerdict, verificationDecidedAt])
+  @@index([syntheticTestOnly])
 }
 
 // SIGNUP-2 Phase 2D (2026-10-25) -- Operator verification records.
@@ -10617,10 +10625,14 @@ model OperatorVerificationRecord {
   // SIGNUP-2 Phase 2E (2026-10-26) -- back-relation for BillingCycle FK.
   cycles                BillingCycle[]
 
+  // SIGNUP-2 M2-SyntheticSandbox marker.
+  syntheticTestOnly     Boolean  @default(false)
+
   @@index([signupRegistrationId, createdAt])
   @@index([operatorUserId, createdAt])
   @@index([concept, createdAt])
   @@index([expiresAt])
+  @@index([syntheticTestOnly])
 }
 
 // SIGNUP-1F (2026-10-20) — Dedicated recovery-link table.  Separates
@@ -10711,9 +10723,13 @@ model SubscriptionAuthorisationAttestation {
   supersededAt             DateTime?
   supersededReason         String?
 
+  // SIGNUP-2 M2-SyntheticSandbox marker.
+  syntheticTestOnly        Boolean  @default(false)
+
   @@index([signupRegistrationId])
   @@index([clubId])
   @@index([acceptedAt])
+  @@index([syntheticTestOnly])
 }
 
 model SubscriptionPaymentMandate {
@@ -10737,9 +10753,13 @@ model SubscriptionPaymentMandate {
   revokedAt                DateTime?
   revokeReason             String?
 
+  // SIGNUP-2 M2-SyntheticSandbox marker.
+  syntheticTestOnly        Boolean  @default(false)
+
   @@index([clubId, acceptedAt])
   @@index([stripePaymentMethodId])
   @@index([stripeMandateId])
+  @@index([syntheticTestOnly])
 }
 
 model EntityStandingCheck {
