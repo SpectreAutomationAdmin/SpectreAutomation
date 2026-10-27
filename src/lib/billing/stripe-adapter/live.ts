@@ -152,13 +152,19 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
     async createMandateCheckoutSession(args: CreateMandateSessionArgs): Promise<MandateSessionRef> {
       const session = await withStripeRetry(
         () => stripe.checkout.sessions.create(
-          // M2-ACSS-Audit (2026-10-27): per Stripe docs the Canadian
-          // ACSS Debit flow for ANNUAL SUBSCRIPTIONS must:
+          // M2-ACSS-Audit (2026-10-27) + API-contract fix (2026-10-27):
+          // the Canadian ACSS Debit flow for ANNUAL SUBSCRIPTIONS must:
           //   1. Use Checkout `mode: "setup"` (subscription mode is
           //      explicitly unsupported for ACSS per
           //      https://docs.stripe.com/payments/acss-debit).
-          //   2. Set `payment_method_types: ["acss_debit"]` EXPLICITLY
-          //      (not inferred from payment_method_options).
+          //   2. Set `allowed_payment_method_types: ["acss_debit"]` to
+          //      narrow Checkout to ONLY ACSS (ACSS must also be
+          //      enabled in the Stripe dashboard payment-methods settings).
+          //      API `2026-09-30.endive` REMOVED the legacy
+          //      `payment_method_types` field from Checkout Session
+          //      creation; `allowed_payment_method_types` is the
+          //      replacement.  See
+          //      https://support.stripe.com/questions/fix-the-payment-method-types-error.
           //   3. Set `payment_method_options.acss_debit.mandate_options.
           //      default_for = ["invoice", "subscription"]` so the saved
           //      mandate can be reused by future invoices + subscription
@@ -171,7 +177,8 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
           {
             mode: "setup",
             customer: args.stripeCustomerId,
-            payment_method_types: ["acss_debit"],
+            currency: "cad",
+            allowed_payment_method_types: ["acss_debit"],
             payment_method_options: {
               acss_debit: {
                 currency: "cad",
@@ -187,7 +194,7 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
             success_url: args.successUrl,
             cancel_url: args.cancelUrl,
             metadata: args.metadata,
-          } as Stripe.Checkout.SessionCreateParams,
+          },
           { idempotencyKey: args.idempotencyKey },
         ),
         "checkout.sessions.create",

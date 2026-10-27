@@ -48,10 +48,21 @@ describe("SIGNUP-2 M2 ACSS Compat §1 · Checkout uses setup mode (NOT subscript
   });
 });
 
-describe("SIGNUP-2 M2 ACSS Compat §2 · payment_method_types explicitly set", () => {
-  it("createMandateCheckoutSession sets payment_method_types: ['acss_debit']", () => {
+describe("SIGNUP-2 M2 ACSS Compat §2 · allowed_payment_method_types explicitly narrows to ACSS", () => {
+  // API `2026-09-30.endive` REMOVED the legacy `payment_method_types`
+  // field from Checkout Session creation.  The replacement is
+  // `allowed_payment_method_types` (filter against dashboard-enabled
+  // methods).
+  it("createMandateCheckoutSession sets allowed_payment_method_types: ['acss_debit']", () => {
     const block = LIVE.match(/async createMandateCheckoutSession[\s\S]+?^    \},/m)![0];
-    expect(block).toMatch(/payment_method_types:\s*\[\s*"acss_debit"\s*\]/);
+    expect(block).toMatch(/allowed_payment_method_types:\s*\[\s*"acss_debit"\s*\]/);
+  });
+  it("createMandateCheckoutSession does NOT use the removed `payment_method_types` top-level field", () => {
+    const block = LIVE.match(/async createMandateCheckoutSession[\s\S]+?^    \},/m)![0];
+    // The legacy top-level field is removed in endive; its presence
+    // would return HTTP 400.  (Nested payment_method_options.acss_debit
+    // is a different thing and is still valid.)
+    expect(block).not.toMatch(/^\s*payment_method_types:/m);
   });
 });
 
