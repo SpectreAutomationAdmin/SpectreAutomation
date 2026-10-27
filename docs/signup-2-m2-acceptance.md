@@ -565,3 +565,220 @@ real SDK adapter, (b) unconditional `sk_live_` + `livemode=true`
 refusal guards, and (c) a durably-recoverable scheduled
 reconciliation design.  Live-mode acceptance requires only §12 —
 no further code changes.
+
+---
+
+## 16. Stripe sandbox preflight (founder 2026-10-27)
+
+**Status.** PREFLIGHT ONLY. No Fly secrets changed. No Stripe
+integration activated. All SIGNUP-2 flags remain OFF.
+
+Founder-provided sandbox state (preserved here for cross-check):
+- Product: *Spectre Automation — Annual Club Subscription*.
+- Price: CAD $38,000 annually, tax-exclusive.
+- Price id: `price_1UVAVnRJ1xiT30028TU0m7A6`.
+- Webhook destination: *Spectre Automation - Staging Subscriptions*.
+- Endpoint: `https://staging.spectreautomation.com/api/webhooks/stripe`.
+- Payload: `Snapshot`.
+- API version: `2026-09-30.endive`.
+- Six events selected.
+- Webhook signing secret generated, **not shared** (correct — stays in founder's hands).
+
+### 16a Webhook event subscription audit
+
+The dispatcher in [src/lib/billing/signup-2e-webhook-dispatch.ts](src/lib/billing/signup-2e-webhook-dispatch.ts) handles **exactly these six** event types (switch at line 32–49):
+
+1. `payment_intent.processing`
+2. `payment_intent.succeeded`
+3. `payment_intent.payment_failed`
+4. `charge.succeeded`
+5. `charge.refunded`
+6. `charge.dispute.created`
+
+**Action for founder:** confirm the Stripe dashboard subscription list for *Spectre Automation - Staging Subscriptions* contains **this exact set, no more, no fewer**. Any additional event will be received, signature-verified, persisted (durable receipt per Phase 2E §4), and then fall through the dispatcher's `default` branch (logged as `stripe.webhook.dispatch.unknown_event`, no state transition). Any missing event (especially `charge.refunded` or `charge.dispute.created`) will leave the suspension lifecycle without an upstream trigger for that failure mode.
+
+### 16b Price-ID suitability for ACSS PAD
+
+- Format `price_1UVAVnRJ1xiT30028TU0m7A6` is a valid Stripe Price id. The `price_1...` prefix is Stripe's standard id shape; sandbox and live-mode share the shape, so the id alone does not reveal mode. Mode is determined by the paired API key (`sk_test_` vs `sk_live_`), which this baseline hard-refuses for `sk_live_` (§15a.1).
+- The live adapter uses this id in two places:
+  - [src/lib/billing/signup-2e-mandate-service.ts](src/lib/billing/signup-2e-mandate-service.ts) → `priceId()` reads `STRIPE_ACSS_PRICE_ID` and passes it to `stripe.subscriptions.create({ items: [{ price }] })`.
+  - [src/lib/billing/stripe-adapter/live.ts](src/lib/billing/stripe-adapter/live.ts) `createSubscription` wires it under `payment_settings.payment_method_types: ["acss_debit"]`.
+- The reconciliation service enforces `EXPECTED_AMOUNT_MINOR = 3_800_000` + `EXPECTED_CURRENCY = "cad"`. Any mismatch writes a `RECONCILIATION_MISMATCH` ledger entry + refuses to flip `SETTLED`.
+
+**I cannot verify the sandbox Price's attributes via API (no sandbox key).** Founder dashboard checklist:
+
+1. The Price is attached to a Product with ACSS Debit payment-method enabled (Product → Payment methods → ACSS Debit).
+2. `currency = cad`.
+3. `recurring.interval = year`, `recurring.interval_count = 1`.
+4. `unit_amount = 3800000` (minor units; = CAD $38,000.00).
+5. `tax_behavior = exclusive`.
+6. Price status = `active`.
+7. The Product's `active` flag = true.
+
+If any of 1–7 differ, the reconciliation service will refuse to flip SETTLED and surface an operator alert; the integration will remain safe but non-functional until the Price is corrected.
+
+### 16c Account / environment consistency (founder-only verification)
+
+Claude cannot verify account consistency across the Stripe dashboard. Founder-side checklist:
+
+- The top-left mode toggle shows **Test mode** (or **Sandbox**) on BOTH:
+  - Products → the row showing `price_1UVAVnRJ1xiT30028TU0m7A6`.
+  - Developers → Webhooks → *Spectre Automation - Staging Subscriptions*.
+- Both views show the same account name in the dashboard header.
+- The webhook signing secret was captured FROM *Spectre Automation - Staging Subscriptions* in that same account (click the destination → "Signing secret" → "Reveal").
+- The signing secret begins with `whsec_`. If it is `whsec_live_...` or anything else, the account is not sandbox — stop and contact Stripe support.
+- The API key eventually provisioned begins with `sk_test_`. The resolver refuses `sk_live_` unconditionally.
+
+### 16d Technical check (adapter + reconciliation + webhook + idempotency + suspension)
+
+| Capability | Shipped at | Status |
+|---|---|---|
+| Test-mode SDK adapter | `sha-10a63aa365f4` / v945 | ✓ |
+| Fail-closed on sk_live_ / missing secrets / missing price id | `sha-10a63aa365f4` | ✓ |
+| Live-mode webhook event refused (HTTP 403) | `sha-10a63aa365f4` | ✓ |
+| Webhook signature verification via `stripe.webhooks.constructEvent` | `sha-52a9e808b0e4` (M2) + lives in live adapter | ✓ |
+| Webhook durable receipt + dedup (unique index on `StripeWebhookEvent.id` = `event.id`) | Phase 2A baseline, preserved | ✓ |
+| Replay / duplicate POST returns HTTP 200 `"replay"` (no re-processing) | Phase 2E baseline, preserved | ✓ |
+| Reconciliation: step-wise, idempotent, CAD $38k validated, reversal/refund/dispute preconditions, stall-not-halt | `sha-10a63aa365f4` | ✓ |
+| Suspension integration: `trySuspendFromWebhook` on REFUND / DISPUTE / FAILED_RENEWAL triggers | Phase 2H + M1 wiring | ✓ |
+| 7-signal correlator + AMBIGUOUS branch (M1d) | `sha-16e12308` / v936 (M1 baseline) | ✓ |
+| Mock-vs-live isolation at Phase 2F activation gate (production rejects `evidenceSource="mock-stripe"`) | Phase 2F baseline, preserved | ✓ |
+| All SIGNUP-2 flags default OFF | — | ✓ (`flyctl secrets list` returns zero matches) |
+
+Nothing in the current staging image requires a code change for activation. The remaining preflight items are a safe secret-installation procedure (§16e) and operator-managed verification (§16f).
+
+### 16e Secure installation procedure for the three secrets (founder-executable; no credentials in chat / logs / git / command history)
+
+**Primary recommendation — Fly dashboard web UI (zero local footprint):**
+
+1. Open https://fly.io/apps/spectre-staging/secrets in a browser.
+2. Click **Set a secret**. Enter name `STRIPE_SECRET_KEY`. Paste the `sk_test_...` value (begins with `sk_test_`, not `sk_live_`). Save.
+3. Repeat for `STRIPE_WEBHOOK_SIGNING_SECRET` (paste the `whsec_...` captured from the webhook destination).
+4. Repeat for `STRIPE_ACSS_PRICE_ID` with value `price_1UVAVnRJ1xiT30028TU0m7A6` (not sensitive, but handled consistently).
+5. Verify via dashboard that all three secret NAMES appear in the staging secrets list (values remain hidden).
+
+The browser-to-Fly path encrypts the values in transit. The values never touch a shell, a terminal history file, a local disk file, or git.
+
+**Alternate — `flyctl secrets import --stage` from a temporary file (shell-history-safe):**
+
+```bash
+# Step 1: Create the file OUTSIDE the repo (so even accidental git-add won't commit it).
+#   On Windows PowerShell:
+#     notepad "$HOME\.spectre-sandbox-stripe.env"
+#   On macOS/Linux:
+#     $EDITOR ~/.spectre-sandbox-stripe.env
+#
+# File contents (one KEY=VALUE per line, no quotes, no comments):
+#   STRIPE_SECRET_KEY=sk_test_<redacted>
+#   STRIPE_WEBHOOK_SIGNING_SECRET=whsec_<redacted>
+#   STRIPE_ACSS_PRICE_ID=price_1UVAVnRJ1xiT30028TU0m7A6
+#
+# Step 2: Pipe the file to flyctl secrets import. Use --stage to defer the deploy;
+# this stages secrets without triggering a machine restart.
+
+flyctl secrets import --stage --app spectre-staging < "$HOME/.spectre-sandbox-stripe.env"
+
+# Step 3: Verify the names (not values) are present.
+
+flyctl secrets list --app spectre-staging | Select-String -Pattern "STRIPE_"
+
+# Step 4: Securely delete the local file.
+#   On Windows PowerShell:
+#     Remove-Item "$HOME\.spectre-sandbox-stripe.env" -Force
+#   On macOS/Linux:
+#     shred -u ~/.spectre-sandbox-stripe.env  # or at minimum: rm -f
+```
+
+**Do NOT:**
+- Use `flyctl secrets set STRIPE_SECRET_KEY=sk_test_...` on a command line — the full value lands in shell history.
+- Email, Slack, or paste the secret values into any chat / document / commit.
+- Store them in `.env.local` inside this repo (even though `.env*.local` is gitignored, keeping them outside the working tree is one more layer of safety).
+- Share the webhook signing secret with Claude. Only the secret NAME needs to be referenced; the value is set by the founder.
+
+### 16f Controlled staging test plan (NOT executed in preflight)
+
+Once secrets are installed + mode is flipped to `test`, the founder can execute the following scenarios from the Stripe test-mode dashboard. Each scenario includes the expected observable outcome.
+
+| # | Scenario | How to trigger | Expected observation |
+|---|---|---|---|
+| 1 | Mandate collection | Call `initiateMandateCollection(registrationId)` on an AUTHORISED SignupRegistration via the admin surface. The service calls `stripe.checkout.sessions.create` with ACSS mandate options. | A real `cs_test_...` checkout session created with evidenceSource `live-stripe`. Checkout URL returned points at `checkout.stripe.com`. |
+| 2 | Mandate return + subscription create | Visit the Stripe-hosted Checkout URL + complete the mandate (test mode auto-approves). Return to Spectre's return handler. | `persistSignedMandate` writes `SubscriptionPaymentMandate` + creates a real `sub_test_...` + first `invoice_test_...` + `pi_test_...`. BillingCycle created in `INITIATED`. |
+| 3 | Payment processing | Stripe fires `payment_intent.processing`. | Dispatcher updates BillingCycle to `AWAITING_SETTLEMENT`. Reconciliation ledger: `PAYMENT_PROCESSING`. |
+| 4 | Payment settlement | Stripe fires `payment_intent.succeeded` then `charge.succeeded` with a `balance_transaction` id. | Dispatcher updates to `SETTLED` + `settlementConfirmedAt`. Reconciliation ledger: `PAYMENT_SETTLED` (via step-wise worker). If `balance_transaction.status === "available"` at charge.succeeded time, cycle flips to `ACTIVATION_READY`. |
+| 5 | Reconciliation step-wise poll | A `pending` balance_transaction causes the worker to loop. Flip to `available` via Stripe test-mode controls. | `stepReconcileBalanceTransaction` returns non-terminal + schedules next check; subsequent step returns terminal + writes PAYMENT_SETTLED. |
+| 6 | Amount mismatch | Create a one-off invoice with a different amount in the Stripe dashboard. | Reconciliation writes `RECONCILIATION_MISMATCH` entry + refuses to flip SETTLED. Operator alert raised. |
+| 7 | Failed payment | Use Stripe's test-mode "insufficient funds" ACSS payment method on a new mandate. | Dispatcher fires `payment_intent.payment_failed`. INITIAL path writes operator alert `INITIAL_PAYMENT_FAILURE`; no suspension. |
+| 8 | Refund | In Stripe dashboard, refund the test charge. | Dispatcher fires `charge.refunded`. Cycle flipped to `REVERSED`. `trySuspendFromWebhook(REFUND)` suspends ACTIVE tenants. |
+| 9 | Dispute | Trigger via Stripe's test-dispute card number. | Dispatcher fires `charge.dispute.created`. Cycle flipped to `DISPUTE_OPEN`. `trySuspendFromWebhook(DISPUTE)` suspends. |
+| 10 | Duplicate event | Resend any event from the Stripe dashboard. | Webhook route returns HTTP 200 `"replay"` on the duplicate (unique-index violation on `StripeWebhookEvent.id`). No state transition. |
+| 11 | Out-of-order (succeeded after failed) | Replay a `payment_intent.succeeded` event AFTER a `payment_intent.payment_failed`. | M1d laterSettlement guard: if the dispatcher sees a later `PAYMENT_SETTLED` entry recorded after the current event's `receivedAt`, it classifies as AMBIGUOUS; no automatic reinstatement. |
+| 12 | Wrong-cycle event | Replay an event with a cycle id that doesn't exist locally. | `findCycleByPaymentIntent` returns null → dispatcher no-ops silently. |
+| 13 | Invalid signature | POST to `/api/webhooks/stripe` with a malformed `Stripe-Signature` header. | Route returns HTTP 400 `verification_failed`. Nothing persisted. |
+| 14 | livemode=true event | Impossible to trigger from a sandbox dashboard; the guard refuses regardless. | Route returns HTTP 403 `livemode_refused`. Nothing persisted. |
+| 15 | sk_live_ key rotation | Operator misconfigures and sets `STRIPE_SECRET_KEY=sk_live_...` on staging. | Next request that resolves the adapter throws: `REFUSING to use STRIPE_SECRET_KEY beginning with 'sk_live_'`. |
+
+### 16g Flags state (unchanged by preflight)
+
+```
+$ flyctl secrets list --app spectre-staging | grep -iE "STRIPE|SIGNUP_2"
+(no output)
+```
+
+### 16h Preflight remaining-founder-actions summary
+
+| # | Action | Who | Blocker? |
+|---|---|---|---|
+| A | Verify Stripe dashboard account consistency (§16c checklist) | Founder | Must pass before activation |
+| B | Verify Price `price_1UVAVnRJ1xiT30028TU0m7A6` matches §16b 1–7 checklist | Founder | Must pass before activation |
+| C | Confirm webhook subscription list contains the exact 6 events in §16a | Founder | Must pass before activation |
+| D | Install three secrets via §16e Primary (Fly dashboard) or Alternate (`flyctl secrets import --stage`) | Founder | Must pass before activation |
+| E | ACSS mandate wording legal approval | Founder (legal) | Must pass before any real signatory executes mandate |
+| F | Approve activation sequence (flip `SPECTRE_STRIPE_SDK_MODE=test`) | Founder | Explicit go/no-go gate |
+
+### 16i Exact safe activation sequence (NOT executed in preflight — awaiting founder approval of each step)
+
+Once A–E are done:
+
+```
+# Step 1 — stage secrets without deploying.
+flyctl secrets import --stage --app spectre-staging < <founder's local file>
+
+# Step 2 — verify names present.
+flyctl secrets list --app spectre-staging
+
+# Step 3 — securely delete the local file.
+Remove-Item "$HOME\.spectre-sandbox-stripe.env" -Force   # PowerShell
+# or:  shred -u ~/.spectre-sandbox-stripe.env            # macOS/Linux
+
+# Step 4 — flip the SDK mode flag.  This triggers a staging deploy.
+flyctl secrets set --app spectre-staging SPECTRE_STRIPE_SDK_MODE=test
+
+# Step 5 — verify.
+curl -sS -o /dev/null -w "%{http_code}\n" https://staging.spectreautomation.com/api/health
+# -> 200
+
+# Step 6 — run scenarios 1–15 from §16f.  Watch logs for stripe.webhook.* and
+#          signup-2m2.reconcile.* entries.
+
+# Step 7 — return to mock when done.
+flyctl secrets unset --app spectre-staging SPECTRE_STRIPE_SDK_MODE
+```
+
+### 16j Non-authorisations preserved (founder preflight §7)
+
+- No Stripe integration activated.
+- No Fly secrets changed by Claude.
+- No real payments.
+- No real customer tenant activation.
+- No production deployment.
+- No existing-tenant modification.
+- All SIGNUP-2 activation + provisioning flags OFF.
+
+---
+
+**End of preflight.** All code-side requirements for sandbox
+activation are met at `sha-10a63aa365f4` / Fly v945. The remaining
+gate is founder-side verification (A–C) + secret installation (D) +
+legal approval (E) + activation authorisation (F). Claude will NOT
+execute the activation sequence (§16i) until founder explicitly
+authorises it in a subsequent message.
