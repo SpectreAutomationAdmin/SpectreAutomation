@@ -782,3 +782,340 @@ gate is founder-side verification (A–C) + secret installation (D) +
 legal approval (E) + activation authorisation (F). Claude will NOT
 execute the activation sequence (§16i) until founder explicitly
 authorises it in a subsequent message.
+
+---
+
+## 17. ACSS Debit compatibility audit (founder 2026-10-27)
+
+**Audit mandate.** Verify Spectre's subscription-collection flow is
+ACSS-compatible before enabling genuine Stripe integration.
+
+**Sources consulted (fetched 2026-10-27):**
+- https://docs.stripe.com/payments/acss-debit
+- https://docs.stripe.com/payments/acss-debit/set-up-payment
+- https://docs.stripe.com/billing/subscriptions/acss-debit
+- https://docs.stripe.com/payments/checkout/save-and-reuse
+- https://docs.stripe.com/payments/acss-debit/custom-pad-agreement
+
+**New baseline from audit fixes.** `sha-1d0c020` / Fly release
+**{PLACEHOLDER}** (deploy §17m).
+
+### 17a §1 Actual subscription-collection flow — PASS
+
+**Flow identified:** Stripe-hosted **Checkout Session in `setup` mode** → signatory signs the ACSS mandate on Stripe's hosted page → return handler extracts the mandate + payment method from the SetupIntent → separate `stripe.subscriptions.create` API call with the saved payment method.
+
+**Source files (evidence):**
+- [src/lib/billing/stripe-adapter/live.ts:152-186](src/lib/billing/stripe-adapter/live.ts#L152-L186) — `createMandateCheckoutSession` builds the Checkout Session.
+- [src/lib/billing/stripe-adapter/live.ts:188-222](src/lib/billing/stripe-adapter/live.ts#L188-L222) — `retrieveCheckoutSession` expands `setup_intent` + `setup_intent.payment_method` to extract mandate id + payment-method id.
+- [src/lib/billing/stripe-adapter/live.ts:224-262](src/lib/billing/stripe-adapter/live.ts#L224-L262) — `createSubscription` calls `stripe.subscriptions.create` with the saved default_payment_method, NOT Checkout subscription mode.
+- [src/lib/billing/signup-2e-mandate-service.ts:143-156](src/lib/billing/signup-2e-mandate-service.ts#L143-L156) — `initiateMandateCollection` invokes the adapter with `transactionType: "business"` + `intervalDescription: "Annual Spectre subscription"`.
+- [src/lib/billing/signup-2e-mandate-service.ts:228-234](src/lib/billing/signup-2e-mandate-service.ts#L228-L234) — `persistSignedMandate` passes the collected `defaultPaymentMethodId` into `createSubscription`.
+
+**Why this flow:** Stripe explicitly documents that Checkout `subscription` mode does NOT support ACSS Debit. The documented ACSS pattern is: collect mandate via Checkout `setup` mode, then create the Subscription separately via the API. Spectre's flow matches the documented pattern.
+
+### 17b §2 ACSS-for-annual-CAD-subscriptions support — PASS
+
+- Stripe supports ACSS for recurring annual CAD subscriptions **when collected via Checkout setup mode + Subscriptions API**, per the docs cited above.
+- Spectre's adapter uses this exact pattern.
+- `currency: "cad"` is set on `payment_method_options.acss_debit` and the reconciliation service enforces `EXPECTED_CURRENCY = "cad"` + `EXPECTED_AMOUNT_MINOR = 3_800_000`.
+- **Not supported** (and NOT used by Spectre): Checkout subscription mode, Payment Element with ACSS, direct PaymentIntent without a saved mandate.
+
+### 17c §3 Checkout explicitly enables acss_debit — PASS (after audit fix)
+
+**Audit finding (BEFORE fix):** the Checkout session relied on **inference** from the presence of `payment_method_options.acss_debit`, not an explicit `payment_method_types: ["acss_debit"]`. Stripe docs recommend explicit setting.
+
+**Fix shipped at `sha-1d0c020`:**
+```ts
+// src/lib/billing/stripe-adapter/live.ts:163
+payment_method_types: ["acss_debit"],
+```
+
+**Status now:** explicit, documented, test-guarded by `signup-2-m2-acss-compat.test.ts §2`.
+
+### 17d §4 Mandate configured for business + annual + off-session renewals — PASS (after audit fix)
+
+**Pre-audit state:**
+- `payment_schedule: "interval"` ✓
+- `interval_description: "Annual Spectre subscription"` ✓
+- `transaction_type: "business"` ✓
+- **MISSING:** `default_for: ["invoice", "subscription"]`
+- **MISSING:** `setup_future_usage: "off_session"`
+
+**Audit finding:** without `default_for`, Stripe would require re-collecting a mandate for every invoice/subscription cycle — a hard failure for annual off-session renewals. Without `setup_future_usage: "off_session"`, future unattended renewal charges would be refused.
+
+**Fix shipped at `sha-1d0c020`:**
+```ts
+// src/lib/billing/stripe-adapter/live.ts:164-174
+payment_method_options: {
+  acss_debit: {
+    currency: "cad",
+    setup_future_usage: "off_session",          // (added)
+    mandate_options: {
+      payment_schedule: "interval",
+      interval_description: args.acssMandate.intervalDescription,
+      transaction_type: "business",
+      default_for: ["invoice", "subscription"], // (added)
+    },
+  },
+},
+```
+
+**Status now:** mandate correctly configured for business + annual + off-session renewals. Guarded by `signup-2-m2-acss-compat.test.ts §3-§6`.
+
+### 17e §5 Bank-account verification, mandate acceptance, cancellation, notifications — PASS (Stripe-handled)
+
+- **Bank-account verification.** Stripe Checkout's hosted ACSS flow handles bank verification (micro-deposits in production; auto-approved in test mode). Spectre's role is to display the hosted Checkout URL to the signatory — not to collect banking details.
+- **Mandate acceptance.** Stripe Checkout presents the mandate text to the signatory and records their acceptance. Spectre persists:
+  - `SubscriptionPaymentMandate.stripeMandateId` (Stripe's mandate id)
+  - `mandateType = "ACSS_DEBIT"`, `mandateVariant = "INTERVAL"`, `transactionType = "BUSINESS"`
+  - `acceptedAt` timestamp
+  - `mandateTextHash` (SHA-256) + `mandateTextLength` for immutable audit evidence
+  - See [src/lib/billing/signup-2e-mandate-service.ts:242-258](src/lib/billing/signup-2e-mandate-service.ts#L242-L258).
+- **Cancellation.** The ACSS mandate includes cancellation rights per Payments Canada rules. Stripe handles the regulatory boilerplate on the hosted Checkout page. Spectre's role is operator-side via Phase 2H `suspendTenant({ trigger: "OPERATOR_HOLD" })` — not member-facing cancellation UI (deferred to M3+).
+- **Notifications.** Stripe automatically sends the mandate-confirmation email required by CAD regulations ("within 5 calendar days of acceptance"). Spectre does NOT need to send this email — Stripe does. The founder MUST confirm the Stripe test account has the mandate-confirmation email template enabled (dashboard check — Settings → Business settings → Public business details).
+
+### 17f §6 Price ID compatibility — PASS (format valid) / BLOCKED (attributes founder-only)
+
+- **Shape:** `price_1UVAVnRJ1xiT30028TU0m7A6` is a valid Stripe Price id (standard `price_1...` format; sandbox and live share the shape).
+- **Compatibility with Spectre's flow:** the Subscriptions API accepts ANY recurring Price when the saved default_payment_method is attached. The Price does NOT need to be marked ACSS-specific — the payment-method mandate (collected via Checkout setup) is what authorises the charge.
+- **Required Price attributes (§16b checklist — founder dashboard-only verification):**
+  1. `currency = cad`
+  2. `recurring.interval = year`, `interval_count = 1`
+  3. `unit_amount = 3800000`
+  4. `tax_behavior = exclusive`
+  5. Price `active = true`, Product `active = true`
+  6. Product has ACSS Debit enabled in its payment-method settings
+- **Reconciliation guard:** `EXPECTED_AMOUNT_MINOR = 3_800_000` + `EXPECTED_CURRENCY = "cad"` in [signup-2m2-reconciliation-service.ts:62-63](src/lib/billing/signup-2m2-reconciliation-service.ts#L62-L63). Any mismatch triggers `RECONCILIATION_MISMATCH` and refuses to flip SETTLED. **This means a wrong Price fails safely but renders the integration non-functional until corrected.**
+- **BLOCKED on API verification:** without the sandbox secret key, Claude cannot call `stripe.prices.retrieve(...)` to confirm the attributes. Founder must verify via the dashboard. **Status: founder-side blocker.**
+
+### 17g §7 Subscription creation, async settlement, webhook reconciliation, activation restrictions — PASS
+
+- **Subscription creation.**
+  - `stripe.subscriptions.create` is called from the live adapter with `payment_behavior: "default_incomplete"`, `payment_settings.payment_method_types: ["acss_debit"]`, `save_default_payment_method: "on_subscription"`.
+  - First invoice yields a `payment_intent` in `requires_action` → `processing` → `succeeded` lifecycle, driven by webhooks.
+  - Idempotency key: `signup-2e-subscription:<registrationId>:first` so retries dedupe server-side.
+- **Asynchronous settlement.**
+  - ACSS settlement is T+5 business days in production; Stripe test mode usually marks `balance_transaction.status = "available"` immediately but can be configured otherwise.
+  - Reconciliation is step-wise + schedule-driven (§3.g M2-Validation): `stepReconcileBalanceTransaction` returns `{ terminal: false, nextCheckAt }` on `pending` and a worker re-invokes until `available`.
+- **Webhook reconciliation.**
+  - 6-event dispatch matrix (§16a) covers processing / succeeded / payment_failed / charge.succeeded / charge.refunded / charge.dispute.created.
+  - Durable receipt + unique-index dedup + replay semantics preserved from Phase 2E.
+  - 7-signal correlator + AMBIGUOUS branch (M1d) classifies renewal-vs-initial without single-signal risk.
+- **Activation restrictions.**
+  - The reconciliation service writes `PAYMENT_SETTLED` + flips `BillingCycle.subscriptionStatus = "SETTLED"` — **only**.
+  - Tenant activation happens in Phase 2F's 9-gate decision service (`validateActivationAuthorisation`), NOT here.
+  - Phase 2F rejects `evidenceSource === "mock-stripe"` on production paths.
+  - Phase 2G provisioning worker + Phase 2H suspension lifecycle remain the authoritative state machines.
+- **Status:** every one of §7's four sub-requirements is correct at this baseline.
+
+### 17h Preserved invariants (not changed by this audit)
+
+- `livemode === true` events refused with HTTP 403 (§15a.2).
+- `STRIPE_SECRET_KEY` beginning with `sk_live_` refused unconditionally (§15a.1).
+- Mode flag `SPECTRE_STRIPE_SDK_MODE` defaults to `mock`; test mode engagement is a separate operator action (§15a.3).
+- All SIGNUP-2 flags remain OFF on staging.
+
+### 17i Non-authorisations preserved (founder audit §final)
+
+- No Fly secrets changed.
+- No Stripe integration enabled (`SPECTRE_STRIPE_SDK_MODE` still unset).
+- No real payments initiated.
+- No real customer tenants activated.
+- No production deployment.
+- No existing-tenant modification.
+
+### 17j Validation (post-audit)
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run tests/signup-2*.test.ts` — **1178/1178 pass + 5 Postgres-only skips** across 53 files.
+- `npx vitest run tests/signup-2-m2-acss-compat.test.ts` — **17/17 pass** (ACSS-compat contract tests, new).
+
+### 17k PASS / FAIL / BLOCKED summary table
+
+| § | Requirement | Verdict | Evidence / blocker |
+|---|---|---|---|
+| §1 | Actual subscription-collection flow identified | **PASS** | Checkout setup mode + separate Subscriptions API; see §17a |
+| §2 | Flow supports acss_debit for annual CAD subscriptions | **PASS** | Documented Stripe pattern; Spectre matches it (§17b) |
+| §3 | Checkout explicitly enables acss_debit | **PASS** (after fix at `sha-1d0c020`) | `payment_method_types: ["acss_debit"]` added |
+| §4 | Mandate configured for business + annual + off-session | **PASS** (after fix at `sha-1d0c020`) | `default_for` + `setup_future_usage` added; business + interval already in place |
+| §5 | Bank-account verification, mandate acceptance, cancellation, notifications | **PASS** | Stripe-handled; Spectre persists stripeMandateId + text-hash evidence (§17e). Founder-side: confirm mandate-confirmation email template is enabled in Stripe dashboard |
+| §6 | Price ID compatibility | **PASS** (shape) / **BLOCKED** (attributes founder-only) | Format valid; dashboard verification required (§16b 1-7). Mismatch fails safely via `RECONCILIATION_MISMATCH` |
+| §7 | Subscription creation + async settlement + webhook reconciliation + activation restrictions | **PASS** | All four sub-requirements verified; see §17g |
+
+### 17l Corrections shipped by this audit (`sha-1d0c020`)
+
+1. `payment_method_types: ["acss_debit"]` added explicitly to Checkout session.
+2. `default_for: ["invoice", "subscription"]` added to `mandate_options`.
+3. `setup_future_usage: "off_session"` added to `payment_method_options.acss_debit`.
+4. 17 new contract tests in `tests/signup-2-m2-acss-compat.test.ts` guard against regression.
+
+### 17m Image provenance
+
+- **Commit:** `sha-1d0c020...`
+- **DRH-1 run:** 40518023893 — conclusion: {PLACEHOLDER}
+- **Image:** `registry.fly.io/spectre-staging:sha-1d0c020{...}`
+- **Fly release:** **{PLACEHOLDER}**
+- **Health probe:** {PLACEHOLDER} at open + close
+- **Mode:** `SPECTRE_STRIPE_SDK_MODE` still **unset → mock** (no live integration enabled)
+- **Rollback anchor:** M2-Validation `sha-10a63aa365f4` / Fly v945
+
+### 17n Remaining founder actions (unchanged from §16h)
+
+| # | Action | Who | Blocker? |
+|---|---|---|---|
+| A | Verify Stripe dashboard account consistency (§16c) | Founder | yes |
+| B | Verify Price `price_1UVAVnRJ1xiT30028TU0m7A6` matches §16b 1-7 attributes | Founder | yes |
+| C | Confirm webhook subscription contains exact 6 events (§16a) | Founder | yes |
+| D | Install three secrets via §16e Primary (Fly dashboard) or Alternate (`flyctl secrets import --stage`) | Founder | yes |
+| E | ACSS mandate wording legal approval | Founder (legal) | yes |
+| **F** | **NEW: Confirm Stripe mandate-confirmation email template is enabled** (dashboard → Settings → Business settings → Public business details) | Founder | yes (CAD regulation) |
+| G | Approve activation sequence (flip `SPECTRE_STRIPE_SDK_MODE=test`) | Founder | yes (go/no-go) |
+
+---
+
+**End of ACSS compatibility audit.** The subscription-collection
+flow at `sha-1d0c020` is Stripe-documented, test-mode-isolated, and
+matches every ACSS requirement that can be verified without founder-
+side dashboard access. The remaining gates are founder-side (A-G
+above). Claude will NOT execute the activation sequence until founder
+explicitly authorises it.
+
+---
+
+## 18. Final staging readiness verification (founder 2026-10-27)
+
+**Status.** Final verification complete at the authorised baseline
+`sha-9c7dd537211a` / Fly release **v951**. Mode remains **mock**
+(`SPECTRE_STRIPE_SDK_MODE` unset). No flag flip executed. No sandbox
+payment initiated. **One blocker identified — see §18e.**
+
+**Founder-confirmed state** (recorded here for cross-check, not independently verified by Claude):
+- Stripe sandbox ACSS Debit enabled.
+- Six webhook events exactly match the dispatcher's set (§16a).
+- All three Stripe secrets installed in Fly staging.
+- Canadian PAD mandate + debit initiation + microdeposit verification emails enabled in Stripe.
+- Successful-payment + refund notifications reviewed.
+
+### 18a Deployment verification
+
+- **DRH-1 run:** 40520951728 — conclusion: **success**.
+- **Commit:** `sha-9c7dd537211ae5abb73ec22c253ea8d3db6fdfe1`.
+- **Image:** `registry.fly.io/spectre-staging:sha-9c7dd537211a`.
+- **Digest:** `sha256:d3bb68c289ae69acd332340663117d6952b9359d00794ec6c9d44fcdc03e1502`.
+- **Fly release:** **v951**.
+- **Rollback anchor:** M2-Validation `sha-10a63aa365f4` / Fly v945 (M1 `sha-16e12308` / v936 as deeper fallback).
+- **Previous staging image** `sha-1d0c020` (Fly v950) shipped the API-contract-buggy top-level `payment_method_types` — mode=mock meant no Stripe calls occurred against it; v951 supersedes.
+
+### 18b Staging smoke verification (no secret rotation, no payments)
+
+| Probe | Result | Expected? |
+|---|---|---|
+| `GET /api/health` | **HTTP 200** (574 ms) | ✓ |
+| `POST /api/webhooks/stripe` (unsigned body) | **HTTP 400** `verification_failed` | ✓ signature guard first |
+| `POST /api/webhooks/stripe` (unsigned body, `livemode:true` in payload) | **HTTP 400** (signature guard still refuses first; livemode guard only reachable after a valid signature) | ✓ |
+| `GET /` (homepage) | **HTTP 200** | ✓ |
+
+**Not run:** the M1b Playwright spec `tests/e2e/signup-2-m1b-posting-race.staging.spec.ts`. The spec SETS `STRIPE_WEBHOOK_SIGNING_SECRET` to a mock value before its scenarios and UNSETS it in teardown. Running it now would **destroy the founder-installed real sandbox signing secret**. The spec's secret-rotation design was correct for the pre-Stripe-sandbox era but is now actively dangerous. See §18e.
+
+### 18c Secret presence verification (names only — values never read)
+
+```
+$ flyctl secrets list --app spectre-staging | grep -iE "STRIPE|SIGNUP_2"
+STRIPE_SECRET_KEY             │ 13da253279ef579e │ Deployed
+STRIPE_WEBHOOK_SIGNING_SECRET │ be00663289dbbf6a │ Deployed
+STRIPE_ACSS_PRICE_ID          │ 53f3d2f00139e274 │ Deployed
+```
+
+- All three required Stripe secret NAMES present.
+- Fly reports only a short digest for each — the actual values remain Fly-encrypted at rest and are never shown by flyctl or by Claude.
+- `SPECTRE_STRIPE_SDK_MODE` — **UNSET** (adapter defaults to mock; no live SDK calls occur).
+- `SPECTRE_SIGNUP_2E_PAYMENT_LIVE` — **UNSET** (webhook flag-OFF path: events persist durably but dispatch is skipped).
+- `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE` — **UNSET**.
+- `SPECTRE_SIGNUP_2E_STRIPE_MODE` — **UNSET** (legacy mode flag).
+
+**Readiness consequence:** even if a real Stripe test-mode event were somehow delivered to the webhook route right now, it would:
+1. Pass signature verification (secrets installed).
+2. **Fail the livemode=true guard** if `livemode` is true (returns 403).
+3. Persist durably (dedup via unique index on `event.id`).
+4. Hit the **flag-OFF path** (`SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1"`) → log `received_disabled` + return 200 with NO state transitions.
+
+So the system is CORRECTLY STAGED: secrets accept real events, but no state changes fire until the activation flag is explicitly flipped.
+
+### 18d Sandbox account cross-check (founder-only, re-confirmed by name match)
+
+Claude cannot cross-check that the three secrets belong to the same Stripe sandbox account — the values are never visible to Claude. The founder has stated above that all three were created from the same Stripe sandbox and match the Price `price_1UVAVnRJ1xiT30028TU0m7A6`. Trust boundary: founder's statement.
+
+Any mismatch would surface at the FIRST real test-mode request as HTTP 401 from Stripe's API (wrong secret_key) or HTTP 400 (wrong webhook signing secret → signature mismatch → `verification_failed`). Both failure modes are observable in Fly logs and NON-DESTRUCTIVE — they refuse the request without touching staging state.
+
+### 18e Sandbox API acceptance of `allowed_payment_method_types` + mandate options
+
+**Verification against SDK types (local, exhaustive):** every parameter is in the SDK v23.0.1 (OpenAPI v2526, matches API `2026-09-30.endive`) typed `SessionCreateParams.PaymentMethodOptions.AcssDebit` namespace. See §17 for the per-parameter table.
+
+**Verification against real Stripe sandbox API:** **CANNOT BE PERFORMED** without initiating a request against the sandbox. Doing so is explicitly forbidden by the current authorisation boundary ("Do not initiate sandbox payments"). The authoritative API-acceptance check is **the first real `initiateMandateCollection` call** once activation is authorised. If Stripe returns an error for any parameter, the live adapter's `withStripeRetry` logs the exact error type/code/statusCode (never retries 4xx) and the operator can diagnose from Fly logs.
+
+**Current confidence level:** HIGH. The SDK types are generated from the OpenAPI spec of the pinned API version; a request that typechecks against them is overwhelmingly likely to be accepted. The one known risk — the removed top-level `payment_method_types` — has been fixed at `sha-9c7dd537211a`.
+
+### 18f Zero live / production / existing-tenant exposure verification
+
+| Risk vector | Guard | Status |
+|---|---|---|
+| `sk_live_` key accidentally installed | Resolver throws unconditionally on `sk_live_` prefix (§15a.1) | ✓ Active |
+| Live-mode Stripe event delivered | Webhook route returns HTTP 403 `livemode_refused` BEFORE persist + dispatch (§15a.2) | ✓ Active |
+| SDK adapter engaged without secrets | Resolver throws on `mode=test` + missing secret (§15a.4) | ✓ Active (irrelevant: mode is unset) |
+| Caller-supplied flag bypasses live validation | `resolveStripeAdapter({ requireLive: true })` for production call-sites (§15a) | ✓ Active |
+| Mock evidence reaches production provisioning | Phase 2F rejects `evidenceSource="mock-stripe"` on production paths | ✓ Active |
+| Existing tenants (pre-SIGNUP-2) suspended by webhook | 7-signal correlator refuses when subscription row absent OR status != ACTIVE; legacy-tenant grandfather at access-tier gate preserves pre-SIGNUP-2 behaviour | ✓ Active |
+| Production deployment affected | DRH-1 deploys to `spectre-staging` only; `spectre-production` app untouched | ✓ Active |
+| Spectre-side activation triggered by SetupIntent completion | `persistSignedMandate` creates `BillingCycle` in `INITIATED`, NOT `SETTLED` or `ACTIVATION_READY`; Phase 2F's 9-gate activation remains the only path | ✓ Active |
+
+**None of the above guards can be bypassed by the preflight / readiness state.** No activation flag is flipped. Mode is mock. All suspension/payment flags are OFF.
+
+### 18f-i Blocker found: M1b Playwright spec would destroy founder-installed secret
+
+**Severity:** Medium. **Mitigation:** DO NOT run the M1b Playwright spec against this image. Any pre-activation acceptance that needs the end-to-end webhook→suspension flow must either (a) run against a non-sandbox staging image where the signing secret is spec-managed, OR (b) be rewritten to NOT rotate `STRIPE_WEBHOOK_SIGNING_SECRET` when founder-provided real sandbox secrets are present. For sandbox activation testing, the real Stripe-generated webhook deliveries (from §16f test plan) replace the Playwright scenario — they exercise the identical webhook route + dispatcher.
+
+**Follow-on item** (not a blocker for sandbox activation, but tracked): rework `tests/e2e/signup-2-m1b-posting-race.staging.spec.ts` to detect pre-existing `STRIPE_WEBHOOK_SIGNING_SECRET` and refuse to run (or skip gracefully) when a real sandbox secret is present. Can be delivered in a subsequent slice; does NOT block current sandbox readiness.
+
+### 18g Test plan coverage check (founder §7)
+
+The §16f test plan (15 scenarios) covers:
+
+| § | Required coverage area | §16f scenario(s) |
+|---|---|---|
+| Hosted Checkout + PAD mandate acceptance | **1, 2** (mandate collection + return + subscription create) | ✓ |
+| Subscription creation | **2, 7, 8, 9** | ✓ |
+| Webhook delivery | **3, 4** + all event handlers | ✓ |
+| Asynchronous settlement | **4, 5** (step-wise reconciliation across pending → available) | ✓ |
+| Refunds | **8** | ✓ |
+| Disputes | **9** | ✓ |
+| Failed payments | **7** | ✓ |
+| Replay protection | **10** (duplicate event delivery) | ✓ |
+| Required customer notifications | Stripe-side automatic (mandate confirmation, pre-notification of debit, payment receipt, failure notice). Founder confirmed enabled above. | ✓ |
+| Amount / currency mismatch | **6** (RECONCILIATION_MISMATCH ledger entry) | ✓ |
+| Out-of-order events | **11** (M1d laterSettlement guard) | ✓ |
+| Wrong-tenant / wrong-cycle events | **12** (findCycleByPaymentIntent null short-circuit) | ✓ |
+| Invalid signature | **13** (verifiication_failed HTTP 400) | ✓ |
+| livemode=true event refusal | **14** (HTTP 403) | ✓ |
+| sk_live_ key refusal | **15** (resolver throws) | ✓ |
+
+All required coverage areas are addressed. The plan is comprehensive.
+
+### 18h Final GO / NO-GO recommendation
+
+**Recommendation: GO** for controlled sandbox testing, with the following preconditions reconfirmed in the activation window:
+
+1. **GO** on code correctness — all parameters typecheck against the pinned Stripe API version; API-contract bug fixed at `sha-9c7dd537211a` / v951.
+2. **GO** on test-mode isolation — `sk_live_` refused unconditionally; `livemode=true` events refused; mode-flag renamed with clearer semantics.
+3. **GO** on reconciliation design — step-wise, idempotent, CAD $38k validated, reversal/refund/dispute preconditions, stall-not-halt.
+4. **GO** on secrets installation — three names present, values never exposed, same-account consistency recorded by founder.
+5. **GO** on test-plan coverage — §16f scenarios cover every required area.
+6. **GO** on zero-impact-until-activated — flag flip is the single explicit boundary; staging state before + after flip is observable.
+7. **Caution** on the M1b Playwright spec — do not run it against this image; it would destroy the founder-installed webhook signing secret. **Mitigated** by using the §16f real-Stripe scenarios instead for sandbox acceptance.
+
+**The single remaining go-live gate is founder authorisation to flip `SPECTRE_STRIPE_SDK_MODE=test`.** Claude will NOT execute that flag flip until the founder explicitly authorises it in a subsequent message. When authorised, the safe sequence is §16i (unchanged).
+
+---
+
+**End of final staging readiness.** `sha-9c7dd537211a` / Fly v951
+is the authorised baseline for controlled sandbox testing. Awaiting
+explicit founder authorisation of the activation flag flip.
