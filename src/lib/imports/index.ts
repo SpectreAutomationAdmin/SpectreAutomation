@@ -784,12 +784,15 @@ export async function voidCommittedBatch(
   if (!trimmedReason) {
     throw new ConflictError("Void reason is required.");
   }
-  await assertPostingAllowed(principal, batch.clubId, "import.batch.void", "ImportBatch", batch.id);
-
   // Reverse (if the batch was live and still has an un-reversed
   // JE) + flip status. Atomic.
   const now = new Date();
   const updated = await prisma.$transaction(async (tx) => {
+    // M1c: tx-bound posting-guard with FOR UPDATE on ClubSubscription.
+    await assertPostingAllowed(
+      principal, batch.clubId, "import.batch.void", "ImportBatch", batch.id,
+      { tx: tx as unknown as { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+    );
     // Only reverse when the batch is STILL live — superseded
     // batches were already reversed when they were superseded.
     if (batch.status === "COMMITTED" && batch.supersededAt == null) {

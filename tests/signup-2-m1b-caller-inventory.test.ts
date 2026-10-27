@@ -54,19 +54,45 @@ describe("SIGNUP-2 M1b · posting-guard caller inventory", () => {
   });
 });
 
-describe("SIGNUP-2 M1b · classification totals", () => {
-  it("counts match expected buckets at ship time", () => {
+describe("SIGNUP-2 M1b/M1c · classification totals", () => {
+  it("counts match M1c ship-time distribution", () => {
     const counts = LEGACY_POSTING_GUARD_CALLERS.reduce<Record<string, number>>((acc, e) => {
       acc[e.classification] = (acc[e.classification] ?? 0) + 1;
       return acc;
     }, {});
-    // Snapshot the ship-time distribution.  Changes here force an
-    // acceptance-doc update.
-    expect(counts.MIGRATED, "MIGRATED count").toBeGreaterThanOrEqual(1);
-    expect(counts.TX_PENDING, "TX_PENDING count").toBeGreaterThanOrEqual(10);
-    expect(counts.NO_TX_PENDING, "NO_TX_PENDING count").toBeGreaterThanOrEqual(5);
-    expect(counts.ADMIN_CONFIG_LEGACY, "ADMIN_CONFIG_LEGACY count").toBeGreaterThanOrEqual(1);
+    expect(counts.MIGRATED ?? 0, "MIGRATED count after M1c").toBeGreaterThanOrEqual(2);
+    expect(counts.PARTIAL_MIGRATED ?? 0, "PARTIAL_MIGRATED count").toBeGreaterThanOrEqual(2);
+    expect(counts.TX_PENDING ?? 0, "TX_PENDING remaining").toBeLessThanOrEqual(27);
+    expect(counts.NO_TX_PENDING ?? 0, "NO_TX_PENDING remaining").toBeLessThanOrEqual(16);
   });
+});
+
+describe("SIGNUP-2 M1c · strict regression guard (founder §6)", () => {
+  // The strict guard: for every file in the ACTUAL caller inventory
+  // whose classification is MIGRATED, the file MUST use either
+  // `withPostingGuard` or `assertPostingAllowed(..., { tx })` -- it
+  // MUST NOT contain any bare `assertPostingAllowed(...)` call where
+  // the trailing argument is not `{ tx }`.
+  const MIGRATED_FILES = LEGACY_POSTING_GUARD_CALLERS
+    .filter((e) => e.classification === "MIGRATED")
+    .map((e) => e.path);
+
+  for (const f of MIGRATED_FILES) {
+    it(`${f}: no bare assertPostingAllowed calls (migrated to withPostingGuard or {tx})`, () => {
+      const content = readFileSync(join(process.cwd(), f), "utf8");
+      // A bare call is `await assertPostingAllowed(...)` where the
+      // final argument is NOT a `{ tx` object literal.  Count
+      // bare calls vs tx-passed calls.
+      const allCalls = (content.match(/await assertPostingAllowed\(/g) ?? []).length;
+      const txCalls = (content.match(/assertPostingAllowed\([^)]+\{\s*tx/g) ?? []).length;
+      const wrappedCalls = (content.match(/withPostingGuard\(/g) ?? []).length;
+      const bareCalls = allCalls - txCalls;
+      // The file is MIGRATED, so EVERY posting-guard entry must be
+      // either via withPostingGuard or via {tx}.
+      expect(bareCalls, `${f} contains bare assertPostingAllowed; migration incomplete`).toBe(0);
+      expect(txCalls + wrappedCalls, `${f} must have at least 1 tx-bound or wrapped posting-guard call`).toBeGreaterThan(0);
+    });
+  }
 });
 
 describe("SIGNUP-2 M1b · journal.ts migrated to withPostingGuard", () => {
@@ -99,8 +125,15 @@ describe("SIGNUP-2 M1b · webhook classification differentiates initial vs renew
     join(process.cwd(), "src/lib/billing/signup-2e-webhook-dispatch.ts"),
     "utf8",
   );
-  it("onPaymentIntentFailed checks settlementConfirmedAt to classify", () => {
-    expect(DISPATCH).toMatch(/isInitialPaymentFailure = cycle\.settlementConfirmedAt === null/);
+  it("onPaymentIntentFailed classifies using MULTI-SIGNAL correlation (M1c §5)", () => {
+    // M1c replaced the single-signal check with a multi-signal
+    // correlation (settlementConfirmedAt + priorSettlement +
+    // subscription + ACTIVE status).  The INITIAL vs RENEWAL
+    // boolean now resolves via `multiSignalRenewal`.
+    expect(DISPATCH).toMatch(/multiSignalRenewal/);
+    expect(DISPATCH).toMatch(/cycle\.settlementConfirmedAt !== null/);
+    expect(DISPATCH).toMatch(/priorSettlement !== null/);
+    expect(DISPATCH).toMatch(/sub\.subscriptionStatus === "ACTIVE"/);
   });
   it("INITIAL path does NOT call trySuspendFromWebhook", () => {
     const block = DISPATCH.match(/async function onPaymentIntentFailed[\s\S]+?async function onChargeSucceeded/m)![0];

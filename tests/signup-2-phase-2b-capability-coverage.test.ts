@@ -81,7 +81,11 @@ describe("SIGNUP-2 Phase 2B · classification A files call posting-guard", () =>
       const content = readFileSync(path, "utf8");
       const callsPosting = /assertPostingAllowed\(/.test(content);
       const callsSensitive = /assertSensitiveActionAllowed\(/.test(content);
-      expect(callsPosting || callsSensitive).toBe(true);
+      // M1c (2026-10-26): withPostingGuard is the migration surface
+      // and internally calls assertPostingAllowed({tx}); accept it
+      // as a valid posting-guard pattern.
+      const callsWithPostingGuard = /withPostingGuard\(/.test(content);
+      expect(callsPosting || callsSensitive || callsWithPostingGuard).toBe(true);
     });
   }
 });

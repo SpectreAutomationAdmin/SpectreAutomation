@@ -22,6 +22,9 @@ import { audit } from "../audit";
 import { isSuperAdmin, requirePermission, type Principal } from "../rbac";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
 import { assertPostingAllowed } from "../posting-guard";
+// M1c (2026-10-26): use the extended assertPostingAllowed({tx})
+// signature inside the opening-balance posting transaction so the
+// guard shares the tx with the JE + OpeningBalanceSet writes.
 
 type BalanceLine = { accountId: string; debit: number; credit: number; description?: string };
 type Subledger = { entityId: string; balance: number };
@@ -132,7 +135,6 @@ export async function postSet(principal: Principal, setId: string, periodId: str
   const set = await prisma.openingBalanceSet.findUnique({ where: { id: setId } });
   if (!set) throw new NotFoundError("OpeningBalanceSet", setId);
   ensureController(principal, set.clubId);
-  await assertPostingAllowed(principal, set.clubId, "opening_balance.post", "OpeningBalanceSet", setId);
   if (set.status !== "DRAFT") throw new ConflictError(`Cannot post a set in status ${set.status}`);
   const result = await validateSet(setId);
   if (!result.ok) throw new ConflictError(`Opening balances invalid: ${result.errors.map((e) => e.message).join("; ")}`);
@@ -143,6 +145,11 @@ export async function postSet(principal: Principal, setId: string, periodId: str
 
   const entryNumber = `OB-${Date.now().toString(36).toUpperCase()}`;
   const journal = await prisma.$transaction(async (tx) => {
+    // M1c: tx-bound posting-guard with FOR UPDATE on ClubSubscription.
+    await assertPostingAllowed(
+      principal, set.clubId, "opening_balance.post", "OpeningBalanceSet", setId,
+      { tx: tx as unknown as { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+    );
     const je = await tx.journalEntry.create({
       data: {
         clubId: set.clubId, entryNumber, entryDate: period.startDate,

@@ -26,7 +26,7 @@ import { toMoney, sumMoney, isNegative, ZERO } from "../accounting/decimal";
 import { submitForApproval, getRequestForEntity, isApproved } from "./approvals";
 import { postInvoiceToGl, postInvoiceReversalToGl } from "./ap-events";
 import { detectInvoiceExceptions } from "./exceptions";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 // DIM-2 (2026-09-29) — central dimensional validation.
 import { validateManyLineDimensions } from "../accounting/dimensional-validation";
 
@@ -365,7 +365,6 @@ export async function postInvoice(principal: Principal, invoiceId: string) {
   });
   assertTenantOwned(inv, principal);
   requirePermission(principal, inv.clubId, "ap:invoice:post");
-  await assertPostingAllowed(principal, inv.clubId, "ap.invoice.post", "APInvoice", invoiceId);
   if (inv.status === "POSTED" || inv.status === "PARTIALLY_PAID" || inv.status === "PAID") {
     return inv;
   }
@@ -385,15 +384,24 @@ export async function postInvoice(principal: Principal, invoiceId: string) {
   }
 
   const journal = await postInvoiceToGl(principal, invoiceId);
-  const updated = await prisma.aPInvoice.update({
-    where: { id: invoiceId },
-    data: {
-      status: "POSTED",
-      postedAt: new Date(),
-      postedByUserId: principal.id,
-      postedJournalEntryId: journal.id,
-    },
-  });
+  // M1c (2026-10-26) -- posting-guard + state flip in one tx with
+  // FOR UPDATE row-lock on ClubSubscription; serialises against
+  // Phase 2H suspendTenant.
+  const updated = await withPostingGuard(
+    principal,
+    inv.clubId,
+    "ap.invoice.post",
+    async (tx) => tx.aPInvoice.update({
+      where: { id: invoiceId },
+      data: {
+        status: "POSTED",
+        postedAt: new Date(),
+        postedByUserId: principal.id,
+        postedJournalEntryId: journal.id,
+      },
+    }),
+    { entityType: "APInvoice", entityId: invoiceId },
+  );
   await audit(principal, {
     action: "ap.invoice.post",
     entityType: "APInvoice", entityId: invoiceId, clubId: inv.clubId,
@@ -406,7 +414,6 @@ export async function reverseInvoice(principal: Principal, invoiceId: string, re
   const inv = await prisma.aPInvoice.findUnique({ where: { id: invoiceId } });
   assertTenantOwned(inv, principal);
   requirePermission(principal, inv.clubId, "ap:invoice:void");
-  await assertPostingAllowed(principal, inv.clubId, "ap.invoice.reverse", "APInvoice", invoiceId);
   if (inv.status !== "POSTED" && inv.status !== "PARTIALLY_PAID") {
     throw new ConflictError(`Cannot reverse from status ${inv.status}`);
   }
@@ -418,16 +425,23 @@ export async function reverseInvoice(principal: Principal, invoiceId: string, re
   if (payments > 0) throw new ConflictError("Void payments against this invoice before reversing");
 
   const reversingJE = await postInvoiceReversalToGl(principal, invoiceId, reason);
-  const updated = await prisma.aPInvoice.update({
-    where: { id: invoiceId },
-    data: {
-      status: "VOIDED",
-      voidedAt: new Date(),
-      voidedByUserId: principal.id,
-      voidReason: reason,
-      reversingJournalEntryId: reversingJE.id,
-    },
-  });
+  // M1c tx-bound posting-guard + state flip.
+  const updated = await withPostingGuard(
+    principal,
+    inv.clubId,
+    "ap.invoice.reverse",
+    async (tx) => tx.aPInvoice.update({
+      where: { id: invoiceId },
+      data: {
+        status: "VOIDED",
+        voidedAt: new Date(),
+        voidedByUserId: principal.id,
+        voidReason: reason,
+        reversingJournalEntryId: reversingJE.id,
+      },
+    }),
+    { entityType: "APInvoice", entityId: invoiceId },
+  );
   await audit(principal, {
     action: "ap.invoice.reverse",
     entityType: "APInvoice", entityId: invoiceId, clubId: inv.clubId,

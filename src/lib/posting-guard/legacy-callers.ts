@@ -37,6 +37,7 @@
 
 export type LegacyCallerClassification =
   | "MIGRATED"
+  | "PARTIAL_MIGRATED"
   | "TX_PENDING"
   | "NO_TX_PENDING"
   | "ADMIN_CONFIG_LEGACY"
@@ -52,22 +53,48 @@ export interface LegacyCallerEntry {
 }
 
 export const LEGACY_POSTING_GUARD_CALLERS: Readonly<LegacyCallerEntry[]> = [
-  // ---- MIGRATED (reference) ----
+  // ---- MIGRATED / PARTIAL_MIGRATED ----
   {
     path: "src/lib/accounting/journal.ts",
+    classification: "PARTIAL_MIGRATED",
+    reason: "post + voidDraft migrated to withPostingGuard (M1b).  reverse + a 4th call-site remain legacy; mechanical follow-on.",
+    migrationTarget: "withPostingGuard",
+    residualRaceMs: 200,
+  },
+  {
+    path: "src/lib/ap/invoices.ts",
     classification: "MIGRATED",
-    reason: "post + voidDraft migrated to withPostingGuard (M1b).",
+    reason: "postInvoice + reverseInvoice migrated to withPostingGuard (M1c).",
     migrationTarget: "withPostingGuard",
   },
-  // ---- TX_PENDING (29 files) ----
-  { path: "src/lib/ap/invoices.ts", classification: "TX_PENDING", reason: "AP invoice post + reverse already open prisma.$transaction; mechanical migration.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 200 },
+  {
+    path: "src/lib/ap/payments.ts",
+    classification: "PARTIAL_MIGRATED",
+    reason: "processPayment migrated to withPostingGuard (M1c).  payInvoice + voidPayment remain legacy; mechanical follow-on.",
+    migrationTarget: "withPostingGuard",
+    residualRaceMs: 500,
+  },
+  {
+    path: "src/lib/opening-balance/index.ts",
+    classification: "MIGRATED",
+    reason: "post function uses assertPostingAllowed({tx}) inside prisma.$transaction (M1c).",
+    migrationTarget: "assertPostingAllowed({tx})",
+  },
+  {
+    path: "src/lib/imports/index.ts",
+    classification: "PARTIAL_MIGRATED",
+    reason: "void function migrated to assertPostingAllowed({tx}) inside prisma.$transaction (M1c).  commit function remains legacy (large multi-domain tx branches); mechanical migration pending.",
+    migrationTarget: "assertPostingAllowed({tx})",
+    residualRaceMs: 2000,
+  },
+  // ---- TX_PENDING (25 files remaining after M1c partial-migration) ----
   { path: "src/lib/employee-portal/quick-links.ts", classification: "TX_PENDING", reason: "Employee-portal quick-links CRUD; small tx scope.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 50 },
   { path: "src/lib/hr/compensation.ts", classification: "TX_PENDING", reason: "HR compensation changes; audit + employee row update inside existing tx.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
   { path: "src/lib/hr/employment-assignments.ts", classification: "TX_PENDING", reason: "Employment assignment add/end; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
   { path: "src/lib/hr/training/courses.ts", classification: "TX_PENDING", reason: "Training course publish + version update; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
   { path: "src/lib/hr/training/questions.ts", classification: "TX_PENDING", reason: "Training question edits; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 50 },
   { path: "src/lib/imports/index.ts", classification: "TX_PENDING", reason: "ImportBatch commit + void; large tx (COA, opening balance).  High priority.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 2000 },
-  { path: "src/lib/opening-balance/index.ts", classification: "TX_PENDING", reason: "Opening balance post; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 500 },
+  // src/lib/opening-balance/index.ts moved to MIGRATED (above).
   { path: "src/lib/ops/inventory.ts", classification: "TX_PENDING", reason: "Inventory receive + adjust; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
   { path: "src/lib/payroll/approve-and-post.ts", classification: "TX_PENDING", reason: "Payroll batch approve + post; large tx with JE write.  High priority.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 2000 },
   { path: "src/lib/payroll/batch-preparation.ts", classification: "TX_PENDING", reason: "Batch preparation state advances; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
@@ -89,7 +116,7 @@ export const LEGACY_POSTING_GUARD_CALLERS: Readonly<LegacyCallerEntry[]> = [
   { path: "src/lib/timesheets/manager-approval.ts", classification: "TX_PENDING", reason: "Timesheet manager approval state advance; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
   // ---- NO_TX_PENDING (20 files) ----
   { path: "src/lib/announcements.ts", classification: "NO_TX_PENDING", reason: "Announcement create; single-row admin write; small race window.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/ap/payments.ts", classification: "NO_TX_PENDING", reason: "AP payment pay/process; needs tx wrapping.  High priority (money movement).", migrationTarget: "withPostingGuard", residualRaceMs: 500 },
+  // src/lib/ap/payments.ts moved to MIGRATED (above).
   { path: "src/lib/club/media.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "Club media CRUD (logo/cover upload); admin-config write; bounded ms race; low financial risk.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
   { path: "src/lib/hr/allowances.ts", classification: "NO_TX_PENDING", reason: "Allowance add/end; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
   { path: "src/lib/hr/payroll-profile.ts", classification: "NO_TX_PENDING", reason: "Payroll profile upsert/void; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
@@ -112,7 +139,9 @@ export const LEGACY_POSTING_GUARD_CALLERS: Readonly<LegacyCallerEntry[]> = [
 
 /** The set of paths currently permitted to call assertPostingAllowed
  *  without `{tx}` or `withPostingGuard`.  Any file not in this set
- *  AND not already migrated fails the static inventory test. */
+ *  AND not fully migrated fails the static inventory test.
+ *  PARTIAL_MIGRATED stays here because one or more call-sites in
+ *  the file remain on the legacy signature. */
 export const LEGACY_EXEMPT_PATHS: ReadonlySet<string> = new Set(
   LEGACY_POSTING_GUARD_CALLERS
     .filter((e) => e.classification !== "MIGRATED")

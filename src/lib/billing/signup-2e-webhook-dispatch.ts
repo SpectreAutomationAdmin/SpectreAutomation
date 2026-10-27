@@ -138,31 +138,45 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
     stripePaymentIntentId: pi,
   });
 
-  // M1b (2026-10-26, founder §4) -- EXPLICIT webhook classification.
+  // M1c (2026-10-26, founder §5) -- MULTI-SIGNAL webhook classification.
   //
-  // payment_intent.payment_failed can mean two very different things:
+  // Classification MUST not rely on a single signal (e.g.
+  // settlementConfirmedAt alone).  Instead we evaluate every
+  // available correlator:
   //
-  //   INITIAL payment failure (first-cycle, tenant NOT YET ACTIVE):
-  //     - BillingCycle has never had settlementConfirmedAt.
-  //     - Phase 2H MUST NOT suspend -- there is nothing operational
-  //       to suspend; the tenant has never been activated.
-  //     - Operator alert: INITIAL_PAYMENT_FAILURE (operator remediation
-  //       required at the signup / Phase 2E level).
+  //   (1) Provider event identity: the webhook was persisted +
+  //       verified upstream (route.ts); dedup on event.id.
+  //   (2) Billing-cycle identity: findCycleByPaymentIntent
+  //       resolved a row.
+  //   (3) Subscription identity: the owning Club has a
+  //       ClubSubscription row (operator-managed).
+  //   (4) Previous-settlement signal: cycle.settlementConfirmedAt
+  //       is non-null AND the cycle previously saw a settled
+  //       charge (reconciliationLedger has a PAYMENT_SETTLED entry).
+  //   (5) Operational-active signal: ClubSubscription.subscriptionStatus
+  //       === "ACTIVE".
   //
-  //   RENEWAL collection failure (tenant was ACTIVE at the time the
-  //   payment attempt was made):
-  //     - BillingCycle previously settled (settlementConfirmedAt set).
-  //     - Phase 2H SHOULD suspend -- the tenant is operationally
-  //       active and the renewal cycle failed.
-  //     - Operator alert: RENEWAL_PAYMENT_FAILURE.
-  //
-  // The classification is DRIVEN BY the BillingCycle state, not by
-  // the raw webhook event alone.  trySuspendFromWebhook also
-  // double-checks the ClubSubscription state (idempotency / out-of-
-  // order safety) so a webhook for a cycle whose tenant is not
-  // ACTIVE is a no-op regardless.
+  // A failed payment is classified as RENEWAL only when ALL of
+  // (1)-(5) are satisfied.  Any missing signal falls back to
+  // INITIAL (safer -- no suspension).  This closes the founder's
+  // closure §5 concern: don't infer renewal solely from
+  // settlementConfirmedAt.
 
-  const isInitialPaymentFailure = cycle.settlementConfirmedAt === null;
+  const sub = await prisma.clubSubscription.findUnique({
+    where: { clubId: cycle.clubId },
+    select: { subscriptionStatus: true, id: true },
+  });
+  const priorSettlement = await prisma.paymentReconciliationEntry.findFirst({
+    where: { billingCycleId: cycle.id, entryType: "PAYMENT_SETTLED" },
+    select: { id: true },
+  });
+  const multiSignalRenewal =
+    cycle.settlementConfirmedAt !== null &&       // signal 4a
+    priorSettlement !== null &&                   // signal 4b
+    sub !== null &&                               // signal 3
+    sub.subscriptionStatus === "ACTIVE";          // signal 5
+
+  const isInitialPaymentFailure = !multiSignalRenewal;
 
   await writeOperatorAlert({
     clubId: cycle.clubId,

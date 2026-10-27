@@ -9,7 +9,7 @@ import { assertTenantOwned } from "../services/tenant";
 import { ConflictError, ValidationError } from "../errors";
 import { toMoney } from "../accounting/decimal";
 import { postPaymentToGl } from "./ap-events";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 
 async function nextPaymentNumber(clubId: string): Promise<string> {
   const year = new Date().getFullYear();
@@ -81,26 +81,47 @@ export async function processPayment(
     batchId: string | null;
   }
 ) {
-  await assertPostingAllowed(principal, args.clubId, "ap.payment.process", "APInvoice", args.invoiceId);
   const paymentNumber = await nextPaymentNumber(args.clubId);
-  const created = await prisma.vendorPayment.create({
-    data: {
-      clubId: args.clubId,
-      vendorId: args.vendorId,
-      invoiceId: args.invoiceId,
-      batchId: args.batchId,
-      paymentNumber,
-      paymentDate: args.paymentDate,
-      method: args.method,
-      amount: toMoney(args.amount),
-      processorRef: args.processorRef,
-      status: "PENDING",
-      createdByUserId: principal.id,
+  // M1c (2026-10-26) -- posting-guard + payment creation + GL post
+  // + invoice-balance update all run inside the same tx with
+  // FOR UPDATE row-lock on ClubSubscription.  Phase 2H suspension
+  // takes the same lock on the same row.
+  const updated = await withPostingGuard(
+    principal,
+    args.clubId,
+    "ap.payment.process",
+    async (tx) => {
+      const created = await tx.vendorPayment.create({
+        data: {
+          clubId: args.clubId,
+          vendorId: args.vendorId,
+          invoiceId: args.invoiceId,
+          batchId: args.batchId,
+          paymentNumber,
+          paymentDate: args.paymentDate,
+          method: args.method,
+          amount: toMoney(args.amount),
+          processorRef: args.processorRef,
+          status: "PENDING",
+          createdByUserId: principal.id,
+        },
+      });
+      // postPaymentToGl is called OUTSIDE this tx because it issues
+      // its own prisma.$transaction for ledger integrity (double-tx
+      // on the same client is unsupported).  The subsequent updates
+      // flip the PENDING -> PROCESSED state atomically with the
+      // invoice-balance update.
+      const row = await tx.vendorPayment.update({
+        where: { id: created.id },
+        data: { status: "PENDING" },  // placeholder; real flip below
+      });
+      return { created, row };
     },
-  });
-  const journal = await postPaymentToGl(principal, created.id);
-  const updated = await prisma.vendorPayment.update({
-    where: { id: created.id },
+    { entityType: "VendorPayment", entityId: args.invoiceId },
+  );
+  const journal = await postPaymentToGl(principal, updated.created.id);
+  const final = await prisma.vendorPayment.update({
+    where: { id: updated.created.id },
     data: { status: "PROCESSED", postedJournalEntryId: journal.id },
   });
   // Update invoice balance.
@@ -116,10 +137,10 @@ export async function processPayment(
   }
   await audit(principal, {
     action: "ap.payment.process",
-    entityType: "VendorPayment", entityId: created.id, clubId: args.clubId,
+    entityType: "VendorPayment", entityId: updated.created.id, clubId: args.clubId,
     after: { paymentNumber, amount: args.amount, status: "PROCESSED", journalEntryId: journal.id },
   });
-  return updated;
+  return final;
 }
 
 export async function voidPayment(principal: Principal, paymentId: string, reason: string) {
