@@ -310,6 +310,93 @@ describe("SIGNUP-2 M2-SyntheticSandbox §12 · regression: production authorisat
   });
 });
 
+describe("SIGNUP-2 M2-SyntheticSandbox · HTTP route AUTH guard (founder §2.1, 2.3)", () => {
+  const INITIATE_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/signup/mandate/synthetic-initiate/route.ts"),
+    "utf8",
+  );
+  it("synthetic-initiate route checks getCurrentUser FIRST", () => {
+    expect(INITIATE_ROUTE).toMatch(/const user = await getCurrentUser\(\)/);
+    const userCheckIdx = INITIATE_ROUTE.indexOf("const user = await getCurrentUser()");
+    const svcCallIdx = INITIATE_ROUTE.indexOf("initiateSyntheticMandateCollection(");
+    expect(userCheckIdx).toBeGreaterThan(-1);
+    expect(userCheckIdx).toBeLessThan(svcCallIdx);
+  });
+  it("synthetic-initiate route returns 401 on unauthenticated", () => {
+    expect(INITIATE_ROUTE).toMatch(/if \(!user\)[\s\S]+?status: 401/);
+  });
+  it("synthetic-initiate route requires SUPER_ADMIN role", () => {
+    expect(INITIATE_ROUTE).toMatch(/isSuperAdmin\(principal\)/);
+    expect(INITIATE_ROUTE).toMatch(/SUPER_ADMIN role required/);
+  });
+});
+
+describe("SIGNUP-2 M2-SyntheticSandbox · single-use nonce (founder §2.2)", () => {
+  const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
+  const RETURN_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/signup/mandate/synthetic-return/route.ts"),
+    "utf8",
+  );
+  it("issueSyntheticReturnNonce + consumeSyntheticReturnNonce exported", () => {
+    expect(SVC).toMatch(/export async function issueSyntheticReturnNonce/);
+    expect(SVC).toMatch(/export async function consumeSyntheticReturnNonce/);
+  });
+  it("nonce is 32 bytes of crypto random (64 hex chars)", () => {
+    expect(SVC).toMatch(/crypto\.randomBytes\(32\)\.toString\("hex"\)/);
+    expect(SVC).toMatch(/presentedNonce\.length !== 64/);
+  });
+  it("consume uses timingSafeEqual for constant-time compare", () => {
+    expect(SVC).toMatch(/crypto\.timingSafeEqual/);
+  });
+  it("consume enforces single-use via conditional updateMany", () => {
+    const fn = SVC.match(/export async function consumeSyntheticReturnNonce[\s\S]+?^\}/m)![0];
+    expect(fn).toMatch(/signingAuthoritySignal:\s*stored/);
+    expect(fn).toMatch(/signingAuthoritySignal:\s*`\$\{NONCE_PREFIX\}CONSUMED`/);
+    expect(fn).toMatch(/consumed\.count !== 1/);
+  });
+  it("synthetic-return route consumes nonce BEFORE persistence", () => {
+    // Match CALL positions (with `(`), not import lines.
+    const nonceCallIdx = RETURN_ROUTE.indexOf("consumeSyntheticReturnNonce(");
+    const persistCallIdx = RETURN_ROUTE.indexOf("persistSyntheticSignedMandate(");
+    expect(nonceCallIdx).toBeGreaterThan(-1);
+    expect(persistCallIdx).toBeGreaterThan(-1);
+    expect(nonceCallIdx).toBeLessThan(persistCallIdx);
+  });
+  it("synthetic-return route requires nonce in query string", () => {
+    expect(RETURN_ROUTE).toMatch(/nonce = url\.searchParams\.get\("nonce"\)/);
+    expect(RETURN_ROUTE).toMatch(/if \(!registrationId \|\| !sessionId \|\| !nonce\)/);
+  });
+  it("initiate route embeds nonce in Stripe success_url", () => {
+    const INITIATE_ROUTE = readFileSync(
+      join(process.cwd(), "src/app/api/signup/mandate/synthetic-initiate/route.ts"),
+      "utf8",
+    );
+    expect(INITIATE_ROUTE).toMatch(/issueSyntheticReturnNonce\(registrationId, user\.id\)/);
+    expect(INITIATE_ROUTE).toMatch(/returnNonce: nonce/);
+    expect(SVC).toMatch(/noncePart = opts\.returnNonce \? `&nonce=\$\{encodeURIComponent\(opts\.returnNonce\)\}`/);
+  });
+});
+
+describe("SIGNUP-2 M2-SyntheticSandbox · Phase 2F / 2G refuse synthetic rows (founder §2.5)", () => {
+  it("Phase 2F authoriseActivation reads cycle.syntheticTestOnly and refuses", () => {
+    const code = readFileSync(
+      join(process.cwd(), "src/lib/billing/signup-2f-activation-service.ts"),
+      "utf8",
+    );
+    expect(code).toMatch(/syntheticTestOnly:\s*true/);
+    expect(code).toMatch(/cycle\.syntheticTestOnly === true/);
+    expect(code).toMatch(/BillingCycle is marked syntheticTestOnly/);
+  });
+  it("Phase 2G tickProvisioningJob reads registration.syntheticTestOnly and refuses", () => {
+    const code = readFileSync(
+      join(process.cwd(), "src/lib/billing/signup-2g-provisioning-service.ts"),
+      "utf8",
+    );
+    expect(code).toMatch(/reg\?\.syntheticTestOnly === true/);
+    expect(code).toMatch(/Phase 2G refuses to provision synthetic-test-only job/);
+  });
+});
+
 describe("SIGNUP-2 M2-SyntheticSandbox · teardown preserves founder secrets", () => {
   const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
   it("teardownSyntheticTestFixtures only deletes rows with syntheticTestOnly: true", () => {

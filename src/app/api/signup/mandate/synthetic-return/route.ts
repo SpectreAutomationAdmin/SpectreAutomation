@@ -8,7 +8,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ForbiddenError, AppError } from "@/lib/errors";
 import { logger } from "@/lib/observability/logger";
-import { persistSyntheticSignedMandate } from "@/lib/signup/signup-2m2-synthetic-sandbox-service";
+import {
+  persistSyntheticSignedMandate,
+  consumeSyntheticReturnNonce,
+} from "@/lib/signup/signup-2m2-synthetic-sandbox-service";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,13 +20,18 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const registrationId = url.searchParams.get("registrationId") ?? "";
   const sessionId = url.searchParams.get("session_id") ?? "";
-  if (!registrationId || !sessionId) {
+  const nonce = url.searchParams.get("nonce") ?? "";
+  if (!registrationId || !sessionId || !nonce) {
     return NextResponse.json(
-      { error: "bad_request", detail: "registrationId + session_id required" },
+      { error: "bad_request", detail: "registrationId + session_id + nonce required" },
       { status: 400 },
     );
   }
   try {
+    // Consume the single-use nonce FIRST.  If an attacker reaches this
+    // endpoint without the nonce issued at initiate-time, consumption
+    // throws + the mandate is never persisted.
+    await consumeSyntheticReturnNonce(registrationId, nonce);
     const result = await persistSyntheticSignedMandate({
       registrationId,
       checkoutSessionId: sessionId,

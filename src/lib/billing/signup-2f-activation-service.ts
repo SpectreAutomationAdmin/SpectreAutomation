@@ -205,10 +205,20 @@ export async function authoriseActivation(
       stripeChargeId: true,
       stripeBalanceTransactionId: true,
       releasedByOperatorRecordId: true,
+      // M2-SyntheticSandbox (2026-10-27): synthetic cycles cannot activate.
+      syntheticTestOnly: true,
     },
   });
   if (!cycle) {
     return { ok: false, gate: "G1_NOT_READY", detail: "cycle not found", transient: false };
+  }
+  if (cycle.syntheticTestOnly === true) {
+    return {
+      ok: false,
+      gate: "G1_NOT_READY",
+      detail: "SIGNUP-2 M2-SyntheticSandbox: BillingCycle is marked syntheticTestOnly; activation refused unconditionally",
+      transient: false,
+    };
   }
   if (cycle.subscriptionStatus !== "ACTIVATION_READY") {
     return {

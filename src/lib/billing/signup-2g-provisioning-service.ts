@@ -677,6 +677,34 @@ export async function tickProvisioningJob(jobId: string): Promise<Phase2gAdvance
     return { ok: false, reason: "JOB_TERMINAL", detail: "job cancelledAt set", state: job.state as ProvisioningState };
   }
 
+  // M2-SyntheticSandbox (2026-10-27) defence-in-depth: refuse to
+  // provision any job whose SignupRegistration carries the
+  // syntheticTestOnly marker.  Synthetic rows should never produce
+  // a TenantProvisioningJob (the synthetic service doesn't create
+  // one), but this guard is future-proofing against any future code
+  // path that might.
+  if (job.signupRegistrationId) {
+    const reg = await prisma.signupRegistration.findUnique({
+      where: { id: job.signupRegistrationId },
+      select: { syntheticTestOnly: true },
+    });
+    if (reg?.syntheticTestOnly === true) {
+      await writeOperatorAlert({
+        cycleId: job.billingCycleId,
+        clubId: job.provisionedClubId,
+        category: CATEGORY.MOCK_EVIDENCE_REJECTED_2G,
+        severity: "IMMEDIATE",
+        title: "Phase 2G refuses to provision synthetic-test-only job",
+        body: `Job ${jobId.slice(-6)} refused: linked SignupRegistration ${job.signupRegistrationId.slice(-6)} is marked syntheticTestOnly=true.  Synthetic rows cannot be promoted to real tenants under any circumstance.`,
+      });
+      return {
+        ok: false,
+        reason: "MOCK_EVIDENCE_REJECTED",
+        detail: `SignupRegistration ${job.signupRegistrationId.slice(-6)} is syntheticTestOnly`,
+      };
+    }
+  }
+
   // Mock-isolation gate (independent of Phase 2F).
   if (!isMockEvidencePermitted(job.authorisationEvidenceSource)) {
     await writeOperatorAlert({

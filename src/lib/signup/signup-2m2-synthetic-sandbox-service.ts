@@ -305,16 +305,109 @@ export async function createSyntheticRegistration(
   };
 }
 
+// ---- Single-use nonce (CSRF / state binding) -----------------
+//
+// On initiate: a cryptographically-random 32-byte nonce is written
+// to the SignupRegistration's `signingAuthoritySignal` field (we
+// reuse a text slot already present on the synthetic row to avoid
+// an additional schema change).  The nonce is embedded in the
+// Stripe Checkout `success_url` as a query param.  On return, the
+// handler reads the nonce from the URL + compares against the
+// stored value in a single-use consume operation.  Any mismatch
+// (replay, forgery, cross-registration) throws ForbiddenError.
+//
+// This binds the Stripe return to the exact initiate call that
+// started it.  An attacker who learns `registrationId + session_id`
+// but not the nonce cannot persist a mandate.
+
+const NONCE_PREFIX = "signup-2m2-syn-nonce:";
+
+export async function issueSyntheticReturnNonce(
+  registrationId: string,
+  operatorUserId: string,
+): Promise<string> {
+  assertSyntheticSandboxGuardsPass();
+  const reg = await prisma.signupRegistration.findUnique({
+    where: { id: registrationId },
+    select: { syntheticTestOnly: true },
+  });
+  if (!reg || reg.syntheticTestOnly !== true) {
+    throw new ForbiddenError("[signup-2m2-synthetic] issueSyntheticReturnNonce refused: registration not synthetic");
+  }
+  const nonce = crypto.randomBytes(32).toString("hex");
+  await prisma.signupRegistration.update({
+    where: { id: registrationId },
+    data: { signingAuthoritySignal: `${NONCE_PREFIX}${nonce}:${operatorUserId.slice(-6)}` },
+  });
+  logger.info("signup.synthetic.nonce.issued", {
+    registrationIdTail: registrationId.slice(-6),
+    operatorUserIdTail: operatorUserId.slice(-6),
+  });
+  return nonce;
+}
+
+export async function consumeSyntheticReturnNonce(
+  registrationId: string,
+  presentedNonce: string,
+): Promise<void> {
+  assertSyntheticSandboxGuardsPass();
+  if (!presentedNonce || presentedNonce.length !== 64) {
+    throw new ForbiddenError("[signup-2m2-synthetic] consumeSyntheticReturnNonce refused: malformed nonce");
+  }
+  const reg = await prisma.signupRegistration.findUnique({
+    where: { id: registrationId },
+    select: { syntheticTestOnly: true, signingAuthoritySignal: true },
+  });
+  if (!reg || reg.syntheticTestOnly !== true) {
+    throw new ForbiddenError("[signup-2m2-synthetic] consumeSyntheticReturnNonce refused: registration not synthetic");
+  }
+  const stored = reg.signingAuthoritySignal ?? "";
+  if (!stored.startsWith(NONCE_PREFIX)) {
+    throw new ForbiddenError("[signup-2m2-synthetic] consumeSyntheticReturnNonce refused: no nonce issued");
+  }
+  const parts = stored.slice(NONCE_PREFIX.length).split(":");
+  const storedNonce = parts[0] ?? "";
+  // Constant-time compare.
+  if (
+    storedNonce.length !== presentedNonce.length ||
+    !crypto.timingSafeEqual(Buffer.from(storedNonce, "hex"), Buffer.from(presentedNonce, "hex"))
+  ) {
+    throw new ForbiddenError("[signup-2m2-synthetic] consumeSyntheticReturnNonce refused: nonce mismatch");
+  }
+  // Single-use: clear the nonce slot atomically.  A conditional
+  // update enforces the single-use property under concurrent
+  // return hits (replay attempts).
+  const consumed = await prisma.signupRegistration.updateMany({
+    where: {
+      id: registrationId,
+      signingAuthoritySignal: stored,
+    },
+    data: { signingAuthoritySignal: `${NONCE_PREFIX}CONSUMED` },
+  });
+  if (consumed.count !== 1) {
+    throw new ForbiddenError("[signup-2m2-synthetic] consumeSyntheticReturnNonce refused: nonce already consumed");
+  }
+  logger.info("signup.synthetic.nonce.consumed", {
+    registrationIdTail: registrationId.slice(-6),
+  });
+}
+
 // ---- Synthetic mandate collection ----------------------------
 
 /** Parallel to `initiateMandateCollection` for synthetic
  *  registrations ONLY.  Guards verify (a) the sandbox is enabled,
- *  (b) the registration has syntheticTestOnly=true.  Writes NO
- *  production rows; opens a real Stripe test-mode Checkout
- *  session with the real sandbox API key.
+ *  (b) the registration has syntheticTestOnly=true, (c) the caller
+ *  is an authenticated SUPER_ADMIN (enforced at the HTTP route).
+ *  Writes NO production rows; opens a real Stripe test-mode
+ *  Checkout session with the real sandbox API key.
+ *
+ *  Optional opts.returnNonce is embedded in the Stripe Checkout
+ *  success_url so the return handler can validate it as a
+ *  single-use CSRF/replay guard.
  */
 export async function initiateSyntheticMandateCollection(
   registrationId: string,
+  opts: { operatorUserId?: string; returnNonce?: string } = {},
 ): Promise<{ checkoutUrl: string; checkoutSessionId: string }> {
   assertSyntheticSandboxGuardsPass();
 
@@ -357,8 +450,11 @@ export async function initiateSyntheticMandateCollection(
     },
   });
 
+  // M2-SyntheticSandbox: embed the single-use nonce in the success_url
+  // so the return handler can validate it before persisting the mandate.
+  const noncePart = opts.returnNonce ? `&nonce=${encodeURIComponent(opts.returnNonce)}` : "";
   const successUrl =
-    `${env.APP_URL}/api/signup/mandate/synthetic-return?registrationId=${encodeURIComponent(reg.id)}&session_id={CHECKOUT_SESSION_ID}`;
+    `${env.APP_URL}/api/signup/mandate/synthetic-return?registrationId=${encodeURIComponent(reg.id)}&session_id={CHECKOUT_SESSION_ID}${noncePart}`;
   const cancelUrl = `${env.APP_URL}/signup/t/synthetic-cancel?registrationId=${encodeURIComponent(reg.id)}`;
 
   const session = await stripe.createMandateCheckoutSession({
