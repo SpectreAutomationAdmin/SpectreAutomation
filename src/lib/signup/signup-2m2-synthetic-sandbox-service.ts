@@ -551,16 +551,59 @@ export async function persistSyntheticSignedMandate(args: {
     throw new AppError("SIGNUP_2M2_SYNTHETIC_PRICE_ID_MISSING", "STRIPE_ACSS_PRICE_ID unset", 500);
   }
 
-  const subscription = await stripe.createSubscription({
-    idempotencyKey: `signup-2m2-syn-sub:${reg.id}:first`,
-    stripeCustomerId: sessionResult.customerId,
-    stripePriceId: priceId,
-    defaultPaymentMethodId: sessionResult.paymentMethodId,
-    metadata: {
-      signupRegistrationIdTail: reg.id.slice(-6),
-      syntheticTestOnly: "true",
-    },
-  });
+  // M2-SyntheticSandbox-Repair (2026-10-27): wrap subscription
+  // creation so a Stripe-side failure (e.g. ACSS amount limit) does
+  // not crash the handler.  On failure, we write a structured
+  // operator-visible marker (via the Mandate row's revoke slot would
+  // conflict with legitimate revocation; use the audit log) + throw
+  // an AppError the route maps to a specific error_code.  The
+  // operator can retry via recoverSyntheticSignedMandate once the
+  // underlying cause (ACSS limit, missing capability) is resolved.
+  //
+  // Exactly-once semantics are preserved because the idempotencyKey
+  // is deterministic -- a retry with the same key either returns the
+  // existing subscription OR re-runs the create against Stripe.
+  let subscription;
+  try {
+    subscription = await stripe.createSubscription({
+      idempotencyKey: `signup-2m2-syn-sub:${reg.id}:first`,
+      stripeCustomerId: sessionResult.customerId,
+      stripePriceId: priceId,
+      defaultPaymentMethodId: sessionResult.paymentMethodId,
+      metadata: {
+        signupRegistrationIdTail: reg.id.slice(-6),
+        syntheticTestOnly: "true",
+      },
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    logger.error("signup.synthetic.subscription_create_failed", {
+      registrationIdTail: reg.id.slice(-6),
+      checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
+      stripeCustomerIdTail: sessionResult.customerId.slice(-8),
+      stripeMandateIdTail: sessionResult.mandateId!.slice(-8),
+      stripePaymentMethodIdTail: sessionResult.paymentMethodId!.slice(-8),
+      priceIdTail: priceId.slice(-8),
+      detail,
+    });
+    await audit(null, {
+      action: "signup.synthetic.subscription_create_failed",
+      entityType: "SignupRegistration",
+      entityId: reg.id,
+      clubId: null,
+      meta: {
+        registrationIdTail: reg.id.slice(-6),
+        checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
+        stripeError: detail.slice(0, 500),
+        syntheticTestOnly: true,
+      },
+    });
+    throw new AppError(
+      "SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED",
+      `Stripe refused to create the synthetic test subscription: ${detail}.  The mandate + payment method remain valid on Stripe (SetupIntent succeeded); operator can retry via recoverSyntheticSignedMandate once the underlying cause (likely ACSS amount limit on sandbox account) is resolved.`,
+      500,
+    );
+  }
 
   const now = new Date();
   const mandateText = `SYNTHETIC_TEST_ONLY ACSS mandate for Stripe sandbox technical acceptance -- registration ${reg.id.slice(-6)}, Stripe mandate ${sessionResult.mandateId}`;
@@ -614,6 +657,67 @@ export async function persistSyntheticSignedMandate(args: {
     },
   });
   return { noop: false, mandateId: result.mandateId, billingCycleId: result.cycleId };
+}
+
+// ---- Recovery (SUPER_ADMIN-gated retry after a transient subscription-create failure) ----
+//
+// Scenario: the return handler consumed the nonce (correct), the
+// Stripe SetupIntent + Mandate + PaymentMethod exist (verified by
+// retrieveCheckoutSession returning status=complete + both ids),
+// but `stripe.subscriptions.create` failed (e.g. ACSS per-transaction
+// amount limit, missing capability, transient 5xx) BEFORE Spectre
+// persisted the SubscriptionPaymentMandate + BillingCycle rows.
+//
+// The nonce consumption was legitimate (the signatory DID sign) so
+// resetting it to make the normal return route retry would be
+// wrong per founder scope §3 ("Never reset or reuse a consumed
+// nonce merely to make the test pass").  Instead the operator
+// uses this SUPER_ADMIN-gated recovery function to resume
+// persistence using the already-collected Stripe state.
+//
+// Exactly-once:
+//   - If a SubscriptionPaymentMandate row for this registration
+//     already exists (success case) -> returns noop.
+//   - Stripe.subscriptions.create is called with the SAME
+//     idempotencyKey as the original persist attempt.  Stripe
+//     returns the existing subscription if the earlier call
+//     actually succeeded; otherwise it re-attempts.
+//   - On persistent Stripe-side failure, the recovery raises
+//     the same structured error for operator triage.
+export async function recoverSyntheticSignedMandate(
+  registrationId: string,
+  checkoutSessionId: string,
+): Promise<{ noop: boolean; mandateId?: string; billingCycleId?: string }> {
+  // Operator-driven: guards must hold, but NO nonce check (the
+  // operator-authenticated SUPER_ADMIN HTTP route gate replaces the
+  // signatory nonce for retries).
+  assertSyntheticSandboxGuardsPass();
+  // Idempotent short-circuit: if the mandate already landed,
+  // return noop immediately.
+  const existing = await prisma.subscriptionPaymentMandate.findFirst({
+    where: { signupRegistrationId: registrationId, syntheticTestOnly: true },
+    orderBy: { acceptedAt: "desc" },
+    select: { id: true, revokedAt: true },
+  });
+  if (existing && !existing.revokedAt) {
+    logger.info("signup.synthetic.recover.noop_existing_mandate", {
+      registrationIdTail: registrationId.slice(-6),
+    });
+    return { noop: true, mandateId: existing.id };
+  }
+  // Re-run persist.  Since the nonce was consumed by the original
+  // signatory return, we don't re-check it here -- the operator
+  // SUPER_ADMIN route is the auth boundary for retries.
+  const result = await persistSyntheticSignedMandate({
+    registrationId,
+    checkoutSessionId,
+  });
+  logger.info("signup.synthetic.recover.completed", {
+    registrationIdTail: registrationId.slice(-6),
+    noop: result.noop,
+    mandateIdTail: result.mandateId?.slice(-8) ?? null,
+  });
+  return result;
 }
 
 // ---- Teardown -------------------------------------------------

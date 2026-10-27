@@ -397,6 +397,71 @@ describe("SIGNUP-2 M2-SyntheticSandbox · Phase 2F / 2G refuse synthetic rows (f
   });
 });
 
+describe("SIGNUP-2 M2-SyntheticSandbox · subscription-create failure is safely recoverable (2026-10-27 repair)", () => {
+  const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
+  const RECOVER_ROUTE = readFileSync(
+    join(process.cwd(), "src/app/api/signup/mandate/synthetic-recover/route.ts"),
+    "utf8",
+  );
+
+  it("persistSyntheticSignedMandate wraps createSubscription in try/catch", () => {
+    const start = SVC.indexOf("export async function persistSyntheticSignedMandate");
+    const end = SVC.indexOf("export async function recoverSyntheticSignedMandate");
+    const fn = SVC.slice(start, end);
+    expect(fn).toMatch(/try \{[\s\S]+?subscription = await stripe\.createSubscription/);
+    expect(fn).toMatch(/\} catch \(err\) \{[\s\S]+?stripe\.webhook|SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED/);
+  });
+
+  it("subscription-create failure logs structured operator alert + throws AppError (not bare Error)", () => {
+    expect(SVC).toMatch(/signup\.synthetic\.subscription_create_failed/);
+    expect(SVC).toMatch(/SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED/);
+    expect(SVC).toMatch(/throw new AppError\(\s*"SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED"/);
+  });
+
+  it("exactly-once semantics: createSubscription uses deterministic idempotencyKey", () => {
+    const start = SVC.indexOf("export async function persistSyntheticSignedMandate");
+    const end = SVC.indexOf("export async function recoverSyntheticSignedMandate");
+    const fn = SVC.slice(start, end);
+    expect(fn).toMatch(/idempotencyKey:\s*`signup-2m2-syn-sub:\$\{reg\.id\}:first`/);
+  });
+
+  it("recoverSyntheticSignedMandate exported + requires guards + does NOT re-consume nonce", () => {
+    expect(SVC).toMatch(/export async function recoverSyntheticSignedMandate/);
+    const start = SVC.indexOf("export async function recoverSyntheticSignedMandate");
+    const end = SVC.indexOf("// ---- Teardown");
+    const fn = SVC.slice(start, end);
+    expect(fn).toMatch(/assertSyntheticSandboxGuardsPass\(\)/);
+    expect(fn).not.toMatch(/consumeSyntheticReturnNonce/);  // operator retry does NOT need a nonce
+    expect(fn).not.toMatch(/issueSyntheticReturnNonce/);     // NEVER re-issues a nonce
+  });
+
+  it("recover is idempotent: short-circuits on existing SubscriptionPaymentMandate for the registration", () => {
+    const start = SVC.indexOf("export async function recoverSyntheticSignedMandate");
+    const end = SVC.indexOf("// ---- Teardown");
+    const fn = SVC.slice(start, end);
+    expect(fn).toMatch(/subscriptionPaymentMandate\.findFirst/);
+    expect(fn).toMatch(/if \(existing && !existing\.revokedAt\)/);
+    expect(fn).toMatch(/return \{ noop: true/);
+  });
+
+  it("recovery route requires SUPER_ADMIN auth (same gate as initiate)", () => {
+    expect(RECOVER_ROUTE).toMatch(/getCurrentUser\(\)/);
+    expect(RECOVER_ROUTE).toMatch(/if \(!user\)[\s\S]+?status: 401/);
+    expect(RECOVER_ROUTE).toMatch(/isSuperAdmin\(principal\)/);
+    expect(RECOVER_ROUTE).toMatch(/SUPER_ADMIN role required/);
+  });
+
+  it("recovery route delegates to recoverSyntheticSignedMandate (no own Stripe/secret access)", () => {
+    expect(RECOVER_ROUTE).toMatch(/recoverSyntheticSignedMandate/);
+    expect(RECOVER_ROUTE).not.toMatch(/STRIPE_SECRET_KEY/);
+    expect(RECOVER_ROUTE).not.toMatch(/stripe\.customers|stripe\.subscriptions/);
+  });
+
+  it("recovery route surfaces AppError.code (not generic server_error) on structured failures", () => {
+    expect(RECOVER_ROUTE).toMatch(/err instanceof AppError[\s\S]+?error: err\.code/);
+  });
+});
+
 describe("SIGNUP-2 M2-SyntheticSandbox · teardown preserves founder secrets", () => {
   const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
   it("teardownSyntheticTestFixtures only deletes rows with syntheticTestOnly: true", () => {
