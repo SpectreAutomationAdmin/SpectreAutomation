@@ -110,6 +110,10 @@ export async function initiateMandateCollection(registrationId: string): Promise
   // double-gate (ToS APPROVED + Phase 2B live mode) by design.
 
   const reg = await loadRegistration(registrationId);
+  // M2-SyntheticSandbox: synthetic registrations use a parallel service.
+  // Reject any synthetic row from entering the production flow.
+  const { refuseIfSyntheticTestOnly } = await import("@/lib/signup/signup-2m2-synthetic-sandbox-service");
+  await refuseIfSyntheticTestOnly(reg.id);
   assertAuthorised(reg);
   // Phase 2B attestation must exist for this registration.
   const attestation = await prisma.subscriptionAuthorisationAttestation.findUnique({
@@ -181,6 +185,9 @@ export async function persistSignedMandate(args: {
 }): Promise<{ noop: boolean; billingCycleId?: string }> {
   assertPhase2ePaymentFlag();
   const reg = await loadRegistration(args.registrationId);
+  // M2-SyntheticSandbox: synthetic rows cannot land here.
+  const { refuseIfSyntheticTestOnly } = await import("@/lib/signup/signup-2m2-synthetic-sandbox-service");
+  await refuseIfSyntheticTestOnly(reg.id);
   assertAuthorised(reg);
 
   // Idempotent-replay: existing mandate for this registration?

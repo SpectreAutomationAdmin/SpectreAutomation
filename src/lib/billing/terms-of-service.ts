@@ -30,7 +30,7 @@ export interface TermsOfServiceDocument {
   label: string;
   sha256: string;
   length: number;
-  status: "APPROVED" | "DEVELOPMENT_FIXTURE";
+  status: "APPROVED" | "DEVELOPMENT_FIXTURE" | "SYNTHETIC_TEST_ONLY";
   body: string;
 }
 
@@ -65,9 +65,10 @@ export function readTermsOfService(): TermsOfServiceDocument {
   const statusMatch = body.match(/^\s*-\s*\*\*Status:\*\*\s*`([^`]+)`/m);
   const label = labelMatch ? labelMatch[1] : "UNKNOWN";
   const statusRaw = statusMatch ? statusMatch[1] : "UNKNOWN";
-  let status: "APPROVED" | "DEVELOPMENT_FIXTURE";
+  let status: "APPROVED" | "DEVELOPMENT_FIXTURE" | "SYNTHETIC_TEST_ONLY";
   if (statusRaw === "APPROVED") status = "APPROVED";
   else if (statusRaw === "DEVELOPMENT_FIXTURE") status = "DEVELOPMENT_FIXTURE";
+  else if (statusRaw === "SYNTHETIC_TEST_ONLY") status = "SYNTHETIC_TEST_ONLY";
   else {
     throw new AppError(
       "SIGNUP_2B_TOS_STATUS_UNKNOWN",
