@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { requirePermission, type Principal } from "../../rbac";
-import { assertPostingAllowed } from "../../posting-guard";
+import { withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { resolveDocumentStorage } from "../../documents/storage";
 
@@ -51,7 +51,6 @@ export async function uploadTrainingVideo(
     throw new ConflictError(`Cannot replace video on a ${version.state} version.`);
   }
   requirePermission(principal, clubId, "hr:training:write");
-  await assertPostingAllowed(principal, clubId, "hr.training.video.upload", VERSION_ENTITY, versionId);
 
   const mimeType = (input.mimeType || "").toLowerCase();
   if (!TRAINING_VIDEO_ACCEPTED_MIME.has(mimeType)) {
@@ -77,18 +76,28 @@ export async function uploadTrainingVideo(
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const storageKey = `clubs/${clubId}/training/${version.course.id}/${version.version}/${sha256}`;
   const storage = await resolveDocumentStorage({ clubId });
+  // External storage write happens OUTSIDE the posting-guard tx — holding a
+  // FOR UPDATE lock across a network upload would stall every other write
+  // for the duration of the transfer.
   await storage.put({ storageKey, body: buf, mimeType });
 
-  await prisma.trainingCourseVersion.update({
-    where: { id: versionId },
-    data: {
-      videoStorageKey: storageKey,
-      videoMimeType: mimeType,
-      videoSizeBytes: buf.length,
-      videoSha256: sha256,
-      videoDurationSec: input.durationSec ?? null,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "hr.training.video.upload",
+    async (tx) => tx.trainingCourseVersion.update({
+      where: { id: versionId },
+      data: {
+        videoStorageKey: storageKey,
+        videoMimeType: mimeType,
+        videoSizeBytes: buf.length,
+        videoSha256: sha256,
+        videoDurationSec: input.durationSec ?? null,
+      },
+    }),
+    { entityType: VERSION_ENTITY, entityId: versionId },
+  );
   await audit(principal, {
     action: "hr.training.video.upload",
     entityType: VERSION_ENTITY,

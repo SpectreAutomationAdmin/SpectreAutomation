@@ -440,7 +440,6 @@ export async function reverse(principal: Principal, journalId: string, opts: { r
   });
   assertTenantOwned(entry, principal);
   requirePermission(principal, entry.clubId, "gl:reverse");
-  await assertPostingAllowed(principal, entry.clubId, "gl.journal.reverse", "JournalEntry", journalId);
   if (entry.status !== "POSTED") throw new ConflictError(`Only POSTED entries can be reversed (was ${entry.status})`);
   if (entry.reversesId) throw new ConflictError("Refusing to reverse a reversing entry");
 
@@ -449,6 +448,8 @@ export async function reverse(principal: Principal, journalId: string, opts: { r
 
   const contraEntryNumber = await nextEntryNumber(entry.clubId);
   const contra = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, entry.clubId, "gl.journal.reverse", "JournalEntry", journalId, { tx });
     const contra = await tx.journalEntry.create({
       data: {
         clubId: entry.clubId,
@@ -553,11 +554,12 @@ export async function createPostedFromAdapter(
   // an orphan JournalEntry from the losing caller.
   externalTx?: Prisma.TransactionClient,
 ) {
-  await assertPostingAllowed(principal, clubId, `gl.adapter.${meta.source}`, meta.sourceEntityType, meta.sourceEntityId);
   const v = await validateEntry(clubId, raw, { allowControlAccounts: true });
   const period = await resolvePostingPeriod(principal, clubId, v.entryDate, { allowSoftLockOverride: true });
 
   const doWrites = async (tx: Prisma.TransactionClient) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, `gl.adapter.${meta.source}`, meta.sourceEntityType, meta.sourceEntityId, { tx });
     const entryNumber = await nextEntryNumberTx(tx, clubId);
     const e = await tx.journalEntry.create({
       data: {

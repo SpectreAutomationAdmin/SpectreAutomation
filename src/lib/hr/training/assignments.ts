@@ -9,7 +9,7 @@ import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { requirePermission, type Principal } from "../../rbac";
 import { assertTenantOwned } from "../../services/tenant";
-import { assertPostingAllowed } from "../../posting-guard";
+import { withPostingGuard } from "../../posting-guard";
 import { NotFoundError } from "../../errors";
 
 const ENTITY = "TrainingAssignment";
@@ -36,34 +36,45 @@ export async function assignCourseToEmployee(
     throw new NotFoundError("TrainingCourse", input.courseId); // cross-tenant enumeration guard
   }
   requirePermission(principal, employee.clubId, "hr:training:assign");
-  await assertPostingAllowed(
-    principal, employee.clubId,
-    "hr.training.assignment.create", ENTITY, input.employeeId,
-  );
 
-  const existing = await prisma.trainingAssignment.findFirst({
-    where: { clubId: employee.clubId, employeeId: employee.id, courseId: course.id },
-    select: { id: true },
-  });
-  if (existing) return { assignmentId: existing.id, alreadyAssigned: true };
-
-  const row = await prisma.trainingAssignment.create({
-    data: {
-      clubId: employee.clubId,
-      employeeId: employee.id,
-      courseId: course.id,
-      assignedByUserId: principal.id,
-      note: input.note?.trim() || null,
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Existence check lives inside the tx so idempotency decisions see
+  // the serialised subscription state alongside the write path.
+  const outcome = await withPostingGuard(
+    principal,
+    employee.clubId,
+    "hr.training.assignment.create",
+    async (tx) => {
+      const existing = await tx.trainingAssignment.findFirst({
+        where: { clubId: employee.clubId, employeeId: employee.id, courseId: course.id },
+        select: { id: true },
+      });
+      if (existing) {
+        return { assignmentId: existing.id, alreadyAssigned: true as const, createdRowId: null as string | null };
+      }
+      const row = await tx.trainingAssignment.create({
+        data: {
+          clubId: employee.clubId,
+          employeeId: employee.id,
+          courseId: course.id,
+          assignedByUserId: principal.id,
+          note: input.note?.trim() || null,
+        },
+      });
+      return { assignmentId: row.id, alreadyAssigned: false as const, createdRowId: row.id as string | null };
     },
-  });
-  await audit(principal, {
-    action: "hr.training.assignment.create",
-    entityType: ENTITY,
-    entityId: row.id,
-    clubId: employee.clubId,
-    after: { employeeId: employee.id, courseId: course.id },
-  });
-  return { assignmentId: row.id, alreadyAssigned: false };
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
+  if (outcome.createdRowId) {
+    await audit(principal, {
+      action: "hr.training.assignment.create",
+      entityType: ENTITY,
+      entityId: outcome.createdRowId,
+      clubId: employee.clubId,
+      after: { employeeId: employee.id, courseId: course.id },
+    });
+  }
+  return { assignmentId: outcome.assignmentId, alreadyAssigned: outcome.alreadyAssigned };
 }
 
 export async function unassignCourseFromEmployee(
@@ -76,11 +87,14 @@ export async function unassignCourseFromEmployee(
   });
   if (!row) return { removed: false };
   requirePermission(principal, row.clubId, "hr:training:assign");
-  await assertPostingAllowed(
-    principal, row.clubId,
-    "hr.training.assignment.delete", ENTITY, assignmentId,
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  await withPostingGuard(
+    principal,
+    row.clubId,
+    "hr.training.assignment.delete",
+    async (tx) => tx.trainingAssignment.delete({ where: { id: assignmentId } }),
+    { entityType: ENTITY, entityId: assignmentId },
   );
-  await prisma.trainingAssignment.delete({ where: { id: assignmentId } });
   await audit(principal, {
     action: "hr.training.assignment.delete",
     entityType: ENTITY,

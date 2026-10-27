@@ -23,7 +23,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { assertTenantOwned } from "../services/tenant";
 import { NotFoundError, ValidationError, ConflictError } from "../errors";
 import { Prisma } from "@prisma/client";
@@ -187,7 +187,6 @@ export async function scheduleOneTimeEarning(
   input: ScheduleOneTimeEarningInput,
 ): Promise<ScheduledOneTimeEarningView> {
   requirePermission(principal, clubId, "payroll:edit");
-  await assertPostingAllowed(principal, clubId, "payroll.scheduled_one_time_earning.schedule", ENTITY, input.employeeId);
 
   const period = await assertPayPeriodBelongsToClub(clubId, input.payPeriodId);
   await assertEmployeeInPayGroupForPeriod(clubId, input.employeeId, period.payGroupId, period.payDate);
@@ -207,38 +206,46 @@ export async function scheduleOneTimeEarning(
       clubId, employeeId: input.employeeId, payPeriodId: input.payPeriodId, componentId: input.componentId,
     },
   });
-  let row;
   if (existing && (existing.status === "SCHEDULED" || existing.status === "APPLIED")) {
     throw new ConflictError(
       `A ${existing.status.toLowerCase()} one-time earning already exists for this employee, period, and component.`,
     );
-  } else if (existing) {
-    // CANCELLED — resurrect the row.
-    row = await prisma.payrollScheduledOneTimeEarning.update({
-      where: { id: existing.id },
-      data: {
-        amount, currency: input.currency ?? null, reason, notes: input.notes ?? null,
-        status: "SCHEDULED", appliedAt: null, appliedToBatchId: null, appliedSnapshotId: null,
-        cancelledAt: null, cancelledByUserId: null, cancelledReason: null,
-        enteredByUserId: principal.id,
-      },
-      include: { component: { select: { code: true, displayName: true } } },
-    });
-  } else {
-    row = await prisma.payrollScheduledOneTimeEarning.create({
-      data: {
-        clubId,
-        employeeId: input.employeeId,
-        payPeriodId: input.payPeriodId,
-        componentId: input.componentId,
-        amount, currency: input.currency ?? null,
-        reason, notes: input.notes ?? null,
-        status: "SCHEDULED",
-        enteredByUserId: principal.id,
-      },
-      include: { component: { select: { code: true, displayName: true } } },
-    });
   }
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Scope note: the CANCELLED-resurrect branch and the create branch
+  // are both state-changing primary writes; one or the other runs
+  // under the guard based on `existing`. Validation + duplicate
+  // conflict detection stay outside.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.scheduled_one_time_earning.schedule",
+    async (tx) => existing
+      ? tx.payrollScheduledOneTimeEarning.update({
+          where: { id: existing.id },
+          data: {
+            amount, currency: input.currency ?? null, reason, notes: input.notes ?? null,
+            status: "SCHEDULED", appliedAt: null, appliedToBatchId: null, appliedSnapshotId: null,
+            cancelledAt: null, cancelledByUserId: null, cancelledReason: null,
+            enteredByUserId: principal.id,
+          },
+          include: { component: { select: { code: true, displayName: true } } },
+        })
+      : tx.payrollScheduledOneTimeEarning.create({
+          data: {
+            clubId,
+            employeeId: input.employeeId,
+            payPeriodId: input.payPeriodId,
+            componentId: input.componentId,
+            amount, currency: input.currency ?? null,
+            reason, notes: input.notes ?? null,
+            status: "SCHEDULED",
+            enteredByUserId: principal.id,
+          },
+          include: { component: { select: { code: true, displayName: true } } },
+        }),
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
 
   await audit(principal, {
     action: "payroll.scheduled_one_time_earning.schedule",
@@ -276,7 +283,6 @@ export async function editOneTimeEarning(
       `Cannot edit a ${row.status} one-time earning. Cancel and re-schedule instead.`,
     );
   }
-  await assertPostingAllowed(principal, clubId, "payroll.scheduled_one_time_earning.edit", ENTITY, scheduledId);
 
   const before = { amount: row.amount.toString(), reason: row.reason, notes: row.notes };
   const data: Record<string, unknown> = {};
@@ -288,11 +294,18 @@ export async function editOneTimeEarning(
   }
   if (input.notes !== undefined) data.notes = input.notes;
 
-  const updated = await prisma.payrollScheduledOneTimeEarning.update({
-    where: { id: scheduledId },
-    data,
-    include: { component: { select: { code: true, displayName: true } } },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.scheduled_one_time_earning.edit",
+    async (tx) => tx.payrollScheduledOneTimeEarning.update({
+      where: { id: scheduledId },
+      data,
+      include: { component: { select: { code: true, displayName: true } } },
+    }),
+    { entityType: ENTITY, entityId: scheduledId },
+  );
 
   await audit(principal, {
     action: "payroll.scheduled_one_time_earning.edit",
@@ -323,18 +336,24 @@ export async function cancelOneTimeEarning(
     );
   }
   if (row.status === "CANCELLED") return toView(row); // idempotent
-  await assertPostingAllowed(principal, clubId, "payroll.scheduled_one_time_earning.cancel", ENTITY, scheduledId);
 
-  const updated = await prisma.payrollScheduledOneTimeEarning.update({
-    where: { id: scheduledId },
-    data: {
-      status: "CANCELLED",
-      cancelledAt: new Date(),
-      cancelledByUserId: principal.id,
-      cancelledReason: input.reason ?? null,
-    },
-    include: { component: { select: { code: true, displayName: true } } },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.scheduled_one_time_earning.cancel",
+    async (tx) => tx.payrollScheduledOneTimeEarning.update({
+      where: { id: scheduledId },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        cancelledByUserId: principal.id,
+        cancelledReason: input.reason ?? null,
+      },
+      include: { component: { select: { code: true, displayName: true } } },
+    }),
+    { entityType: ENTITY, entityId: scheduledId },
+  );
   await audit(principal, {
     action: "payroll.scheduled_one_time_earning.cancel",
     entityType: ENTITY,

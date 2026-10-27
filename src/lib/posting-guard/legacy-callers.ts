@@ -1,39 +1,41 @@
-// SIGNUP-2 M1b (2026-10-26) -- Legacy posting-guard call-site registry.
+// SIGNUP-2 M1b-M1d (2026-10-26 .. 2026-10-27) -- Posting-guard caller registry.
 //
 // Enumerates every file in `src/` that calls `assertPostingAllowed`
-// without passing a `{tx}` parameter and without being wrapped in
-// `withPostingGuard`.  Each file carries an explicit classification:
+// (open-paren excludes string references).  Each file carries an
+// explicit classification:
 //
-//   MIGRATED      -- the file uses withPostingGuard or passes {tx}.
-//                    (These should NOT appear here; they're
-//                    enumerated for documentation only.)
+//   MIGRATED      -- the file uses withPostingGuard OR passes {tx}
+//                    on every call-site.  Zero bare calls remain.
 //
-//   TX_PENDING    -- the file already opens prisma.$transaction
-//                    around its write; mechanical migration is to
-//                    move the assertPostingAllowed call inside the
-//                    tx + pass {tx}.  Residual race window: ~ 10-500 ms
-//                    between the pre-tx guard call and the tx commit.
+//   PARTIAL_MIGRATED -- at least one call-site is migrated, but one
+//                       or more remain on the legacy signature.
+//                       Tracked for mechanical follow-on.
+//                       Zero entries at M1d close.
 //
-//   NO_TX_PENDING -- the file does NOT currently use a transaction;
-//                    migration requires wrapping writes in
-//                    withPostingGuard.  Residual race window: ~ 10-100 ms.
+//   TX_PENDING    -- opens prisma.$transaction around its write;
+//                    mechanical migration is to move the
+//                    assertPostingAllowed call inside the tx + pass
+//                    {tx}.  Zero entries at M1d close.
 //
-//   ADMIN_CONFIG_LEGACY -- the file is an admin-config edit (STAGED-
-//                          tier capable), small single-row writes;
-//                          race window bounded at ms scale; bounded
-//                          financial risk; migration planned but not
-//                          launch-blocking.
+//   NO_TX_PENDING -- does NOT currently use a transaction; migration
+//                    requires wrapping writes in withPostingGuard.
+//                    Zero entries at M1d close.
 //
-//   READ_ADJACENT -- the file imports `assertPostingAllowed` but
-//                    the symbol appears only in comments or docstrings;
-//                    no actual call-site (grep false positive).
+//   ADMIN_CONFIG_LEGACY -- admin-config edit that was previously
+//                          exempt.  Reassessed per founder §5 (M1d);
+//                          all four prior entries now MIGRATED.
+//                          Zero entries at M1d close.
 //
-// Any file that calls `assertPostingAllowed` without `{tx}` or
-// `withPostingGuard` AND is not in this registry fails the static
-// guard-inventory test (`tests/signup-2-m1b-caller-inventory.test.ts`).
+//   READ_ADJACENT -- imports `assertPostingAllowed` but the symbol
+//                    appears only in comments or docstrings; no
+//                    actual call-site (grep false positive).
+//                    migrationTarget = "none-required".
 //
-// The acceptance doc docs/signup-2-m1b-acceptance.md §2 is this
-// file's prose counterpart.
+// The static regression test tests/signup-2-m1d-strict-inventory.test.ts
+// reconciles this inventory against the actual grep hits in `src/`.  CI
+// fails if a new unguarded caller appears without a classification.
+// The acceptance doc docs/signup-2-m1d-acceptance.md is this file's
+// prose counterpart.
 
 export type LegacyCallerClassification =
   | "MIGRATED"
@@ -49,99 +51,77 @@ export interface LegacyCallerEntry {
   reason: string;
   migrationTarget: "withPostingGuard" | "assertPostingAllowed({tx})" | "none-required";
   // Approximate upper-bound race window if migration has not landed.
+  // Zero / undefined on MIGRATED entries.
   residualRaceMs?: number;
 }
 
 export const LEGACY_POSTING_GUARD_CALLERS: Readonly<LegacyCallerEntry[]> = [
-  // ---- MIGRATED / PARTIAL_MIGRATED ----
-  {
-    path: "src/lib/accounting/journal.ts",
-    classification: "PARTIAL_MIGRATED",
-    reason: "post + voidDraft migrated to withPostingGuard (M1b).  reverse + a 4th call-site remain legacy; mechanical follow-on.",
-    migrationTarget: "withPostingGuard",
-    residualRaceMs: 200,
-  },
-  {
-    path: "src/lib/ap/invoices.ts",
-    classification: "MIGRATED",
-    reason: "postInvoice + reverseInvoice migrated to withPostingGuard (M1c).",
-    migrationTarget: "withPostingGuard",
-  },
-  {
-    path: "src/lib/ap/payments.ts",
-    classification: "PARTIAL_MIGRATED",
-    reason: "processPayment migrated to withPostingGuard (M1c).  payInvoice + voidPayment remain legacy; mechanical follow-on.",
-    migrationTarget: "withPostingGuard",
-    residualRaceMs: 500,
-  },
-  {
-    path: "src/lib/opening-balance/index.ts",
-    classification: "MIGRATED",
-    reason: "post function uses assertPostingAllowed({tx}) inside prisma.$transaction (M1c).",
-    migrationTarget: "assertPostingAllowed({tx})",
-  },
-  {
-    path: "src/lib/imports/index.ts",
-    classification: "PARTIAL_MIGRATED",
-    reason: "void function migrated to assertPostingAllowed({tx}) inside prisma.$transaction (M1c).  commit function remains legacy (large multi-domain tx branches); mechanical migration pending.",
-    migrationTarget: "assertPostingAllowed({tx})",
-    residualRaceMs: 2000,
-  },
-  // ---- TX_PENDING (25 files remaining after M1c partial-migration) ----
-  { path: "src/lib/employee-portal/quick-links.ts", classification: "TX_PENDING", reason: "Employee-portal quick-links CRUD; small tx scope.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 50 },
-  { path: "src/lib/hr/compensation.ts", classification: "TX_PENDING", reason: "HR compensation changes; audit + employee row update inside existing tx.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/hr/employment-assignments.ts", classification: "TX_PENDING", reason: "Employment assignment add/end; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/hr/training/courses.ts", classification: "TX_PENDING", reason: "Training course publish + version update; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/hr/training/questions.ts", classification: "TX_PENDING", reason: "Training question edits; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 50 },
-  { path: "src/lib/imports/index.ts", classification: "TX_PENDING", reason: "ImportBatch commit + void; large tx (COA, opening balance).  High priority.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 2000 },
-  // src/lib/opening-balance/index.ts moved to MIGRATED (above).
-  { path: "src/lib/ops/inventory.ts", classification: "TX_PENDING", reason: "Inventory receive + adjust; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/approve-and-post.ts", classification: "TX_PENDING", reason: "Payroll batch approve + post; large tx with JE write.  High priority.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 2000 },
-  { path: "src/lib/payroll/batch-preparation.ts", classification: "TX_PENDING", reason: "Batch preparation state advances; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/batch-review.ts", classification: "TX_PENDING", reason: "Batch review state advance; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/benefit-enrolments.ts", classification: "TX_PENDING", reason: "Benefit enrolment CRUD; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/benefit-plans.ts", classification: "TX_PENDING", reason: "Benefit plan CRUD; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/correction.ts", classification: "TX_PENDING", reason: "Payroll correction batch creation; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 200 },
-  { path: "src/lib/payroll/freeze-service.ts", classification: "TX_PENDING", reason: "Payroll period freeze; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/late-time-service.ts", classification: "TX_PENDING", reason: "Late-time entry adjustments; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/opening-balance.ts", classification: "TX_PENDING", reason: "Payroll YTD opening balance writes; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 500 },
-  { path: "src/lib/payroll/pay-group-members.ts", classification: "TX_PENDING", reason: "Pay-group member add/remove; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/pay-periods.ts", classification: "TX_PENDING", reason: "Pay period create/close; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/return-payroll-batch.ts", classification: "TX_PENDING", reason: "Return payroll batch state advance; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/return-to-preparation.ts", classification: "TX_PENDING", reason: "Return-to-preparation state advance; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/payroll/reversal.ts", classification: "TX_PENDING", reason: "Payroll reversal; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 500 },
-  { path: "src/lib/payroll/submit-payroll-batch.ts", classification: "TX_PENDING", reason: "Submit payroll batch; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  { path: "src/lib/pos/checks.ts", classification: "TX_PENDING", reason: "POS check settlement; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 300 },
-  { path: "src/lib/services/ar.ts", classification: "TX_PENDING", reason: "AR charge/payment/adjustment post + void; tx-bound.  High priority.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 500 },
-  { path: "src/lib/timesheets/manager-approval.ts", classification: "TX_PENDING", reason: "Timesheet manager approval state advance; tx-bound.", migrationTarget: "assertPostingAllowed({tx})", residualRaceMs: 100 },
-  // ---- NO_TX_PENDING (20 files) ----
-  { path: "src/lib/announcements.ts", classification: "NO_TX_PENDING", reason: "Announcement create; single-row admin write; small race window.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  // src/lib/ap/payments.ts moved to MIGRATED (above).
-  { path: "src/lib/club/media.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "Club media CRUD (logo/cover upload); admin-config write; bounded ms race; low financial risk.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/hr/allowances.ts", classification: "NO_TX_PENDING", reason: "Allowance add/end; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/hr/payroll-profile.ts", classification: "NO_TX_PENDING", reason: "Payroll profile upsert/void; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/hr/sensitive-identity.ts", classification: "READ_ADJACENT", reason: "Imports symbol only in comment (SIN reveal is NOT a financial posting; see file comment).  No call-site.", migrationTarget: "none-required" },
-  { path: "src/lib/hr/training/assignments.ts", classification: "NO_TX_PENDING", reason: "Training assignment add/update; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/hr/training/video.ts", classification: "NO_TX_PENDING", reason: "Training video upload; admin-config write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/payroll/approved-time.ts", classification: "NO_TX_PENDING", reason: "Time entry create; small single-row write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/payroll/club-config.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "Payroll club config edits; admin-config write.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/payroll/cpp-election.ts", classification: "NO_TX_PENDING", reason: "CPP election set/clear; small single-row write.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/payroll/department-approval.ts", classification: "NO_TX_PENDING", reason: "Department approval advance; state write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/payroll/opening-balance-import.ts", classification: "NO_TX_PENDING", reason: "Payroll opening balance import kickoff; needs tx wrapping.", migrationTarget: "withPostingGuard", residualRaceMs: 500 },
-  { path: "src/lib/payroll/pay-group-auto-assign.ts", classification: "NO_TX_PENDING", reason: "Pay-group auto-assign; small single-row write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/payroll/pay-groups.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "Pay-group CRUD; admin-config write.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/payroll/scheduled-one-time-earning.ts", classification: "NO_TX_PENDING", reason: "Scheduled one-time earning create/edit; HR write.", migrationTarget: "withPostingGuard", residualRaceMs: 100 },
-  { path: "src/lib/payroll/zero-hours-acknowledgement.ts", classification: "NO_TX_PENDING", reason: "Zero-hours ack write; small single-row write.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
+  // ====================================================================
+  // FINANCIAL POSTING SURFACES -- high-priority, money-moving writes.
+  // ====================================================================
+  { path: "src/lib/accounting/journal.ts", classification: "MIGRATED", reason: "post + voidDraft + reverse + createPostedFromAdapter all run inside a tx with assertPostingAllowed({tx}) or withPostingGuard (M1b + M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/ap/invoices.ts", classification: "MIGRATED", reason: "postInvoice + reverseInvoice migrated to withPostingGuard (M1c).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/ap/payments.ts", classification: "MIGRATED", reason: "processPayment + voidPayment migrated to withPostingGuard (M1c + M1d); payInvoice delegates to processPayment (pre-tx bare guard removed in M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/opening-balance/index.ts", classification: "MIGRATED", reason: "post function uses assertPostingAllowed({tx}) inside prisma.$transaction (M1c).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/imports/index.ts", classification: "MIGRATED", reason: "void function + commitBatch COA branch + commitBatch OPENING_TRIAL_BALANCE branch each run assertPostingAllowed({tx}) inside their respective txs (M1c + M1d).  Non-financial branches (members/vendors/employees) are admin-config writes without posting-guard enforcement needed.", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/services/ar.ts", classification: "MIGRATED", reason: "postCharge/voidCharge/postPayment/voidPayment/postAdjustment/voidAdjustment wrap in withPostingGuard; reverseCharge uses assertPostingAllowed({tx}) inside existing tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/approve-and-post.ts", classification: "MIGRATED", reason: "approvePayrollBatch wraps the CAS updateMany in withPostingGuard; postPayrollBatch runs assertPostingAllowed({tx}) inside both the REVERSAL-branch tx and the STANDARD-branch tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/pos/checks.ts", classification: "MIGRATED", reason: "settleCheck: both branch point-of-no-return pOSCheck.update calls (CLOSED + PAYMENT_PENDING) wrapped in withPostingGuard; email + reservation calls deliberately kept OUTSIDE the guard'd tx (no external network calls while locks held) (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/pos/index.ts", classification: "MIGRATED", reason: "completeSale + refundSale + voidSale (money-moving POS writes) each wrapped in withPostingGuard; inventory posting (via createPostedFromAdapter) stays outside the outer tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/pos/lounge.ts", classification: "MIGRATED", reason: "ringUpLoungeSale wrapped in withPostingGuard; delegates to completeSale which re-acquires the lock atomically (M1d).", migrationTarget: "withPostingGuard" },
+  // ====================================================================
+  // HR + PAYROLL CONFIG + ADMIN WRITES -- state transitions that feed
+  // future posting runs.  All migrated so a suspended tenant cannot
+  // modify configuration that would unblock itself.
+  // ====================================================================
+  { path: "src/lib/hr/compensation.ts", classification: "MIGRATED", reason: "changeCompensation runs assertPostingAllowed({tx}) inside existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/hr/employment-assignments.ts", classification: "MIGRATED", reason: "addAssignment uses assertPostingAllowed({tx}) inside existing tx; endAssignment wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/allowances.ts", classification: "MIGRATED", reason: "addAllowance + endAllowance wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/payroll-profile.ts", classification: "MIGRATED", reason: "activate + deactivate updates wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/training/courses.ts", classification: "MIGRATED", reason: "createCourse/publishDraft/startNewDraft/retireCourse use assertPostingAllowed({tx}) inside existing tx; updateDraft wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/training/questions.ts", classification: "MIGRATED", reason: "createQuestion/updateQuestion/reorderQuestions use assertPostingAllowed({tx}) inside existing tx; deleteQuestion wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/training/assignments.ts", classification: "MIGRATED", reason: "add: idempotency findFirst moved INSIDE the create tx; delete wrapped (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/hr/training/video.ts", classification: "MIGRATED", reason: "DB row create wrapped in withPostingGuard; storage.put stays outside the lock (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/employee-portal/quick-links.ts", classification: "MIGRATED", reason: "All CRUD + attach-file wrapped in withPostingGuard; storage.put stays outside the lock (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/announcements.ts", classification: "MIGRATED", reason: "create/update/delete each wrap the single prisma write; audit stays outside (M1d).", migrationTarget: "withPostingGuard" },
+  // Payroll (deep sub-tree) -- every file carries at least one guarded path.
+  { path: "src/lib/payroll/batch-preparation.ts", classification: "MIGRATED", reason: "preparePayrollBatch + voidPayrollBatch + discardPreparedPayrollBatch move assertPostingAllowed into their respective existing txs (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/batch-review.ts", classification: "MIGRATED", reason: "Attestation guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/benefit-enrolments.ts", classification: "MIGRATED", reason: "enrolEmployeeInBenefitPlan guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/benefit-plans.ts", classification: "MIGRATED", reason: "createBenefitPlan wrapped in withPostingGuard; changeBenefitPlanConfiguration guard moved into existing tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/club-config.ts", classification: "MIGRATED", reason: "upsert + activate + deactivate wrapped in withPostingGuard.  Reclassified from ADMIN_CONFIG_LEGACY per founder §5 (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/correction.ts", classification: "MIGRATED", reason: "initiate + patch moved guard into existing txs (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/cpp-election.ts", classification: "MIGRATED", reason: "stop + revocation wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/department-approval.ts", classification: "MIGRATED", reason: "approval upsert/update wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/freeze-service.ts", classification: "MIGRATED", reason: "Freeze guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/late-time-service.ts", classification: "MIGRATED", reason: "Late-time guard moved into existing tx after the OPEN->resolved CAS (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/opening-balance.ts", classification: "MIGRATED", reason: "6 call-sites: 2 moved into existing txs with {tx}, 4 wrapped in withPostingGuard; findFirst dedupe checks moved INSIDE the guarded tx so they serialise against suspension (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/opening-balance-import.ts", classification: "MIGRATED", reason: "Pre-tx bare guard removed; function delegates to createDraftOpeningBalance per row, each with its own guard (M1d).", migrationTarget: "none-required" },
+  { path: "src/lib/payroll/pay-group-auto-assign.ts", classification: "MIGRATED", reason: "Create wrapped in withPostingGuard; SKIPPED-outcome branches short-circuit above the guard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/pay-group-members.ts", classification: "MIGRATED", reason: "assignMembership + endMembership wrapped in withPostingGuard; transferMembership moved guard into existing tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/pay-groups.ts", classification: "MIGRATED", reason: "createPayGroup + updatePayGroup wrapped in withPostingGuard.  Reclassified from ADMIN_CONFIG_LEGACY per founder §5 (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/pay-periods.ts", classification: "MIGRATED", reason: "generatePayPeriods moved guard into existing tx; updateFuturePayPeriodBoundaries + updatePayGroupPeriodBoundaryStrategy wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/approved-time.ts", classification: "MIGRATED", reason: "create/update/delete each wrap the single prisma write; pre-reads stay outside (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/return-payroll-batch.ts", classification: "MIGRATED", reason: "Return guard moved into existing tx after the SUBMITTED_FOR_APPROVAL->RETURNED CAS (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/return-to-preparation.ts", classification: "MIGRATED", reason: "Guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/reversal.ts", classification: "MIGRATED", reason: "Reversal guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/scheduled-one-time-earning.ts", classification: "MIGRATED", reason: "Resurrect-vs-create branch + edit + cancel each wrapped in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/payroll/submit-payroll-batch.ts", classification: "MIGRATED", reason: "Submit guard moved into existing tx after the CALCULATED->SUBMITTED CAS (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/payroll/zero-hours-acknowledgement.ts", classification: "MIGRATED", reason: "Ack upsert + PayrollBatchException.updateMany wrapped atomically in withPostingGuard (M1d).", migrationTarget: "withPostingGuard" },
+  // Non-payroll operational.
+  { path: "src/lib/ops/inventory.ts", classification: "MIGRATED", reason: "postReceiving uses assertPostingAllowed({tx}) inside existing tx; postAdjustment + postSale wrapped in withPostingGuard; GL adapter stays outside the guard'd tx (M1d).", migrationTarget: "withPostingGuard" },
+  { path: "src/lib/timesheets/manager-approval.ts", classification: "MIGRATED", reason: "approveTimesheetScope guard moved into existing tx (M1d).", migrationTarget: "assertPostingAllowed({tx})" },
+  { path: "src/lib/club/media.ts", classification: "MIGRATED", reason: "setClubMedia + clearClubMedia + updateClubMediaFraming + resetClubMediaFraming wrapped in withPostingGuard; storage.put stays outside the lock.  Reclassified from ADMIN_CONFIG_LEGACY per founder §5 (M1d).", migrationTarget: "withPostingGuard" },
+  // ====================================================================
+  // READ_ADJACENT -- grep false positives (symbol in comments only).
+  // ====================================================================
+  { path: "src/lib/hr/sensitive-identity.ts", classification: "READ_ADJACENT", reason: "Imports symbol only in comment (SIN reveal is NOT a financial posting).  No runtime call-site.", migrationTarget: "none-required" },
   { path: "src/lib/permissions.ts", classification: "READ_ADJACENT", reason: "Legacy registry comment only; no runtime call-site to assertPostingAllowed.", migrationTarget: "none-required" },
-  { path: "src/lib/pos/index.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "POS admin / server index; config edits; bounded ms race.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
-  { path: "src/lib/pos/lounge.ts", classification: "ADMIN_CONFIG_LEGACY", reason: "Lounge POS config; admin-config write.", migrationTarget: "withPostingGuard", residualRaceMs: 50 },
 ];
 
 /** The set of paths currently permitted to call assertPostingAllowed
- *  without `{tx}` or `withPostingGuard`.  Any file not in this set
- *  AND not fully migrated fails the static inventory test.
- *  PARTIAL_MIGRATED stays here because one or more call-sites in
- *  the file remain on the legacy signature. */
+ *  without `{tx}` or `withPostingGuard`.  At M1d close this is empty
+ *  except for the two READ_ADJACENT entries whose "calls" are comment-only. */
 export const LEGACY_EXEMPT_PATHS: ReadonlySet<string> = new Set(
   LEGACY_POSTING_GUARD_CALLERS
     .filter((e) => e.classification !== "MIGRATED")

@@ -71,7 +71,6 @@ export async function returnPayrollBatch(
   reason: string,
 ): Promise<ReturnPayrollBatchResult> {
   requirePermission(principal, clubId, "payroll:return");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.controller-return", ENTITY, batchId);
 
   const trimmedReason = (reason ?? "").trim();
   if (!trimmedReason) {
@@ -110,6 +109,8 @@ export async function returnPayrollBatch(
       },
     });
     if (gate.count !== 1) return false;
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch.controller-return", ENTITY, batchId, { tx });
     await invalidateAttestationForBatchDimension(
       tx, clubId, batchId, "CALCULATED_PAYROLL", "payroll.batch.controller-return",
     );

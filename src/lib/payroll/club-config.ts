@@ -23,7 +23,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 
 const ENTITY = "PayrollClubConfig";
@@ -130,7 +130,6 @@ export async function upsertPayrollClubConfig(
   input: UpdatePayrollClubConfigInput,
 ): Promise<PayrollClubConfigView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.config.upsert", ENTITY, clubId);
 
   const patch: {
     country?: string;
@@ -190,11 +189,18 @@ export async function upsertPayrollClubConfig(
   }
 
   const before = await prisma.payrollClubConfig.findUnique({ where: { clubId } });
-  const row = await prisma.payrollClubConfig.upsert({
-    where: { clubId },
-    update: patch,
-    create: { clubId, ...patch },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.config.upsert",
+    async (tx) => tx.payrollClubConfig.upsert({
+      where: { clubId },
+      update: patch,
+      create: { clubId, ...patch },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "payroll.config.upsert",
     entityType: ENTITY,
@@ -281,7 +287,6 @@ export async function activatePayrollClubConfig(
   clubId: string,
 ): Promise<PayrollClubConfigView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.config.activate", ENTITY, clubId);
 
   const check = await checkPayrollActivationPreconditions(clubId);
   if (!check.ok) {
@@ -289,10 +294,17 @@ export async function activatePayrollClubConfig(
   }
   const before = await prisma.payrollClubConfig.findUnique({ where: { clubId } });
   if (!before) throw new NotFoundError(ENTITY, clubId);
-  const row = await prisma.payrollClubConfig.update({
-    where: { clubId },
-    data: { enabled: true },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.config.activate",
+    async (tx) => tx.payrollClubConfig.update({
+      where: { clubId },
+      data: { enabled: true },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "payroll.config.activate",
     entityType: ENTITY,
@@ -311,14 +323,20 @@ export async function deactivatePayrollClubConfig(
   clubId: string,
 ): Promise<PayrollClubConfigView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.config.deactivate", ENTITY, clubId);
 
   const before = await prisma.payrollClubConfig.findUnique({ where: { clubId } });
   if (!before) throw new NotFoundError(ENTITY, clubId);
-  const row = await prisma.payrollClubConfig.update({
-    where: { clubId },
-    data: { enabled: false },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.config.deactivate",
+    async (tx) => tx.payrollClubConfig.update({
+      where: { clubId },
+      data: { enabled: false },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "payroll.config.deactivate",
     entityType: ENTITY,

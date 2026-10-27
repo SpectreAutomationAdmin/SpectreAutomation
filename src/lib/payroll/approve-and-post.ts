@@ -34,7 +34,7 @@ import {
 } from "../errors";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { createPostedFromAdapter } from "../accounting/journal";
 import type { JournalSource } from "../accounting/types";
 import { Prisma } from "@prisma/client";
@@ -180,7 +180,6 @@ export async function approvePayrollBatch(
 ): Promise<Awaited<ReturnType<typeof prisma.payrollBatch.findUnique>>> {
   const batch = await loadBatchOrThrow(principal, batchId);
   requirePermission(principal, batch.clubId, "payroll:approve");
-  await assertPostingAllowed(principal, batch.clubId, "payroll.batch.approve", PAYROLL_ENTITY, batchId);
 
   if (batch.status === "APPROVED" || batch.status === "POSTED") {
     // Idempotent — already at or past target.
@@ -203,19 +202,26 @@ export async function approvePayrollBatch(
   }
 
   const now = new Date();
-  const gate = await prisma.payrollBatch.updateMany({
-    where: {
-      id: batch.id, clubId: batch.clubId,
-      status: "SUBMITTED_FOR_APPROVAL",
-      calculationVersion: batch.calculationVersion,
-      submittedByUserId: batch.submittedByUserId,
-    },
-    data: {
-      status: "APPROVED",
-      approvedAt: now,
-      approvedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const gate = await withPostingGuard(
+    principal,
+    batch.clubId,
+    "payroll.batch.approve",
+    async (tx) => tx.payrollBatch.updateMany({
+      where: {
+        id: batch.id, clubId: batch.clubId,
+        status: "SUBMITTED_FOR_APPROVAL",
+        calculationVersion: batch.calculationVersion,
+        submittedByUserId: batch.submittedByUserId,
+      },
+      data: {
+        status: "APPROVED",
+        approvedAt: now,
+        approvedByUserId: principal.id,
+      },
+    }),
+    { entityType: PAYROLL_ENTITY, entityId: batchId },
+  );
   if (gate.count !== 1) {
     throw new ApproveConcurrencyConflictError(batch.id, "SUBMITTED_FOR_APPROVAL", batch.calculationVersion);
   }
@@ -335,7 +341,6 @@ export async function postPayrollBatch(
 }> {
   const batch = await loadBatchOrThrow(principal, batchId);
   requirePermission(principal, batch.clubId, "payroll:post");
-  await assertPostingAllowed(principal, batch.clubId, "payroll.batch.post", PAYROLL_ENTITY, batchId);
 
   if (batch.status === "POSTED") {
     // Idempotent — already posted. Return the existing journal.
@@ -438,6 +443,8 @@ export async function postPayrollBatch(
     // Atomic post — same shape as the STANDARD path below.
     const now = new Date();
     const txResult = await prisma.$transaction(async (tx) => {
+      // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+      await assertPostingAllowed(principal, batch.clubId, "payroll.batch.post", PAYROLL_ENTITY, batchId, { tx });
       const acquired = await tx.payrollBatch.updateMany({
         where: { id: batch.id, status: "APPROVED", glJournalEntryId: null },
         data: { status: "POSTED", postedAt: now, postedByUserId: principal.id },
@@ -632,6 +639,8 @@ export async function postPayrollBatch(
   // flipped and return idempotently.
   const now = new Date();
   const txResult = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, batch.clubId, "payroll.batch.post", PAYROLL_ENTITY, batchId, { tx });
     // Payroll-3C-6B — see the wrapping `.transaction(..., { timeout })`
     // options below. Bumped from Prisma's 5s default because the audit
     // + assertPostingAllowed calls upstream of the JE write can push

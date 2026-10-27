@@ -913,7 +913,6 @@ export async function preparePayrollBatch(
   payPeriodId: string,
 ): Promise<PreparePayrollBatchResult> {
   requirePermission(principal, clubId, "payroll:run");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.prepare", ENTITY, payPeriodId);
 
   // v-slice-1-followup-5 (2026-09-15) — canonical Step 1 gate.
   // Department Head approval of source time PRECEDES Prepare. When
@@ -1124,6 +1123,8 @@ export async function preparePayrollBatch(
   // Everything into one transaction — batch + per-employee snapshot +
   // allowance snapshots + exception rows + approved-time reservation.
   const { batch, exceptionSummary } = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch.prepare", ENTITY, payPeriodId, { tx });
     const batch = await tx.payrollBatch.create({
       data: {
         clubId,
@@ -1421,7 +1422,6 @@ export async function voidPayrollBatch(
   reason?: string,
 ): Promise<VoidPayrollBatchResult> {
   requirePermission(principal, clubId, "payroll:run");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.void", ENTITY, batchId);
 
   const batch = await prisma.payrollBatch.findFirst({ where: { id: batchId, clubId } });
   if (!batch) throw new NotFoundError(ENTITY, batchId);
@@ -1435,6 +1435,8 @@ export async function voidPayrollBatch(
   }
 
   const { released } = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch.void", ENTITY, batchId, { tx });
     // Release approved-time reservations.
     const rel = await tx.payrollApprovedTimeEntry.updateMany({
       where: { clubId, consumedByBatchId: batch.id },
@@ -1539,7 +1541,6 @@ export async function discardPreparedPayrollBatch(
   reason?: string,
 ): Promise<VoidPayrollBatchResult> {
   requirePermission(principal, clubId, "payroll:run");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.discard", ENTITY, batchId);
 
   const batch = await prisma.payrollBatch.findFirst({ where: { id: batchId, clubId } });
   if (!batch) throw new NotFoundError(ENTITY, batchId);
@@ -1561,6 +1562,8 @@ export async function discardPreparedPayrollBatch(
 
   const priorStatus = batch.status;
   const { released } = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch.discard", ENTITY, batchId, { tx });
     const rel = await tx.payrollApprovedTimeEntry.updateMany({
       where: { clubId, consumedByBatchId: batch.id },
       data: { consumedByBatchId: null, consumedByBatchEmployeeId: null },

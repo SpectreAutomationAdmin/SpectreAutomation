@@ -66,10 +66,6 @@ export async function freezeApprovedScopeIntoPayroll(
   principal: Principal, input: FreezeScopeInput,
 ): Promise<FreezeScopeResult> {
   requirePermission(principal, input.clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, input.clubId, "payroll.approved-time.freeze",
-    ENTITY, `${input.payPeriodId}:${input.departmentId}`,
-  );
 
   // Load approval + period + club-tz + cutoff-lead in one round trip.
   const [approval, period, clubConfig, club] = await Promise.all([
@@ -129,6 +125,12 @@ export async function freezeApprovedScopeIntoPayroll(
 
   const now = new Date();
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, input.clubId, "payroll.approved-time.freeze",
+      ENTITY, `${input.payPeriodId}:${input.departmentId}`,
+      { tx },
+    );
     // Fetch in-scope entries (assignment.departmentId == this dept).
     const entryRows = await tx.payrollTimesheetEntry.findMany({
       where: {

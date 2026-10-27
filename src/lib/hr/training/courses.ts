@@ -27,7 +27,7 @@ import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { requirePermission, type Principal } from "../../rbac";
 import { assertTenantOwned } from "../../services/tenant";
-import { assertPostingAllowed } from "../../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 
 export const TRAINING_COURSE_CATEGORIES = [
@@ -95,7 +95,6 @@ export async function createCourse(
   input: CreateCourseInput,
 ): Promise<{ courseId: string; versionId: string }> {
   requirePermission(principal, clubId, "hr:training:write");
-  await assertPostingAllowed(principal, clubId, "hr.training.course.create", COURSE_ENTITY, clubId);
 
   const code = normaliseCode(input.code);
   const title = input.title.trim();
@@ -116,6 +115,8 @@ export async function createCourse(
   if (collision) throw new ConflictError(`Course code ${code} already exists in this Club.`);
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "hr.training.course.create", COURSE_ENTITY, clubId, { tx });
     const course = await tx.trainingCourse.create({
       data: {
         clubId,
@@ -182,7 +183,6 @@ export async function updateDraft(
   if (!version) throw new NotFoundError(VERSION_ENTITY, versionId);
   assertTenantOwned({ clubId: version.course.clubId }, principal);
   requirePermission(principal, version.course.clubId, "hr:training:write");
-  await assertPostingAllowed(principal, version.course.clubId, "hr.training.version.update", VERSION_ENTITY, versionId);
   if (version.state !== "DRAFT") {
     throw new ConflictError(
       `Version ${version.version} is ${version.state}; open a new draft to change content.`,
@@ -218,7 +218,14 @@ export async function updateDraft(
       : null;
   }
   if (Object.keys(data).length === 0) return;
-  await prisma.trainingCourseVersion.update({ where: { id: versionId }, data });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    version.course.clubId,
+    "hr.training.version.update",
+    async (tx) => tx.trainingCourseVersion.update({ where: { id: versionId }, data }),
+    { entityType: VERSION_ENTITY, entityId: versionId },
+  );
   await audit(principal, {
     action: "hr.training.version.update",
     entityType: VERSION_ENTITY,
@@ -282,10 +289,6 @@ export async function publishDraft(
   if (!version) throw new NotFoundError(VERSION_ENTITY, versionId);
   assertTenantOwned({ clubId: version.course.clubId }, principal);
   requirePermission(principal, version.course.clubId, "hr:training:publish");
-  await assertPostingAllowed(
-    principal, version.course.clubId,
-    "hr.training.version.publish", VERSION_ENTITY, versionId,
-  );
   const readiness = await checkPublishReadiness(versionId);
   if (!readiness.ready) {
     throw new ValidationError(
@@ -294,6 +297,11 @@ export async function publishDraft(
   }
   const now = new Date();
   await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, version.course.clubId,
+      "hr.training.version.publish", VERSION_ENTITY, versionId, { tx },
+    );
     // Retire any prior PUBLISHED version of the same course.
     await tx.trainingCourseVersion.updateMany({
       where: { courseId: version.course.id, state: "PUBLISHED", NOT: { id: versionId } },
@@ -335,7 +343,6 @@ export async function startNewDraft(
   if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
   assertTenantOwned(course, principal);
   requirePermission(principal, course.clubId, "hr:training:write");
-  await assertPostingAllowed(principal, course.clubId, "hr.training.version.draft", VERSION_ENTITY, courseId);
 
   const latest = course.versions[0];
   if (latest && latest.state === "DRAFT") {
@@ -346,6 +353,8 @@ export async function startNewDraft(
   const source = latest;
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, course.clubId, "hr.training.version.draft", VERSION_ENTITY, courseId, { tx });
     const draft = await tx.trainingCourseVersion.create({
       data: {
         courseId,
@@ -416,10 +425,11 @@ export async function retireCourse(
   if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
   assertTenantOwned(course, principal);
   requirePermission(principal, course.clubId, "hr:training:publish");
-  await assertPostingAllowed(principal, course.clubId, "hr.training.course.retire", COURSE_ENTITY, courseId);
   if (course.retiredAt) return;
   const now = new Date();
   await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, course.clubId, "hr.training.course.retire", COURSE_ENTITY, courseId, { tx });
     await tx.trainingCourse.update({
       where: { id: courseId },
       data: { retiredAt: now, currentVersionId: null },

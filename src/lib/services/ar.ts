@@ -17,7 +17,7 @@ import { assertTenantOwned } from "./tenant";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
 import { calculateAging } from "./aging";
 import { postChargeToGl, postPaymentToGl, postAdjustmentToGl } from "../accounting/events";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 
 // ---------- enums -----------------------------------------------------------
 export const CHARGE_CATEGORIES = ["DUES", "PRO_SHOP", "FOOD_BEVERAGE", "EVENT", "FINANCING", "INITIATION_FEE", "CAPITAL_ASSESSMENT", "ADJUSTMENT", "OTHER"] as const;
@@ -37,7 +37,6 @@ export async function postCharge(principal: Principal, memberId: string, raw: un
   const member = await prisma.member.findUnique({ where: { id: memberId }, include: { account: true } });
   assertTenantOwned(member, principal);
   requirePermission(principal, member.clubId, "ar:write");
-  await assertPostingAllowed(principal, member.clubId, "ar.charge.post", "Member", memberId);
   if (!member.account) throw new ConflictError("Member has no AR account");
   const parsed = postChargeSchema.safeParse(raw);
   if (!parsed.success) throw zerr(parsed.error);
@@ -45,20 +44,27 @@ export async function postCharge(principal: Principal, memberId: string, raw: un
   const txDate = parsed.data.transactionDate ? new Date(parsed.data.transactionDate) : new Date();
   const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : txDate;
 
-  const charge = await prisma.charge.create({
-    data: {
-      clubId: member.clubId,
-      memberId,
-      accountId: member.account.id,
-      description: parsed.data.description,
-      category: parsed.data.category,
-      amount: round2(parsed.data.amount),
-      transactionDate: txDate,
-      dueDate,
-      status: "POSTED",
-      postedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const charge = await withPostingGuard(
+    principal,
+    member.clubId,
+    "ar.charge.post",
+    async (tx) => tx.charge.create({
+      data: {
+        clubId: member.clubId,
+        memberId,
+        accountId: member.account!.id,
+        description: parsed.data.description,
+        category: parsed.data.category,
+        amount: round2(parsed.data.amount),
+        transactionDate: txDate,
+        dueDate,
+        status: "POSTED",
+        postedByUserId: principal.id,
+      },
+    }),
+    { entityType: "Member", entityId: memberId },
+  );
   await recomputeAccount(memberId);
   await audit(principal, {
     action: "ar.charge.post",
@@ -77,13 +83,19 @@ export async function voidCharge(principal: Principal, chargeId: string, reason:
   const charge = await prisma.charge.findUnique({ where: { id: chargeId }, include: { member: true } });
   assertTenantOwned(charge, principal);
   requirePermission(principal, charge.clubId, "ar:void");
-  await assertPostingAllowed(principal, charge.clubId, "ar.charge.void", "Charge", chargeId);
   if (charge.status !== "POSTED") throw new ConflictError("Only POSTED charges can be voided");
 
-  const updated = await prisma.charge.update({
-    where: { id: chargeId },
-    data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    charge.clubId,
+    "ar.charge.void",
+    async (tx) => tx.charge.update({
+      where: { id: chargeId },
+      data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
+    }),
+    { entityType: "Charge", entityId: chargeId },
+  );
   await recomputeAccount(charge.memberId);
   await audit(principal, {
     action: "ar.charge.void",
@@ -101,12 +113,13 @@ export async function reverseCharge(principal: Principal, chargeId: string, reas
   const charge = await prisma.charge.findUnique({ where: { id: chargeId }, include: { member: { include: { account: true } } } });
   assertTenantOwned(charge, principal);
   requirePermission(principal, charge.clubId, "ar:void");
-  await assertPostingAllowed(principal, charge.clubId, "ar.charge.reverse", "Charge", chargeId);
   if (charge.status === "VOIDED" || charge.status === "REVERSED") throw new ConflictError(`Charge is already ${charge.status}`);
   if (!charge.member.account) throw new ConflictError("Member has no AR account");
   if (charge.reversesId) throw new ConflictError("Cannot reverse a reversing entry");
 
   const contra = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, charge.clubId, "ar.charge.reverse", "Charge", chargeId, { tx });
     const contra = await tx.charge.create({
       data: {
         clubId: charge.clubId,
@@ -156,26 +169,32 @@ export async function postPayment(principal: Principal, memberId: string, raw: u
   const member = await prisma.member.findUnique({ where: { id: memberId }, include: { account: true } });
   assertTenantOwned(member, principal);
   requirePermission(principal, member.clubId, "ar:write");
-  await assertPostingAllowed(principal, member.clubId, "ar.payment.post", "Member", memberId);
   if (!member.account) throw new ConflictError("Member has no AR account");
   const parsed = postPaymentSchema.safeParse(raw);
   if (!parsed.success) throw zerr(parsed.error);
 
-  const payment = await prisma.payment.create({
-    data: {
-      clubId: member.clubId,
-      memberId,
-      accountId: member.account.id,
-      amount: round2(parsed.data.amount),
-      method: parsed.data.method,
-      paymentDate: parsed.data.paymentDate ? new Date(parsed.data.paymentDate) : new Date(),
-      status: parsed.data.status,
-      paymentMethodId: parsed.data.paymentMethodId ?? null,
-      processorRef: parsed.data.processorRef ?? null,
-      failureReason: parsed.data.failureReason ?? null,
-      postedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const payment = await withPostingGuard(
+    principal,
+    member.clubId,
+    "ar.payment.post",
+    async (tx) => tx.payment.create({
+      data: {
+        clubId: member.clubId,
+        memberId,
+        accountId: member.account!.id,
+        amount: round2(parsed.data.amount),
+        method: parsed.data.method,
+        paymentDate: parsed.data.paymentDate ? new Date(parsed.data.paymentDate) : new Date(),
+        status: parsed.data.status,
+        paymentMethodId: parsed.data.paymentMethodId ?? null,
+        processorRef: parsed.data.processorRef ?? null,
+        failureReason: parsed.data.failureReason ?? null,
+        postedByUserId: principal.id,
+      },
+    }),
+    { entityType: "Member", entityId: memberId },
+  );
 
   // FAILED payments don't reduce balance; we still recompute to refresh stamps.
   await recomputeAccount(memberId);
@@ -196,12 +215,18 @@ export async function voidPayment(principal: Principal, paymentId: string, reaso
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   assertTenantOwned(payment, principal);
   requirePermission(principal, payment.clubId, "ar:void");
-  await assertPostingAllowed(principal, payment.clubId, "ar.payment.void", "Payment", paymentId);
   if (payment.status !== "SUCCESS") throw new ConflictError("Only SUCCESS payments can be voided");
-  const updated = await prisma.payment.update({
-    where: { id: paymentId },
-    data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    payment.clubId,
+    "ar.payment.void",
+    async (tx) => tx.payment.update({
+      where: { id: paymentId },
+      data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
+    }),
+    { entityType: "Payment", entityId: paymentId },
+  );
   await recomputeAccount(payment.memberId);
   await audit(principal, {
     action: "ar.payment.void",
@@ -228,25 +253,31 @@ export async function postAdjustment(principal: Principal, memberId: string, raw
   const member = await prisma.member.findUnique({ where: { id: memberId }, include: { account: true } });
   assertTenantOwned(member, principal);
   requirePermission(principal, member.clubId, "ar:adjust");
-  await assertPostingAllowed(principal, member.clubId, "ar.adjustment.post", "Member", memberId);
   if (!member.account) throw new ConflictError("Member has no AR account");
   const parsed = adjustmentSchema.safeParse(raw);
   if (!parsed.success) throw zerr(parsed.error);
 
-  const adj = await prisma.accountAdjustment.create({
-    data: {
-      clubId: member.clubId,
-      memberId,
-      accountId: member.account.id,
-      type: parsed.data.type,
-      amount: round2(parsed.data.amount),
-      description: parsed.data.description,
-      category: parsed.data.category ?? null,
-      transactionDate: parsed.data.transactionDate ? new Date(parsed.data.transactionDate) : new Date(),
-      status: "POSTED",
-      postedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const adj = await withPostingGuard(
+    principal,
+    member.clubId,
+    "ar.adjustment.post",
+    async (tx) => tx.accountAdjustment.create({
+      data: {
+        clubId: member.clubId,
+        memberId,
+        accountId: member.account!.id,
+        type: parsed.data.type,
+        amount: round2(parsed.data.amount),
+        description: parsed.data.description,
+        category: parsed.data.category ?? null,
+        transactionDate: parsed.data.transactionDate ? new Date(parsed.data.transactionDate) : new Date(),
+        status: "POSTED",
+        postedByUserId: principal.id,
+      },
+    }),
+    { entityType: "Member", entityId: memberId },
+  );
   await recomputeAccount(memberId);
   await audit(principal, {
     action: "ar.adjustment.post",
@@ -263,12 +294,18 @@ export async function voidAdjustment(principal: Principal, id: string, reason: s
   const adj = await prisma.accountAdjustment.findUnique({ where: { id } });
   assertTenantOwned(adj, principal);
   requirePermission(principal, adj.clubId, "ar:void");
-  await assertPostingAllowed(principal, adj.clubId, "ar.adjustment.void", "AccountAdjustment", id);
   if (adj.status !== "POSTED") throw new ConflictError("Only POSTED adjustments can be voided");
-  const updated = await prisma.accountAdjustment.update({
-    where: { id },
-    data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    adj.clubId,
+    "ar.adjustment.void",
+    async (tx) => tx.accountAdjustment.update({
+      where: { id },
+      data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason.trim() || null },
+    }),
+    { entityType: "AccountAdjustment", entityId: id },
+  );
   await recomputeAccount(adj.memberId);
   await audit(principal, {
     action: "ar.adjustment.void",

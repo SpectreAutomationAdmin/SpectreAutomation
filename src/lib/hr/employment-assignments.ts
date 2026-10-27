@@ -19,7 +19,7 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
 
 export type AssignmentRole = "PRIMARY" | "ADDITIONAL";
@@ -318,7 +318,6 @@ export async function addAssignment(
 ): Promise<{ id: string }> {
   const emp = await loadEmployee(principal, employeeId);
   requirePermission(principal, emp.clubId, "hr:employment:write");
-  await assertPostingAllowed(principal, emp.clubId, "hr.employment_assignment.add", ENTITY, employeeId);
 
   if (!(ASSIGNMENT_ROLES as readonly string[]).includes(input.role)) {
     throw new ValidationError([{ path: "role", message: `role must be one of ${ASSIGNMENT_ROLES.join(", ")}` }]);
@@ -330,6 +329,8 @@ export async function addAssignment(
   await assertManagerInClub(emp.clubId, input.managerEmployeeId ?? null, employeeId);
 
   const created = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, emp.clubId, "hr.employment_assignment.add", ENTITY, employeeId, { tx });
     if (input.role === "PRIMARY") {
       // Close the current open PRIMARY (if any) at the new
       // effectiveFrom. Only one open PRIMARY at a time.
@@ -517,7 +518,6 @@ export async function endAssignment(
   if (!row) throw new NotFoundError(ENTITY, assignmentId);
   assertTenantOwned({ clubId: row.clubId }, principal);
   requirePermission(principal, row.clubId, "hr:employment:write");
-  await assertPostingAllowed(principal, row.clubId, "hr.employment_assignment.end", ENTITY, assignmentId);
   if (row.effectiveTo !== null) {
     throw new ConflictError("Assignment already ended.");
   }
@@ -525,10 +525,17 @@ export async function endAssignment(
   if (effectiveTo <= row.effectiveFrom) {
     throw new ValidationError([{ path: "effectiveTo", message: "End date must be after start date." }]);
   }
-  await prisma.employeeEmploymentAssignment.update({
-    where: { id: assignmentId },
-    data: { effectiveTo, notes: input.notes?.trim() || undefined },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    row.clubId,
+    "hr.employment_assignment.end",
+    async (tx) => tx.employeeEmploymentAssignment.update({
+      where: { id: assignmentId },
+      data: { effectiveTo, notes: input.notes?.trim() || undefined },
+    }),
+    { entityType: ENTITY, entityId: assignmentId },
+  );
   await audit(principal, {
     action: "hr.employment_assignment.end",
     entityType: ENTITY,

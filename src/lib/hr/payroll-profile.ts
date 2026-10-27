@@ -30,7 +30,7 @@ import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
 import { AppError, ConflictError, NotFoundError, ValidationError } from "../errors";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { getCurrentCompensation } from "./compensation";
 import { getSinMasked } from "./sensitive-identity";
 import { getBankAccountMasked } from "./bank-account";
@@ -200,13 +200,6 @@ export async function activatePayrollProfile(
 ) {
   const employee = await loadEmployee(principal, employeeId);
   requirePermission(principal, employee.clubId, "hr:payroll_profile:activate");
-  await assertPostingAllowed(
-    principal,
-    employee.clubId,
-    "hr.payroll_profile.activate.post",
-    PROFILE_ENTITY,
-    employeeId,
-  );
 
   const profile = await prisma.payrollProfile.findUnique({ where: { employeeId } });
   if (!profile) throw new NotFoundError(PROFILE_ENTITY, employeeId);
@@ -246,20 +239,27 @@ export async function activatePayrollProfile(
   const bankMasked = await getBankAccountMasked(principal, employeeId);
 
   const activatedAt = new Date();
-  const updated = await prisma.payrollProfile.update({
-    where: { id: profile.id },
-    data: {
-      activatedAt,
-      // Re-enable direct-deposit unless the caller has explicitly
-      // opted out at upsert time — activation is the moment we start
-      // paying through the account.
-      directDepositActive: true,
-      // Clear any stale suspension marker so we're strictly in the
-      // ACTIVE state after this call.
-      suspendedAt: null,
-      suspensionReason: null,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    employee.clubId,
+    "hr.payroll_profile.activate.post",
+    async (tx) => tx.payrollProfile.update({
+      where: { id: profile.id },
+      data: {
+        activatedAt,
+        // Re-enable direct-deposit unless the caller has explicitly
+        // opted out at upsert time — activation is the moment we start
+        // paying through the account.
+        directDepositActive: true,
+        // Clear any stale suspension marker so we're strictly in the
+        // ACTIVE state after this call.
+        suspendedAt: null,
+        suspensionReason: null,
+      },
+    }),
+    { entityType: PROFILE_ENTITY, entityId: employeeId },
+  );
 
   await audit(principal, {
     action: "hr.payroll_profile.activate.post",
@@ -298,13 +298,6 @@ export async function deactivatePayrollProfile(
 ) {
   const employee = await loadEmployee(principal, employeeId);
   requirePermission(principal, employee.clubId, "hr:payroll_profile:activate");
-  await assertPostingAllowed(
-    principal,
-    employee.clubId,
-    "hr.payroll_profile.deactivate.void",
-    PROFILE_ENTITY,
-    employeeId,
-  );
 
   const profile = await prisma.payrollProfile.findUnique({ where: { employeeId } });
   if (!profile) throw new NotFoundError(PROFILE_ENTITY, employeeId);
@@ -312,15 +305,22 @@ export async function deactivatePayrollProfile(
   if (profile.activatedAt == null) return profile;
 
   const suspendedAt = new Date();
-  const updated = await prisma.payrollProfile.update({
-    where: { id: profile.id },
-    data: {
-      activatedAt: null,
-      directDepositActive: false,
-      suspendedAt,
-      suspensionReason: reason ?? null,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    employee.clubId,
+    "hr.payroll_profile.deactivate.void",
+    async (tx) => tx.payrollProfile.update({
+      where: { id: profile.id },
+      data: {
+        activatedAt: null,
+        directDepositActive: false,
+        suspendedAt,
+        suspensionReason: reason ?? null,
+      },
+    }),
+    { entityType: PROFILE_ENTITY, entityId: employeeId },
+  );
 
   await audit(principal, {
     action: "hr.payroll_profile.deactivate.void",

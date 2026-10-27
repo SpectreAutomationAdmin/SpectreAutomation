@@ -10,7 +10,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { NotFoundError, ValidationError } from "../errors";
 
 const ENTITY = "PayrollZeroHoursAcknowledgement";
@@ -45,7 +45,6 @@ export async function acknowledgeZeroHours(
   input: AckInput,
 ): Promise<{ id: string }> {
   requirePermission(principal, clubId, "payroll:edit");
-  await assertPostingAllowed(principal, clubId, "payroll.zero_hours_ack", ENTITY, input.batchEmployeeId);
 
   if (!REASONS.includes(input.reason)) {
     throw new ValidationError([{
@@ -66,38 +65,52 @@ export async function acknowledgeZeroHours(
   });
   if (!be) throw new NotFoundError("PayrollBatchEmployee", input.batchEmployeeId);
 
-  const row = await prisma.payrollZeroHoursAcknowledgement.upsert({
-    where: { batchEmployeeId: be.id },
-    create: {
-      clubId, batchId: be.batchId, batchEmployeeId: be.id, employeeId: be.employeeId,
-      reason: input.reason,
-      reasonDetail: input.reasonDetail ?? null,
-      acknowledgedByUserId: principal.id,
-    },
-    update: {
-      reason: input.reason,
-      reasonDetail: input.reasonDetail ?? null,
-      acknowledgedByUserId: principal.id,
-      acknowledgedAt: new Date(),
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Scope note: both the upsert of the acknowledgement row and the
+  // follow-up resolution of the NO_APPROVED_HOURS_FOR_HOURLY exception
+  // rows are state-changing writes that must commit atomically with
+  // the posting-guard check — they move together or not at all.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.zero_hours_ack",
+    async (tx) => {
+      const r = await tx.payrollZeroHoursAcknowledgement.upsert({
+        where: { batchEmployeeId: be.id },
+        create: {
+          clubId, batchId: be.batchId, batchEmployeeId: be.id, employeeId: be.employeeId,
+          reason: input.reason,
+          reasonDetail: input.reasonDetail ?? null,
+          acknowledgedByUserId: principal.id,
+        },
+        update: {
+          reason: input.reason,
+          reasonDetail: input.reasonDetail ?? null,
+          acknowledgedByUserId: principal.id,
+          acknowledgedAt: new Date(),
+        },
+      });
 
-  // Also resolve the NO_APPROVED_HOURS_FOR_HOURLY exception row on
-  // this batch × employee so the review UI reflects the ack immediately
-  // (without waiting for a Re-Prepare).
-  await prisma.payrollBatchException.updateMany({
-    where: {
-      clubId,
-      batchId: be.batchId,
-      batchEmployeeId: be.id,
-      code: "NO_APPROVED_HOURS_FOR_HOURLY",
-      resolvedAt: null,
+      // Also resolve the NO_APPROVED_HOURS_FOR_HOURLY exception row on
+      // this batch × employee so the review UI reflects the ack immediately
+      // (without waiting for a Re-Prepare).
+      await tx.payrollBatchException.updateMany({
+        where: {
+          clubId,
+          batchId: be.batchId,
+          batchEmployeeId: be.id,
+          code: "NO_APPROVED_HOURS_FOR_HOURLY",
+          resolvedAt: null,
+        },
+        data: {
+          resolvedAt: new Date(),
+          resolvedByUserId: principal.id,
+        },
+      });
+      return r;
     },
-    data: {
-      resolvedAt: new Date(),
-      resolvedByUserId: principal.id,
-    },
-  });
+    { entityType: ENTITY, entityId: input.batchEmployeeId },
+  );
 
   await audit(principal, {
     action: "payroll.zero_hours_ack",

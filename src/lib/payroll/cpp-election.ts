@@ -50,7 +50,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 
 const ENTITY = "EmployeeCppElection";
@@ -144,7 +144,6 @@ export async function recordCppStopElection(
   input: RecordStopElectionInput,
 ): Promise<CppElectionView> {
   requirePermission(principal, clubId, "payroll:run");
-  await assertPostingAllowed(principal, clubId, "payroll.cpp-election.record-stop", ENTITY, input.employeeId);
 
   const emp = await loadEmployee(clubId, input.employeeId);
   const issues: { path: string; message: string }[] = [];
@@ -196,22 +195,29 @@ export async function recordCppStopElection(
     receivedOn: input.receivedOn,
   });
 
-  const row = await prisma.employeeCppElection.create({
-    data: {
-      clubId,
-      employeeId: input.employeeId,
-      kind: "ELECTION_TO_STOP",
-      pensionType: input.pensionType,
-      retirementPensionReceived: true,
-      employeeSignedOn: utcMidnight(input.employeeSignedOn),
-      receivedOn: utcMidnight(input.receivedOn),
-      effectiveOn,
-      status: "ACTIVE",
-      notes: input.notes ?? null,
-      evidenceDocumentId: input.evidenceDocumentId ?? null,
-      createdByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.cpp-election.record-stop",
+    async (tx) => tx.employeeCppElection.create({
+      data: {
+        clubId,
+        employeeId: input.employeeId,
+        kind: "ELECTION_TO_STOP",
+        pensionType: input.pensionType,
+        retirementPensionReceived: true,
+        employeeSignedOn: utcMidnight(input.employeeSignedOn),
+        receivedOn: utcMidnight(input.receivedOn),
+        effectiveOn,
+        status: "ACTIVE",
+        notes: input.notes ?? null,
+        evidenceDocumentId: input.evidenceDocumentId ?? null,
+        createdByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
 
   await audit(principal, {
     action: "payroll.cpp-election.record-stop",
@@ -248,7 +254,6 @@ export async function recordCppRevocation(
   input: RecordRevocationInput,
 ): Promise<CppElectionView> {
   requirePermission(principal, clubId, "payroll:run");
-  await assertPostingAllowed(principal, clubId, "payroll.cpp-election.record-revocation", ENTITY, input.employeeId);
 
   await loadEmployee(clubId, input.employeeId);
   const target = await prisma.employeeCppElection.findFirst({
@@ -295,23 +300,30 @@ export async function recordCppRevocation(
   }
   const effectiveOn = derived;
 
-  const row = await prisma.employeeCppElection.create({
-    data: {
-      clubId,
-      employeeId: input.employeeId,
-      kind: "REVOCATION_OF_ELECTION",
-      revokesElectionId: target.id,
-      pensionType: target.pensionType,
-      retirementPensionReceived: target.retirementPensionReceived,
-      employeeSignedOn: utcMidnight(input.employeeSignedOn),
-      receivedOn: utcMidnight(input.receivedOn),
-      effectiveOn,
-      status: "ACTIVE",
-      notes: input.notes ?? null,
-      evidenceDocumentId: input.evidenceDocumentId ?? null,
-      createdByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.cpp-election.record-revocation",
+    async (tx) => tx.employeeCppElection.create({
+      data: {
+        clubId,
+        employeeId: input.employeeId,
+        kind: "REVOCATION_OF_ELECTION",
+        revokesElectionId: target.id,
+        pensionType: target.pensionType,
+        retirementPensionReceived: target.retirementPensionReceived,
+        employeeSignedOn: utcMidnight(input.employeeSignedOn),
+        receivedOn: utcMidnight(input.receivedOn),
+        effectiveOn,
+        status: "ACTIVE",
+        notes: input.notes ?? null,
+        evidenceDocumentId: input.evidenceDocumentId ?? null,
+        createdByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
 
   await audit(principal, {
     action: "payroll.cpp-election.record-revocation",

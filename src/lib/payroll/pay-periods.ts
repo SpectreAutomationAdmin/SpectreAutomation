@@ -25,7 +25,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import type { PayFrequency } from "./club-config";
 import { semiMonthlyPaydayWithPolicy } from "./semi-monthly-payday";
@@ -406,9 +406,6 @@ export async function generatePayPeriods(
   taxYear: number,
 ): Promise<GenerationResult> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-period.generate", ENTITY, payGroupId,
-  );
 
   const grp = await prisma.payrollPayGroup.findFirst({ where: { id: payGroupId, clubId } });
   if (!grp) throw new NotFoundError("PayrollPayGroup", payGroupId);
@@ -473,6 +470,11 @@ export async function generatePayPeriods(
   // are respected by construction; if a concurrent generator wins the
   // race a P2002 will surface as a plain error (rare admin action).
   const createdRows = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, clubId, "payroll.pay-period.generate", ENTITY, payGroupId,
+      { tx },
+    );
     const rows: PayPeriodRow[] = [];
     for (const c of computed) {
       const row = await tx.payrollPayPeriod.create({
@@ -587,9 +589,6 @@ export async function updateFuturePayPeriodBoundaries(
   patch: PayPeriodBoundaryUpdate,
 ): Promise<PayPeriodView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-period.update-boundaries", ENTITY, payPeriodId,
-  );
   const gate = await isPayPeriodImmutable(clubId, payPeriodId);
   if (gate.immutable) {
     throw new ValidationError([
@@ -608,14 +607,23 @@ export async function updateFuturePayPeriodBoundaries(
   const before = await prisma.payrollPayPeriod.findFirstOrThrow({
     where: { id: payPeriodId, clubId },
   });
-  const row = await prisma.payrollPayPeriod.update({
-    where: { id: payPeriodId },
-    data: {
-      periodStart: patch.periodStart,
-      periodEnd: patch.periodEnd,
-      payDate: patch.payDate,
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-period.update-boundaries",
+    async (tx) => {
+      return tx.payrollPayPeriod.update({
+        where: { id: payPeriodId },
+        data: {
+          periodStart: patch.periodStart,
+          periodEnd: patch.periodEnd,
+          payDate: patch.payDate,
+        },
+      });
     },
-  });
+    { entityType: ENTITY, entityId: payPeriodId },
+  );
   await audit(principal, {
     action: "payroll.pay-period.update-boundaries",
     entityType: ENTITY,
@@ -647,9 +655,6 @@ export async function updatePayGroupPeriodBoundaryStrategy(
   strategy: PeriodBoundaryStrategy,
 ): Promise<void> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-group.update-strategy", ENTITY, payGroupId,
-  );
   const grp = await prisma.payrollPayGroup.findFirst({ where: { id: payGroupId, clubId } });
   if (!grp) throw new NotFoundError("PayrollPayGroup", payGroupId);
   if (grp.payFrequency !== "SEMI_MONTHLY") {
@@ -681,10 +686,19 @@ export async function updatePayGroupPeriodBoundaryStrategy(
       ]);
     }
   }
-  await prisma.payrollPayGroup.update({
-    where: { id: payGroupId },
-    data: { periodBoundaryStrategy: strategy },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group.update-strategy",
+    async (tx) => {
+      await tx.payrollPayGroup.update({
+        where: { id: payGroupId },
+        data: { periodBoundaryStrategy: strategy },
+      });
+    },
+    { entityType: ENTITY, entityId: payGroupId },
+  );
   await audit(principal, {
     action: "payroll.pay-group.update-strategy",
     entityType: ENTITY,

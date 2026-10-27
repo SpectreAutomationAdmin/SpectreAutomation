@@ -20,7 +20,7 @@ import type { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { NotFoundError, ValidationError } from "../errors";
 
 const ENTITY = "PayrollOpeningBalance";
@@ -274,7 +274,6 @@ export async function createDraftOpeningBalance(
   input: CreateDraftOpeningBalanceInput,
 ): Promise<OpeningBalanceView> {
   requirePermission(principal, clubId, "payroll:opening-balance:write");
-  await assertPostingAllowed(principal, clubId, "payroll.opening-balance.draft", ENTITY, input.employeeId);
   await assertTenantEmployee(clubId, input.employeeId);
   assertValidNumerics(input.values);
 
@@ -314,32 +313,62 @@ export async function createDraftOpeningBalance(
     ]);
   }
 
-  const existing = await prisma.payrollOpeningBalance.findFirst({
-    where: { clubId, employeeId: input.employeeId, taxYear: input.taxYear, status: "DRAFT" },
-  });
-
   const decimalData: Record<string, string> = {};
   for (const f of NUMERIC_FIELDS) decimalData[f] = input.values[f];
 
-  if (existing) {
-    const updated = await prisma.payrollOpeningBalance.update({
-      where: { id: existing.id },
-      data: {
-        ...decimalData,
-        throughPayDate: input.throughPayDate,
-        importSource: input.importSource ?? existing.importSource,
-        importBatchId: input.importBatchId ?? existing.importBatchId,
-        notes: input.notes ?? existing.notes,
-        priorPayrollKind,
-        priorEmployerId: input.priorEmployerId ?? existing.priorEmployerId,
-        importedByUserId: principal.id,
-        importedAt: new Date(),
-      },
-    });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const { row, wasRefresh } = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.opening-balance.draft",
+    async (tx) => {
+      const existing = await tx.payrollOpeningBalance.findFirst({
+        where: { clubId, employeeId: input.employeeId, taxYear: input.taxYear, status: "DRAFT" },
+      });
+      if (existing) {
+        const updated = await tx.payrollOpeningBalance.update({
+          where: { id: existing.id },
+          data: {
+            ...decimalData,
+            throughPayDate: input.throughPayDate,
+            importSource: input.importSource ?? existing.importSource,
+            importBatchId: input.importBatchId ?? existing.importBatchId,
+            notes: input.notes ?? existing.notes,
+            priorPayrollKind,
+            priorEmployerId: input.priorEmployerId ?? existing.priorEmployerId,
+            importedByUserId: principal.id,
+            importedAt: new Date(),
+          },
+        });
+        return { row: updated, wasRefresh: true };
+      }
+      const created = await tx.payrollOpeningBalance.create({
+        data: {
+          clubId,
+          employeeId: input.employeeId,
+          taxYear: input.taxYear,
+          status: "DRAFT",
+          ...decimalData,
+          throughPayDate: input.throughPayDate,
+          importSource: input.importSource ?? "MANUAL",
+          importBatchId: input.importBatchId ?? null,
+          notes: input.notes ?? null,
+          priorPayrollKind,
+          priorEmployerId: input.priorEmployerId ?? null,
+          importedByUserId: principal.id,
+          importedAt: new Date(),
+        },
+      });
+      return { row: created, wasRefresh: false };
+    },
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
+
+  if (wasRefresh) {
     await audit(principal, {
       action: "payroll.opening-balance.draft.refresh",
       entityType: ENTITY,
-      entityId: updated.id,
+      entityId: row.id,
       clubId,
       after: {
         taxYear: input.taxYear,
@@ -348,33 +377,15 @@ export async function createDraftOpeningBalance(
         throughPayDate: input.throughPayDate.toISOString().slice(0, 10),
       },
     });
-    return toView(updated);
-  }
-
-  const row = await prisma.payrollOpeningBalance.create({
-    data: {
+  } else {
+    await audit(principal, {
+      action: "payroll.opening-balance.draft.create",
+      entityType: ENTITY,
+      entityId: row.id,
       clubId,
-      employeeId: input.employeeId,
-      taxYear: input.taxYear,
-      status: "DRAFT",
-      ...decimalData,
-      throughPayDate: input.throughPayDate,
-      importSource: input.importSource ?? "MANUAL",
-      importBatchId: input.importBatchId ?? null,
-      notes: input.notes ?? null,
-      priorPayrollKind,
-      priorEmployerId: input.priorEmployerId ?? null,
-      importedByUserId: principal.id,
-      importedAt: new Date(),
-    },
-  });
-  await audit(principal, {
-    action: "payroll.opening-balance.draft.create",
-    entityType: ENTITY,
-    entityId: row.id,
-    clubId,
-    after: { taxYear: input.taxYear, employeeId: input.employeeId, importSource: input.importSource },
-  });
+      after: { taxYear: input.taxYear, employeeId: input.employeeId, importSource: input.importSource },
+    });
+  }
   return toView(row);
 }
 
@@ -442,7 +453,6 @@ export async function activateOpeningBalance(
   id: string,
 ): Promise<OpeningBalanceView> {
   requirePermission(principal, clubId, "payroll:opening-balance:write");
-  await assertPostingAllowed(principal, clubId, "payroll.opening-balance.activate", ENTITY, id);
 
   const row = await prisma.payrollOpeningBalance.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -456,6 +466,8 @@ export async function activateOpeningBalance(
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.opening-balance.activate", ENTITY, id, { tx });
     const active = await tx.payrollOpeningBalance.findFirst({
       where: { clubId, employeeId: row.employeeId, taxYear: row.taxYear, status: "ACTIVE" },
     });
@@ -638,13 +650,6 @@ export async function addOpeningComponentBalance(
   input: AddOpeningComponentBalanceInput,
 ): Promise<OpeningBalanceComponentView> {
   requirePermission(principal, clubId, "payroll:opening-balance:write");
-  await assertPostingAllowed(
-    principal,
-    clubId,
-    "payroll.opening-balance.component.create",
-    COMPONENT_ENTITY,
-    input.openingBalanceId,
-  );
 
   await loadDraftOpeningForComponentEdit(clubId, input.openingBalanceId);
 
@@ -685,35 +690,43 @@ export async function addOpeningComponentBalance(
   // §15 — inactive components are still selectable for HISTORICAL opening
   // balances. No refusal here.
 
-  const dupe = await prisma.payrollOpeningBalanceComponent.findFirst({
-    where: { openingBalanceId: input.openingBalanceId, componentCode: component.code },
-    select: { id: true },
-  });
-  if (dupe) {
-    throw new ValidationError([
-      {
-        path: "componentId",
-        message: `Component "${component.code}" already has an opening balance on this row. Remove it first to change the amount.`,
-      },
-    ]);
-  }
-
-  const row = await prisma.payrollOpeningBalanceComponent.create({
-    data: {
-      clubId,
-      openingBalanceId: input.openingBalanceId,
-      sourceComponentId: component.id,
-      componentCode: component.code,
-      displayName: component.displayName,
-      category: component.category,
-      side: component.side,
-      cashEffect: component.cashEffect,
-      ytdAmount: input.ytdAmount,
-      ytdQuantity:
-        input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
-      notes: input.notes?.trim() || null,
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.opening-balance.component.create",
+    async (tx) => {
+      const dupe = await tx.payrollOpeningBalanceComponent.findFirst({
+        where: { openingBalanceId: input.openingBalanceId, componentCode: component.code },
+        select: { id: true },
+      });
+      if (dupe) {
+        throw new ValidationError([
+          {
+            path: "componentId",
+            message: `Component "${component.code}" already has an opening balance on this row. Remove it first to change the amount.`,
+          },
+        ]);
+      }
+      return tx.payrollOpeningBalanceComponent.create({
+        data: {
+          clubId,
+          openingBalanceId: input.openingBalanceId,
+          sourceComponentId: component.id,
+          componentCode: component.code,
+          displayName: component.displayName,
+          category: component.category,
+          side: component.side,
+          cashEffect: component.cashEffect,
+          ytdAmount: input.ytdAmount,
+          ytdQuantity:
+            input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
+          notes: input.notes?.trim() || null,
+        },
+      });
     },
-  });
+    { entityType: COMPONENT_ENTITY, entityId: input.openingBalanceId },
+  );
 
   await audit(principal, {
     action: "payroll.opening-balance.component.create",
@@ -743,17 +756,16 @@ export async function removeOpeningComponentBalance(
   });
   if (!row) throw new NotFoundError(COMPONENT_ENTITY, openingComponentId);
 
-  await assertPostingAllowed(
+  await loadDraftOpeningForComponentEdit(clubId, row.openingBalanceId);
+
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
     principal,
     clubId,
     "payroll.opening-balance.component.delete",
-    COMPONENT_ENTITY,
-    row.id,
+    async (tx) => tx.payrollOpeningBalanceComponent.delete({ where: { id: row.id } }),
+    { entityType: COMPONENT_ENTITY, entityId: row.id },
   );
-
-  await loadDraftOpeningForComponentEdit(clubId, row.openingBalanceId);
-
-  await prisma.payrollOpeningBalanceComponent.delete({ where: { id: row.id } });
 
   await audit(principal, {
     action: "payroll.opening-balance.component.delete",
@@ -818,14 +830,6 @@ export async function updateOpeningComponentBalance(
   });
   if (!row) throw new NotFoundError(COMPONENT_ENTITY, openingComponentId);
 
-  await assertPostingAllowed(
-    principal,
-    clubId,
-    "payroll.opening-balance.component.update",
-    COMPONENT_ENTITY,
-    row.id,
-  );
-
   await loadDraftOpeningForComponentEdit(clubId, row.openingBalanceId);
 
   if (!/^-?\d+(\.\d+)?$/.test(input.ytdAmount)) {
@@ -846,15 +850,22 @@ export async function updateOpeningComponentBalance(
   }
 
   const before = row.ytdAmount.toString();
-  const updated = await prisma.payrollOpeningBalanceComponent.update({
-    where: { id: row.id },
-    data: {
-      ytdAmount: input.ytdAmount,
-      ytdQuantity:
-        input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
-      notes: input.notes != null ? (input.notes.trim() || null) : undefined,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.opening-balance.component.update",
+    async (tx) => tx.payrollOpeningBalanceComponent.update({
+      where: { id: row.id },
+      data: {
+        ytdAmount: input.ytdAmount,
+        ytdQuantity:
+          input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
+        notes: input.notes != null ? (input.notes.trim() || null) : undefined,
+      },
+    }),
+    { entityType: COMPONENT_ENTITY, entityId: row.id },
+  );
 
   await audit(principal, {
     action: "payroll.opening-balance.component.update",
@@ -928,7 +939,6 @@ export async function saveOpeningBalanceWithComponents(
   input: SaveOpeningBalanceWithComponentsInput,
 ): Promise<{ parent: OpeningBalanceView; components: OpeningBalanceComponentView[] }> {
   requirePermission(principal, clubId, "payroll:opening-balance:write");
-  await assertPostingAllowed(principal, clubId, "payroll.opening-balance.draft", ENTITY, input.employeeId);
   await assertTenantEmployee(clubId, input.employeeId);
   assertValidNumerics(input.values);
 
@@ -1020,6 +1030,8 @@ export async function saveOpeningBalanceWithComponents(
   for (const f of NUMERIC_FIELDS) decimalData[f] = input.values[f];
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.opening-balance.draft", ENTITY, input.employeeId, { tx });
     // Refuse if a non-DRAFT row already exists for the tuple that isn't
     // superseded. The parent must be DRAFT (create) OR a DRAFT already
     // exists (refresh in place). VALIDATED/ACTIVE rows can only be

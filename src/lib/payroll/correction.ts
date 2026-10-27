@@ -93,7 +93,6 @@ export async function initiateReverseAndCorrect(
   reason: string,
 ): Promise<InitiateReverseAndCorrectResult> {
   requirePermission(principal, clubId, "payroll:submit");
-  await assertPostingAllowed(principal, clubId, "payroll.correction.initiate", PAYROLL_ENTITY, originalBatchId);
 
   const trimmedReason = (reason ?? "").trim();
   if (!trimmedReason) {
@@ -143,6 +142,8 @@ export async function initiateReverseAndCorrect(
   const nextSequence = (maxSeq._max.sequence ?? 0) + 1;
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.correction.initiate", PAYROLL_ENTITY, originalBatchId, { tx });
     const correction = await tx.payrollBatch.create({
       data: {
         clubId: original.clubId,
@@ -415,7 +416,6 @@ export async function patchCorrectionEmployeeInputs(
   patches: CorrectionInputPatch[],
 ): Promise<{ patchedCount: number }> {
   requirePermission(principal, clubId, "payroll:edit");
-  await assertPostingAllowed(principal, clubId, "payroll.correction.patch", PAYROLL_ENTITY, correctionBatchId);
 
   const correction = await prisma.payrollBatch.findFirst({
     where: { id: correctionBatchId, clubId },
@@ -437,6 +437,8 @@ export async function patchCorrectionEmployeeInputs(
 
   let patchedCount = 0;
   await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.correction.patch", PAYROLL_ENTITY, correctionBatchId, { tx });
     for (const rawPatch of patches) {
       const patch = normalisePatch(rawPatch);
       const be = await tx.payrollBatchEmployee.findFirst({

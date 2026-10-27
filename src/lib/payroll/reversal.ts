@@ -72,7 +72,6 @@ export async function initiatePayrollReversal(
   reason: string,
 ): Promise<InitiateReversalResult> {
   requirePermission(principal, clubId, "payroll:submit");
-  await assertPostingAllowed(principal, clubId, "payroll.reversal.initiate", PAYROLL_ENTITY, originalBatchId);
 
   const trimmedReason = (reason ?? "").trim();
   if (!trimmedReason) {
@@ -153,6 +152,8 @@ export async function initiatePayrollReversal(
   // origin binding, all in one transaction. If ANY step fails, no
   // half-state remains.
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.reversal.initiate", PAYROLL_ENTITY, originalBatchId, { tx });
     const reversal = await tx.payrollBatch.create({
       data: {
         clubId: original.clubId,

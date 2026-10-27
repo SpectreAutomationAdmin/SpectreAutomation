@@ -22,7 +22,14 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+// M1d (2026-10-27) -- the outer bare `assertPostingAllowed` pre-check
+// previously fired at the top of `importOpeningBalancesFromCsv` was
+// removed in favour of per-row `withPostingGuard` protection inside
+// `createDraftOpeningBalance`. The CSV loop can process thousands of
+// rows; holding FOR UPDATE on ClubSubscription across the entire
+// import would stall every other write for the duration of the
+// upload. Per-row guards close the suspension race per row and
+// fail-fast on the first row when the tenant is suspended.
 import { parseCsvRecords } from "../imports/csv-parse";
 import { ValidationError } from "../errors";
 import {
@@ -116,7 +123,9 @@ export async function importOpeningBalancesFromCsv(
   },
 ): Promise<OpeningBalanceImportResult> {
   requirePermission(principal, clubId, "payroll:opening-balance:write");
-  await assertPostingAllowed(principal, clubId, "payroll.opening-balance.import", ENTITY, `taxYear:${input.taxYear}`);
+  // M1d (2026-10-27) -- bare pre-check removed; per-row posting-guard
+  // inside createDraftOpeningBalance holds FOR UPDATE on the subscription
+  // row for each individual write (see import note at the top of file).
 
   if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {
     throw new ValidationError([{ path: "taxYear", message: "Invalid tax year." }]);

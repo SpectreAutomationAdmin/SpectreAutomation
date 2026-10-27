@@ -791,7 +791,7 @@ export async function voidCommittedBatch(
     // M1c: tx-bound posting-guard with FOR UPDATE on ClubSubscription.
     await assertPostingAllowed(
       principal, batch.clubId, "import.batch.void", "ImportBatch", batch.id,
-      { tx: tx as unknown as { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+      { tx },
     );
     // Only reverse when the batch is STILL live — superseded
     // batches were already reversed when they were superseded.
@@ -827,11 +827,11 @@ export async function commitBatch(
   const batch = await prisma.importBatch.findUnique({ where: { id: args.batchId }, include: { rows: { where: { status: "VALID" } } } });
   if (!batch) throw new NotFoundError("ImportBatch", args.batchId);
   ensureWrite(principal, batch.clubId);
-  // Financial-domain commits flow through the posting guard so training mode
-  // and read-only support sessions cannot push real journals / members.
-  if (FINANCIAL_DOMAINS.has(batch.domain)) {
-    await assertPostingAllowed(principal, batch.clubId, `import.commit.${batch.domain.toLowerCase()}`, "ImportBatch", batch.id);
-  }
+  // M1d (2026-10-27) -- pre-tx posting-guard removed; the sub-commits
+  // (commitCoaBatchAsReplacement for COA, the TB inner tx) each add an
+  // in-tx guard so FOR UPDATE on ClubSubscription serializes against
+  // suspension. FINANCIAL_DOMAINS is retained for domain classification
+  // elsewhere in this module.
   if (batch.status === "COMMITTED") throw new ConflictError("Batch already committed");
   if (!batch.dryRunAt) throw new ConflictError("Dry-run required before commit. Call validateBatch first.");
   // Founder rule 2026-07-20: COA imports NEVER support a
@@ -1008,6 +1008,8 @@ export async function commitBatch(
     });
 
     const tbCommit = await prisma.$transaction(async (tx) => {
+      // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+      await assertPostingAllowed(principal, batch.clubId, "import.commit.opening_trial_balance", "ImportBatch", batch.id, { tx });
       const entry = await tx.journalEntry.create({
         data: {
           clubId: batch.clubId,
@@ -1187,6 +1189,8 @@ async function commitCoaBatchAsReplacement(
   // (async server action), and safely serialised — the wider
   // window carries no downside.
   return prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, batch.clubId, "import.commit.coa", "ImportBatch", batch.id, { tx });
     let committed = 0;
     const seenNumbers = new Set<string>();
     for (const row of batch.rows) {

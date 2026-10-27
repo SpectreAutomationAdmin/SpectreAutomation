@@ -128,7 +128,6 @@ export async function returnBatchToPreparation(
   reason: string,
 ): Promise<ReturnToPreparationResult> {
   requirePermission(principal, clubId, "payroll:edit");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.return-to-preparation", ENTITY, batchId);
 
   const batch = await prisma.payrollBatch.findFirst({
     where: { id: batchId, clubId },
@@ -155,6 +154,8 @@ export async function returnBatchToPreparation(
 
   const now = new Date();
   const { invalidated, released } = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch.return-to-preparation", ENTITY, batchId, { tx });
     // Release approved time entries the batch was holding so the next
     // Prepare can consume them.
     const rel = await tx.payrollApprovedTimeEntry.updateMany({

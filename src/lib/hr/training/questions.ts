@@ -8,7 +8,7 @@
 import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { requirePermission, type Principal } from "../../rbac";
-import { assertPostingAllowed } from "../../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 
 const QUESTION_ENTITY = "TrainingQuestion";
@@ -44,10 +44,6 @@ export async function createQuestion(
 ): Promise<{ questionId: string }> {
   const v = await loadDraftVersion(versionId);
   requirePermission(principal, v.course.clubId, "hr:training:write");
-  await assertPostingAllowed(
-    principal, v.course.clubId,
-    "hr.training.question.create", QUESTION_ENTITY, versionId,
-  );
   const prompt = input.prompt.trim();
   if (prompt.length < 3 || prompt.length > 500) {
     throw new ValidationError([{ path: "prompt", message: "Prompt must be 3-500 characters." }]);
@@ -74,6 +70,11 @@ export async function createQuestion(
   const nextOrder = (maxOrder._max.displayOrder ?? -1) + 1;
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, v.course.clubId,
+      "hr.training.question.create", QUESTION_ENTITY, versionId, { tx },
+    );
     const q = await tx.trainingQuestion.create({
       data: { courseVersionId: versionId, prompt, displayOrder: nextOrder, active: true },
     });
@@ -132,7 +133,6 @@ export async function updateQuestion(
     throw new ConflictError(`Cannot modify a ${q.courseVersion.state} version's questions.`);
   }
   requirePermission(principal, clubId, "hr:training:write");
-  await assertPostingAllowed(principal, clubId, "hr.training.question.update", QUESTION_ENTITY, questionId);
   const questionData: { prompt?: string; active?: boolean } = {};
   if (input.prompt !== undefined) {
     const p = input.prompt.trim();
@@ -154,6 +154,8 @@ export async function updateQuestion(
   }
 
   await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "hr.training.question.update", QUESTION_ENTITY, questionId, { tx });
     if (Object.keys(questionData).length > 0) {
       await tx.trainingQuestion.update({ where: { id: questionId }, data: questionData });
     }
@@ -213,8 +215,14 @@ export async function deleteQuestion(
     throw new ConflictError(`Cannot delete questions from a ${q.courseVersion.state} version.`);
   }
   requirePermission(principal, clubId, "hr:training:write");
-  await assertPostingAllowed(principal, clubId, "hr.training.question.delete", QUESTION_ENTITY, questionId);
-  await prisma.trainingQuestion.delete({ where: { id: questionId } });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "hr.training.question.delete",
+    async (tx) => tx.trainingQuestion.delete({ where: { id: questionId } }),
+    { entityType: QUESTION_ENTITY, entityId: questionId },
+  );
   await audit(principal, {
     action: "hr.training.question.delete",
     entityType: QUESTION_ENTITY,
@@ -235,10 +243,6 @@ export async function reorderQuestions(
 ): Promise<void> {
   const v = await loadDraftVersion(versionId);
   requirePermission(principal, v.course.clubId, "hr:training:write");
-  await assertPostingAllowed(
-    principal, v.course.clubId,
-    "hr.training.question.reorder", QUESTION_ENTITY, versionId,
-  );
   const rows = await prisma.trainingQuestion.findMany({
     where: { courseVersionId: versionId }, select: { id: true },
   });
@@ -255,6 +259,11 @@ export async function reorderQuestions(
     }
   }
   await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, v.course.clubId,
+      "hr.training.question.reorder", QUESTION_ENTITY, versionId, { tx },
+    );
     for (const [i, id] of orderedQuestionIds.entries()) {
       await tx.trainingQuestion.update({ where: { id }, data: { displayOrder: i } });
     }

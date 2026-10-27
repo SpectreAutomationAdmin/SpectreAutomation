@@ -29,8 +29,12 @@ import { prisma } from "../prisma";
  *  race between a protected write and a suspension flip is closed.
  *  Legacy call-sites that don't yet pass `tx` keep the pre-M1
  *  Phase 2B semantics (no lock); migration to withPostingGuard() is
- *  tracked per the M1 acceptance doc. */
-type MinimalTxClient = {
+ *  tracked per the M1 acceptance doc.
+ *
+ *  M1d (2026-10-27) ergonomic: tx accepts `unknown` so callers pass
+ *  `{ tx }` without a structural cast.  Narrowing happens internally.
+ */
+export type MinimalTxClient = {
   $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]>;
 };
 
@@ -40,7 +44,7 @@ export async function assertPostingAllowed(
   action: string,
   entityType?: string,
   entityId?: string,
-  opts?: { tx?: MinimalTxClient },
+  opts?: { tx?: unknown },
 ) {
   // Training-mode gate (per-club).
   await assertNotTraining(clubId, action);
@@ -61,7 +65,9 @@ export async function assertPostingAllowed(
   // reinstateTenant take the same lock, closing the posting-vs-
   // suspension race.  Legacy tenants (null subscriptionStatus)
   // remain grandfathered.
-  await assertAccessTierForPosting(clubId, { tx: opts?.tx });
+  await assertAccessTierForPosting(clubId, {
+    tx: opts?.tx as MinimalTxClient | undefined,
+  });
 }
 
 /** M1 (2026-10-26) -- the preferred posting-guard surface.
@@ -92,9 +98,7 @@ export async function withPostingGuard<T>(
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
     await assertPostingAllowed(principal, clubId, action, opts?.entityType, opts?.entityId, {
-      // The $queryRawUnsafe method exists on the Prisma TransactionClient; cast
-      // through the structural type our evaluateAccessTierGate expects.
-      tx: tx as unknown as MinimalTxClient,
+      tx,
     });
     return work(tx);
   });

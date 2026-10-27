@@ -153,7 +153,6 @@ export async function enrolEmployeeInBenefitPlan(
   input: EnrolInput,
 ): Promise<EnrolmentView> {
   requirePermission(principal, clubId, "payroll:benefit_enrolment:write");
-  await assertPostingAllowed(principal, clubId, "payroll.benefit_enrolment.enrol", ENTITY, input.employeeId);
 
   const plan = await loadPlanOrThrow(clubId, input.planId);
   if (!plan.active) throw new ValidationError([{ path: "planId", message: `Plan ${plan.code} is inactive.` }]);
@@ -171,6 +170,8 @@ export async function enrolEmployeeInBenefitPlan(
   });
 
   const created = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.benefit_enrolment.enrol", ENTITY, input.employeeId, { tx });
     await assertNoOverlap(tx, clubId, input.employeeId, input.planId, effectiveFrom, effectiveTo);
     return tx.employeeBenefitPlanEnrolment.create({
       data: {

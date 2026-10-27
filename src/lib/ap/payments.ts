@@ -35,7 +35,9 @@ export async function payInvoice(principal: Principal, raw: unknown) {
   const inv = await prisma.aPInvoice.findUnique({ where: { id: parsed.data.invoiceId }, include: { vendor: true } });
   assertTenantOwned(inv, principal);
   requirePermission(principal, inv.clubId, "ap:payment:process");
-  await assertPostingAllowed(principal, inv.clubId, "ap.payment.pay", "APInvoice", inv.id);
+  // M1d (2026-10-27) -- pre-tx posting-guard removed; processPayment (which this
+  // delegates to) now wraps the full write path in withPostingGuard so the
+  // ClubSubscription row is FOR UPDATE locked for the duration of the write.
   if (inv.status !== "POSTED" && inv.status !== "PARTIALLY_PAID") {
     throw new ConflictError(`Invoice is ${inv.status} — must be POSTED to pay`);
   }
@@ -147,7 +149,6 @@ export async function voidPayment(principal: Principal, paymentId: string, reaso
   const payment = await prisma.vendorPayment.findUnique({ where: { id: paymentId } });
   assertTenantOwned(payment, principal);
   requirePermission(principal, payment.clubId, "ap:invoice:void");
-  await assertPostingAllowed(principal, payment.clubId, "ap.payment.void", "VendorPayment", paymentId);
   if (payment.status !== "PROCESSED") throw new ConflictError(`Payment is ${payment.status}`);
 
   // Reverse the GL entry by reversing through the engine.
@@ -155,24 +156,37 @@ export async function voidPayment(principal: Principal, paymentId: string, reaso
   // invoice balance. The accompanying JE reversal is created via the journal
   // engine's reverse() — but we keep that path one-shot here to avoid a
   // dependency cycle; call the same path from a controller action.
+  // M1d (2026-10-27) -- the journal reverse() call stays OUTSIDE withPostingGuard
+  // because reverse() opens its own transaction and carries its own posting-guard;
+  // nesting a prisma.$transaction inside another on the same client is unsupported.
   const { reverse } = await import("../accounting/journal");
   if (payment.postedJournalEntryId) {
     await reverse(principal, payment.postedJournalEntryId, { reason: `Void payment ${payment.paymentNumber}: ${reason}` });
   }
-  const updated = await prisma.vendorPayment.update({
-    where: { id: paymentId },
-    data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason },
-  });
-  // Roll back the invoice's amountPaid.
-  if (payment.invoiceId) {
-    const inv = await prisma.aPInvoice.findUnique({ where: { id: payment.invoiceId } });
-    if (inv) {
-      const newPaid = Math.max(0, Math.round((Number(inv.amountPaid.toString()) - Number(payment.amount.toString())) * 100) / 100);
-      const total = Number(inv.total.toString());
-      const status = newPaid >= total - 0.005 ? "PAID" : newPaid > 0 ? "PARTIALLY_PAID" : "POSTED";
-      await prisma.aPInvoice.update({ where: { id: payment.invoiceId }, data: { amountPaid: newPaid, status } });
-    }
-  }
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    payment.clubId,
+    "ap.payment.void",
+    async (tx) => {
+      const row = await tx.vendorPayment.update({
+        where: { id: paymentId },
+        data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason },
+      });
+      // Roll back the invoice's amountPaid in the SAME tx.
+      if (payment.invoiceId) {
+        const inv = await tx.aPInvoice.findUnique({ where: { id: payment.invoiceId } });
+        if (inv) {
+          const newPaid = Math.max(0, Math.round((Number(inv.amountPaid.toString()) - Number(payment.amount.toString())) * 100) / 100);
+          const total = Number(inv.total.toString());
+          const status = newPaid >= total - 0.005 ? "PAID" : newPaid > 0 ? "PARTIALLY_PAID" : "POSTED";
+          await tx.aPInvoice.update({ where: { id: payment.invoiceId }, data: { amountPaid: newPaid, status } });
+        }
+      }
+      return row;
+    },
+    { entityType: "VendorPayment", entityId: paymentId },
+  );
   await audit(principal, {
     action: "ap.payment.void",
     entityType: "VendorPayment", entityId: paymentId, clubId: payment.clubId,

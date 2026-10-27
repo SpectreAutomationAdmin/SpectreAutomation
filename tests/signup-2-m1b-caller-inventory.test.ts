@@ -54,16 +54,20 @@ describe("SIGNUP-2 M1b · posting-guard caller inventory", () => {
   });
 });
 
-describe("SIGNUP-2 M1b/M1c · classification totals", () => {
-  it("counts match M1c ship-time distribution", () => {
+describe("SIGNUP-2 M1b/M1c/M1d · classification totals", () => {
+  it("counts match M1d ship-time distribution (all MIGRATED or READ_ADJACENT)", () => {
     const counts = LEGACY_POSTING_GUARD_CALLERS.reduce<Record<string, number>>((acc, e) => {
       acc[e.classification] = (acc[e.classification] ?? 0) + 1;
       return acc;
     }, {});
-    expect(counts.MIGRATED ?? 0, "MIGRATED count after M1c").toBeGreaterThanOrEqual(2);
-    expect(counts.PARTIAL_MIGRATED ?? 0, "PARTIAL_MIGRATED count").toBeGreaterThanOrEqual(2);
-    expect(counts.TX_PENDING ?? 0, "TX_PENDING remaining").toBeLessThanOrEqual(27);
-    expect(counts.NO_TX_PENDING ?? 0, "NO_TX_PENDING remaining").toBeLessThanOrEqual(16);
+    // M1d goal: zero PARTIAL_MIGRATED, TX_PENDING, NO_TX_PENDING,
+    // ADMIN_CONFIG_LEGACY entries.  Only MIGRATED + READ_ADJACENT.
+    expect(counts.MIGRATED ?? 0, "MIGRATED count after M1d").toBeGreaterThanOrEqual(44);
+    expect(counts.PARTIAL_MIGRATED ?? 0, "no PARTIAL_MIGRATED entries at M1d close").toBe(0);
+    expect(counts.TX_PENDING ?? 0, "no TX_PENDING entries at M1d close").toBe(0);
+    expect(counts.NO_TX_PENDING ?? 0, "no NO_TX_PENDING entries at M1d close").toBe(0);
+    expect(counts.ADMIN_CONFIG_LEGACY ?? 0, "no ADMIN_CONFIG_LEGACY entries at M1d close").toBe(0);
+    expect(counts.READ_ADJACENT ?? 0, "exactly 2 READ_ADJACENT (comment-only)").toBe(2);
   });
 });
 
@@ -74,21 +78,16 @@ describe("SIGNUP-2 M1c · strict regression guard (founder §6)", () => {
   // MUST NOT contain any bare `assertPostingAllowed(...)` call where
   // the trailing argument is not `{ tx }`.
   const MIGRATED_FILES = LEGACY_POSTING_GUARD_CALLERS
-    .filter((e) => e.classification === "MIGRATED")
+    .filter((e) => e.classification === "MIGRATED" && e.migrationTarget !== "none-required")
     .map((e) => e.path);
 
   for (const f of MIGRATED_FILES) {
     it(`${f}: no bare assertPostingAllowed calls (migrated to withPostingGuard or {tx})`, () => {
       const content = readFileSync(join(process.cwd(), f), "utf8");
-      // A bare call is `await assertPostingAllowed(...)` where the
-      // final argument is NOT a `{ tx` object literal.  Count
-      // bare calls vs tx-passed calls.
       const allCalls = (content.match(/await assertPostingAllowed\(/g) ?? []).length;
-      const txCalls = (content.match(/assertPostingAllowed\([^)]+\{\s*tx/g) ?? []).length;
+      const txCalls = (content.match(/await assertPostingAllowed\([\s\S]*?\{\s*tx/g) ?? []).length;
       const wrappedCalls = (content.match(/withPostingGuard\(/g) ?? []).length;
       const bareCalls = allCalls - txCalls;
-      // The file is MIGRATED, so EVERY posting-guard entry must be
-      // either via withPostingGuard or via {tx}.
       expect(bareCalls, `${f} contains bare assertPostingAllowed; migration incomplete`).toBe(0);
       expect(txCalls + wrappedCalls, `${f} must have at least 1 tx-bound or wrapped posting-guard call`).toBeGreaterThan(0);
     });
@@ -106,16 +105,13 @@ describe("SIGNUP-2 M1b · journal.ts migrated to withPostingGuard", () => {
   it("voidDraft flow uses withPostingGuard", () => {
     expect(JOURNAL).toMatch(/withPostingGuard\(\s*principal,\s*entry\.clubId,\s*"gl\.journal\.void"/);
   });
-  it("no bare assertPostingAllowed call precedes the tx (post + voidDraft only)", () => {
-    // Count how many assertPostingAllowed call-sites remain WITHOUT {tx}.
+  it("no bare assertPostingAllowed calls remain (M1d: reverse + createPostedFromAdapter now tx-bound)", () => {
+    // M1d closed the final 2 pending journal.ts call-sites.  All 4
+    // call-sites now carry either `{ tx }` or run inside withPostingGuard.
     const bareCalls = (JOURNAL.match(/await assertPostingAllowed\(/g) ?? []).length;
-    const txCalls = (JOURNAL.match(/await assertPostingAllowed\([^)]+,\s*\{\s*tx[:,\s]/g) ?? []).length;
+    const txCalls = (JOURNAL.match(/await assertPostingAllowed\([\s\S]*?\{\s*tx/g) ?? []).length;
     const inWithPostingGuard = (JOURNAL.match(/withPostingGuard\(/g) ?? []).length;
-    const legacyCount = bareCalls - txCalls;
-    // At ship time: 2 unmigrated bare calls remain (reverse + a 4th).
-    // Tracked in legacy-callers.ts; this test caps the count so
-    // regressions can't grow it.
-    expect(legacyCount, "bare assertPostingAllowed in journal.ts").toBeLessThanOrEqual(2);
+    expect(bareCalls - txCalls, "no bare assertPostingAllowed calls in journal.ts at M1d").toBe(0);
     expect(inWithPostingGuard, "withPostingGuard call-sites in journal.ts").toBeGreaterThanOrEqual(2);
   });
 });

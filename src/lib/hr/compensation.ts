@@ -135,13 +135,6 @@ export async function changeCompensation(
 ) {
   const employee = await loadEmployee(principal, employeeId);
   requirePermission(principal, employee.clubId, "hr:compensation:write");
-  await assertPostingAllowed(
-    principal,
-    employee.clubId,
-    "hr.compensation.update",
-    COMPENSATION_ENTITY,
-    employeeId,
-  );
 
   const effectiveFrom = normaliseDate(input.effectiveFrom, "effectiveFrom");
   if (!(CADENCES as readonly string[]).includes(input.cadence)) {
@@ -187,6 +180,15 @@ export async function changeCompensation(
   }
 
   const created = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal,
+      employee.clubId,
+      "hr.compensation.update",
+      COMPENSATION_ENTITY,
+      employeeId,
+      { tx },
+    );
     // Step 1 — close whatever is currently open FOR THIS SCOPE. When
     // assignmentId is null, the employee-wide row closes. When
     // assignmentId is set, only that assignment's open row closes.

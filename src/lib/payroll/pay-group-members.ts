@@ -14,7 +14,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 
 const ENTITY = "PayrollPayGroupMember";
@@ -250,9 +250,6 @@ export async function assignMembership(
   input: AssignMembershipInput,
 ): Promise<PayGroupMemberView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-group-member.assign", ENTITY, input.employeeId,
-  );
 
   await assertPayGroupBelongsToClub(clubId, input.payGroupId);
   await assertEmployeeBelongsToClub(clubId, input.employeeId);
@@ -270,17 +267,26 @@ export async function assignMembership(
     ]);
   }
 
-  const row = await prisma.payrollPayGroupMember.create({
-    data: {
-      clubId,
-      payGroupId: input.payGroupId,
-      employeeId: input.employeeId,
-      effectiveFrom: from,
-      effectiveTo: to,
-      notes: input.notes?.trim() || null,
-      createdByUserId: principal.id,
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group-member.assign",
+    async (tx) => {
+      return tx.payrollPayGroupMember.create({
+        data: {
+          clubId,
+          payGroupId: input.payGroupId,
+          employeeId: input.employeeId,
+          effectiveFrom: from,
+          effectiveTo: to,
+          notes: input.notes?.trim() || null,
+          createdByUserId: principal.id,
+        },
+      });
     },
-  });
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
   await audit(principal, {
     action: "payroll.pay-group-member.assign",
     entityType: ENTITY,
@@ -306,9 +312,6 @@ export async function endMembership(
   endAt: Date,
 ): Promise<PayGroupMemberView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-group-member.end", ENTITY, membershipId,
-  );
 
   const row = await prisma.payrollPayGroupMember.findFirst({
     where: { id: membershipId, clubId },
@@ -324,10 +327,19 @@ export async function endMembership(
     ]);
   }
 
-  const updated = await prisma.payrollPayGroupMember.update({
-    where: { id: row.id },
-    data: { effectiveTo: endAt },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group-member.end",
+    async (tx) => {
+      return tx.payrollPayGroupMember.update({
+        where: { id: row.id },
+        data: { effectiveTo: endAt },
+      });
+    },
+    { entityType: ENTITY, entityId: membershipId },
+  );
   await audit(principal, {
     action: "payroll.pay-group-member.end",
     entityType: ENTITY,
@@ -356,9 +368,6 @@ export async function transferMembership(
   input: TransferMembershipInput,
 ): Promise<{ ended: PayGroupMemberView | null; started: PayGroupMemberView }> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.pay-group-member.transfer", ENTITY, input.employeeId,
-  );
 
   await assertPayGroupBelongsToClub(clubId, input.toPayGroupId);
   await assertEmployeeBelongsToClub(clubId, input.employeeId);
@@ -405,6 +414,11 @@ export async function transferMembership(
   // Interactive transaction (Payroll-3B-2 cleanup): keeps the end +
   // create atomic without the previous placeholder-findFirst trick.
   const { endedRow, startedRow } = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, clubId, "payroll.pay-group-member.transfer", ENTITY, input.employeeId,
+      { tx },
+    );
     const ended = current
       ? await tx.payrollPayGroupMember.update({
           where: { id: current.id },

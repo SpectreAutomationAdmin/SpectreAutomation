@@ -26,7 +26,7 @@ import { createPostedFromAdapter } from "../accounting/journal";
 import { findPeriodForDate } from "../accounting/periods";
 import { postSale as postInventorySale } from "../ops/inventory";
 import { recomputeAccount } from "../services/ar";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 
 const DEFAULT_AR_CONTROL = "1110"; // Member AR control
 const DEFAULT_CASH = "1010";
@@ -247,13 +247,16 @@ export async function completeSale(principal: Principal, saleId: string) {
   if (!sale) throw new NotFoundError("POSSale", saleId);
   assertTenantOwned(sale, principal);
   requirePermission(principal, sale.clubId, "inventory:write");
-  await assertPostingAllowed(principal, sale.clubId, "pos.sale.complete", "POSSale", saleId);
   if (sale.status !== "DRAFT") throw new ConflictError(`Sale is ${sale.status}`);
 
   const period = await findPeriodForDate(sale.clubId, sale.saleDate);
   if (!period) throw new ConflictError(`No fiscal period for ${sale.saleDate.toISOString().slice(0, 10)}`);
 
   // 1. Inventory deduction + COGS posting per inventory line.
+  //    Each call to postInventorySale opens its own withPostingGuard'd
+  //    tx (via createPostedFromAdapter), so the ClubSubscription FOR
+  //    UPDATE lock is taken per inventory line independently of the
+  //    outer sale state-transition tx below.
   for (const line of sale.lines) {
     if (line.kind !== "INVENTORY" || !line.item) continue;
     if (line.item.kind === "SERVICE") continue; // service items skip inventory deduction
@@ -265,11 +268,11 @@ export async function completeSale(principal: Principal, saleId: string) {
       transactionDate: sale.saleDate,
     });
     // Tag the line with its inventory transaction so we can audit.
-    const tx = await prisma.inventoryTransaction.findFirst({
+    const invTx = await prisma.inventoryTransaction.findFirst({
       where: { clubId: sale.clubId, sourceType: "POSSale", sourceId: sale.id, itemId: line.item.id },
       orderBy: { createdAt: "desc" },
     });
-    if (tx) await prisma.pOSSaleLine.update({ where: { id: line.id }, data: { inventoryTransactionId: tx.id } });
+    if (invTx) await prisma.pOSSaleLine.update({ where: { id: line.id }, data: { inventoryTransactionId: invTx.id } });
   }
 
   // 2. Revenue side. Two paths:
@@ -311,42 +314,62 @@ export async function completeSale(principal: Principal, saleId: string) {
     lines.push({ accountNumber: "2030", credit: gratuityTotal.toFixed(2), description: `POS ${sale.saleNumber} gratuity payable` });
   }
 
-  const journal = await createPostedFromAdapter(
-    principal, sale.clubId,
-    { entryDate: sale.saleDate, description: `POS sale ${sale.saleNumber}`, lines },
-    { source: "RECURRING", sourceEntityType: "POSSale", sourceEntityId: sale.id },
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  // Journal creation (via createPostedFromAdapter externalTx), optional
+  // AR Charge create, and the DRAFT -> COMPLETED state flip all commit
+  // atomically with the subscription row-lock held.
+  const result = await withPostingGuard(
+    principal,
+    sale.clubId,
+    "pos.sale.complete",
+    async (tx) => {
+      const journal = await createPostedFromAdapter(
+        principal, sale.clubId,
+        { entryDate: sale.saleDate, description: `POS sale ${sale.saleNumber}`, lines },
+        { source: "RECURRING", sourceEntityType: "POSSale", sourceEntityId: sale.id },
+        tx,
+      );
+
+      let arChargeId: string | null = null;
+      if (sale.chargeMode === "MEMBER_ACCOUNT" && sale.memberId && sale.member?.account) {
+        const charge = await tx.charge.create({
+          data: {
+            clubId: sale.clubId,
+            memberId: sale.memberId,
+            accountId: sale.member.account.id,
+            description: `POS ${sale.saleNumber} — ${sale.location.name}`,
+            category: kindToChargeCategory(sale.lines[0]?.kind ?? "OTHER"),
+            amount: debitTotal,
+            transactionDate: sale.saleDate,
+            dueDate: sale.saleDate,
+            status: "POSTED",
+            postedByUserId: principal.id,
+          },
+        });
+        arChargeId = charge.id;
+      }
+
+      const updated = await tx.pOSSale.update({
+        where: { id: sale.id },
+        data: { status: "COMPLETED", postedJournalEntryId: journal.id, arChargeId },
+      });
+      return { updated, journal, arChargeId };
+    },
+    { entityType: "POSSale", entityId: saleId },
   );
 
-  // 3. AR Charge linkage if MEMBER_ACCOUNT.
-  let arChargeId: string | null = null;
+  // recomputeAccount runs OUTSIDE the tx because it issues its own
+  // prisma reads/writes on the base client (nesting a $transaction
+  // inside the outer tx would deadlock on the ClubSubscription row).
   if (sale.chargeMode === "MEMBER_ACCOUNT" && sale.memberId && sale.member?.account) {
-    const charge = await prisma.charge.create({
-      data: {
-        clubId: sale.clubId,
-        memberId: sale.memberId,
-        accountId: sale.member.account.id,
-        description: `POS ${sale.saleNumber} — ${sale.location.name}`,
-        category: kindToChargeCategory(sale.lines[0]?.kind ?? "OTHER"),
-        amount: debitTotal,
-        transactionDate: sale.saleDate,
-        dueDate: sale.saleDate,
-        status: "POSTED",
-        postedByUserId: principal.id,
-      },
-    });
-    arChargeId = charge.id;
     await recomputeAccount(sale.memberId);
   }
 
-  const updated = await prisma.pOSSale.update({
-    where: { id: sale.id },
-    data: { status: "COMPLETED", postedJournalEntryId: journal.id, arChargeId },
-  });
   await audit(principal, {
     action: "pos.sale.complete", entityType: "POSSale", entityId: sale.id, clubId: sale.clubId,
-    after: { saleNumber: sale.saleNumber, journalEntryId: journal.id, arChargeId },
+    after: { saleNumber: sale.saleNumber, journalEntryId: result.journal.id, arChargeId: result.arChargeId },
   });
-  return updated;
+  return result.updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +384,6 @@ export async function refundSale(principal: Principal, saleId: string, args: { r
   if (!original) throw new NotFoundError("POSSale", saleId);
   assertTenantOwned(original, principal);
   requirePermission(principal, original.clubId, "inventory:write");
-  await assertPostingAllowed(principal, original.clubId, "pos.sale.refund", "POSSale", saleId);
   if (original.status !== "COMPLETED") throw new ConflictError("Only COMPLETED sales can be refunded");
   if (original.refundOfSaleId) throw new ConflictError("Cannot refund a refund");
 
@@ -369,50 +391,8 @@ export async function refundSale(principal: Principal, saleId: string, args: { r
   if (!period) throw new ConflictError("No fiscal period for today");
 
   const refundNumber = await nextSaleNumber(original.clubId);
-  const refund = await prisma.pOSSale.create({
-    data: {
-      clubId: original.clubId,
-      saleNumber: refundNumber,
-      locationId: original.locationId, terminalId: original.terminalId,
-      memberId: original.memberId, departmentId: original.departmentId,
-      chargeMode: original.chargeMode,
-      subtotal: original.subtotal.negated(),
-      taxTotal: original.taxTotal.negated(),
-      discountTotal: original.discountTotal.negated(),
-      gratuityTotal: original.gratuityTotal.negated(),
-      grandTotal: original.grandTotal.negated(),
-      status: "REFUNDED", saleDate: new Date(),
-      refundOfSaleId: original.id,
-      notes: args.reason ?? null,
-      createdByUserId: principal.id,
-    },
-  });
 
-  // 1. Reverse inventory: add quantity back via positive inventory transaction
-  //    (kind=RETURN) for each inventory line.
-  for (const line of original.lines) {
-    if (line.kind !== "INVENTORY" || !line.item) continue;
-    if (line.item.kind === "SERVICE") continue;
-    const item = await prisma.inventoryItem.findUnique({ where: { id: line.item.id } });
-    if (!item) continue;
-    const onHand = Number(item.quantityOnHand.toString());
-    const qty = Number(line.quantity.toString());
-    const newOnHand = onHand + qty;
-    await prisma.inventoryItem.update({ where: { id: item.id }, data: { quantityOnHand: newOnHand } });
-    await prisma.inventoryTransaction.create({
-      data: {
-        clubId: original.clubId, itemId: item.id, locationId: item.defaultLocationId,
-        kind: "RETURN", quantity: qty, unitCost: Number(line.unitCost.toString()),
-        totalCost: round2(qty * Number(line.unitCost.toString())),
-        averageCostAfter: Number(item.averageCost.toString()), quantityAfter: newOnHand,
-        sourceType: "POSSale", sourceId: refund.id,
-        notes: `Refund of ${original.saleNumber}`,
-        createdByUserId: principal.id,
-      },
-    });
-  }
-
-  // 2. Reverse the GL JE.
+  // Build the reversing JE lines up front — pure computation, no writes.
   const debitTotal = Math.abs(Number(original.grandTotal.toString()));
   type Line = { accountNumber: string; debit?: string; credit?: string; description?: string | null; memberId?: string };
   const lines: Line[] = [];
@@ -434,38 +414,105 @@ export async function refundSale(principal: Principal, saleId: string, args: { r
   const grat = Number(original.gratuityTotal.toString());
   if (grat > 0) lines.push({ accountNumber: "2030", debit: grat.toFixed(2), description: "Reverse gratuity" });
 
-  const journal = await createPostedFromAdapter(
-    principal, original.clubId,
-    { entryDate: new Date(), description: `POS refund ${refundNumber}`, lines },
-    { source: "RECURRING", sourceEntityType: "POSSale", sourceEntityId: refund.id },
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  // Refund POSSale creation, inventory reversal, reversing JE,
+  // reversing AR Charge, and the original -> REFUNDED state flip all
+  // commit atomically with the subscription row-lock held.
+  const result = await withPostingGuard(
+    principal,
+    original.clubId,
+    "pos.sale.refund",
+    async (tx) => {
+      const refund = await tx.pOSSale.create({
+        data: {
+          clubId: original.clubId,
+          saleNumber: refundNumber,
+          locationId: original.locationId, terminalId: original.terminalId,
+          memberId: original.memberId, departmentId: original.departmentId,
+          chargeMode: original.chargeMode,
+          subtotal: original.subtotal.negated(),
+          taxTotal: original.taxTotal.negated(),
+          discountTotal: original.discountTotal.negated(),
+          gratuityTotal: original.gratuityTotal.negated(),
+          grandTotal: original.grandTotal.negated(),
+          status: "REFUNDED", saleDate: new Date(),
+          refundOfSaleId: original.id,
+          notes: args.reason ?? null,
+          createdByUserId: principal.id,
+        },
+      });
+
+      // 1. Reverse inventory: add quantity back via positive inventory
+      //    transaction (kind=RETURN) for each inventory line.
+      for (const line of original.lines) {
+        if (line.kind !== "INVENTORY" || !line.item) continue;
+        if (line.item.kind === "SERVICE") continue;
+        const item = await tx.inventoryItem.findUnique({ where: { id: line.item.id } });
+        if (!item) continue;
+        const onHand = Number(item.quantityOnHand.toString());
+        const qty = Number(line.quantity.toString());
+        const newOnHand = onHand + qty;
+        await tx.inventoryItem.update({ where: { id: item.id }, data: { quantityOnHand: newOnHand } });
+        await tx.inventoryTransaction.create({
+          data: {
+            clubId: original.clubId, itemId: item.id, locationId: item.defaultLocationId,
+            kind: "RETURN", quantity: qty, unitCost: Number(line.unitCost.toString()),
+            totalCost: round2(qty * Number(line.unitCost.toString())),
+            averageCostAfter: Number(item.averageCost.toString()), quantityAfter: newOnHand,
+            sourceType: "POSSale", sourceId: refund.id,
+            notes: `Refund of ${original.saleNumber}`,
+            createdByUserId: principal.id,
+          },
+        });
+      }
+
+      // 2. Reverse the GL JE (bound to this tx via externalTx so a
+      //    rollback annihilates the JournalEntry together with every
+      //    other write).
+      const journal = await createPostedFromAdapter(
+        principal, original.clubId,
+        { entryDate: new Date(), description: `POS refund ${refundNumber}`, lines },
+        { source: "RECURRING", sourceEntityType: "POSSale", sourceEntityId: refund.id },
+        tx,
+      );
+
+      // 3. AR reversal — create a reversing Charge.
+      let reversalChargeId: string | null = null;
+      if (original.chargeMode === "MEMBER_ACCOUNT" && original.memberId && original.member?.account) {
+        const reversal = await tx.charge.create({
+          data: {
+            clubId: original.clubId, memberId: original.memberId, accountId: original.member.account.id,
+            description: `Refund of POS ${original.saleNumber}`,
+            category: "OTHER", amount: -debitTotal, transactionDate: new Date(), dueDate: new Date(),
+            status: "POSTED", postedByUserId: principal.id,
+            reversesId: original.arChargeId ?? null,
+          },
+        });
+        reversalChargeId = reversal.id;
+      }
+
+      const updatedRefund = await tx.pOSSale.update({
+        where: { id: refund.id },
+        data: { status: "REFUNDED", postedJournalEntryId: journal.id, arChargeId: reversalChargeId },
+      });
+      await tx.pOSSale.update({ where: { id: original.id }, data: { status: "REFUNDED" } });
+      return { updatedRefund, journal, reversalChargeId };
+    },
+    { entityType: "POSSale", entityId: saleId },
   );
 
-  // 3. AR reversal — create a reversing Charge.
-  let reversalChargeId: string | null = null;
+  // recomputeAccount runs OUTSIDE the tx because it issues its own
+  // prisma reads/writes on the base client (nesting a $transaction
+  // inside the outer tx would deadlock on the ClubSubscription row).
   if (original.chargeMode === "MEMBER_ACCOUNT" && original.memberId && original.member?.account) {
-    const reversal = await prisma.charge.create({
-      data: {
-        clubId: original.clubId, memberId: original.memberId, accountId: original.member.account.id,
-        description: `Refund of POS ${original.saleNumber}`,
-        category: "OTHER", amount: -debitTotal, transactionDate: new Date(), dueDate: new Date(),
-        status: "POSTED", postedByUserId: principal.id,
-        reversesId: original.arChargeId ?? null,
-      },
-    });
-    reversalChargeId = reversal.id;
     await recomputeAccount(original.memberId);
   }
 
-  const updatedRefund = await prisma.pOSSale.update({
-    where: { id: refund.id },
-    data: { status: "REFUNDED", postedJournalEntryId: journal.id, arChargeId: reversalChargeId },
-  });
-  await prisma.pOSSale.update({ where: { id: original.id }, data: { status: "REFUNDED" } });
   await audit(principal, {
     action: "pos.sale.refund", entityType: "POSSale", entityId: original.id, clubId: original.clubId,
-    after: { refundOf: original.saleNumber, refundSale: refundNumber, reversalChargeId, journalEntryId: journal.id },
+    after: { refundOf: original.saleNumber, refundSale: refundNumber, reversalChargeId: result.reversalChargeId, journalEntryId: result.journal.id },
   });
-  return updatedRefund;
+  return result.updatedRefund;
 }
 
 // ---------------------------------------------------------------------------
@@ -476,9 +523,15 @@ export async function voidSale(principal: Principal, saleId: string, reason: str
   if (!sale) throw new NotFoundError("POSSale", saleId);
   assertTenantOwned(sale, principal);
   requirePermission(principal, sale.clubId, "inventory:write");
-  await assertPostingAllowed(principal, sale.clubId, "pos.sale.void", "POSSale", saleId);
   if (sale.status !== "DRAFT") throw new ConflictError("Only DRAFT sales can be voided");
-  const updated = await prisma.pOSSale.update({ where: { id: saleId }, data: { status: "VOIDED", notes: reason } });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    sale.clubId,
+    "pos.sale.void",
+    async (tx) => tx.pOSSale.update({ where: { id: saleId }, data: { status: "VOIDED", notes: reason } }),
+    { entityType: "POSSale", entityId: saleId },
+  );
   await audit(principal, { action: "pos.sale.void", entityType: "POSSale", entityId: saleId, clubId: sale.clubId, after: { status: "VOIDED" } });
   return updated;
 }

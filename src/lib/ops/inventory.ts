@@ -21,7 +21,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../errors";
 import { toMoney, sumMoney, ZERO } from "../accounting/decimal";
 import { createPostedFromAdapter } from "../accounting/journal";
 import { findPeriodForDate } from "../accounting/periods";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 
 // ----------------------------------------------------------------------------
 // Helpers — resolving accounts (item override > category default).
@@ -142,7 +142,6 @@ async function nextReceivingNumber(clubId: string): Promise<string> {
 //    CR Goods Received Not Invoiced (2050)
 export async function postReceiving(principal: Principal, clubId: string, raw: unknown) {
   requirePermission(principal, clubId, "inventory:receive");
-  await assertPostingAllowed(principal, clubId, "inventory.receive");
   const parsed = receivingCreateSchema.safeParse(raw);
   if (!parsed.success) throw zerr(parsed.error);
   const d = parsed.data;
@@ -194,6 +193,8 @@ export async function postReceiving(principal: Principal, clubId: string, raw: u
 
   // Persist + post in transaction.
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "inventory.receive", "InventoryReceiving", undefined, { tx });
     const receiving = await tx.inventoryReceiving.create({
       data: {
         clubId,
@@ -270,7 +271,6 @@ export const adjustmentSchema = z.object({
 
 export async function postAdjustment(principal: Principal, clubId: string, raw: unknown) {
   requirePermission(principal, clubId, "inventory:adjust");
-  await assertPostingAllowed(principal, clubId, "inventory.adjust");
   const parsed = adjustmentSchema.safeParse(raw);
   if (!parsed.success) throw zerr(parsed.error);
   const d = parsed.data;
@@ -286,41 +286,54 @@ export async function postAdjustment(principal: Principal, clubId: string, raw: 
 
   const unitCost = Number(item.averageCost.toString());
   const totalCost = Math.round(Math.abs(d.quantityChange) * unitCost * 100) / 100;
-
-  // Adjustment row.
-  const adj = await prisma.inventoryAdjustment.create({
-    data: {
-      clubId, itemId: d.itemId,
-      locationId: item.defaultLocationId,
-      quantityChange: d.quantityChange,
-      unitCost,
-      reasonCode: d.reasonCode,
-      notes: d.notes ?? null,
-      postedAt: new Date(),
-      postedByUserId: principal.id,
-    },
-  });
-
-  // Update item quantity + transaction.
   const newQty = Number(item.quantityOnHand.toString()) + d.quantityChange;
-  await prisma.inventoryItem.update({
-    where: { id: item.id },
-    data: { quantityOnHand: newQty },
-  });
-  await prisma.inventoryTransaction.create({
-    data: {
-      clubId, itemId: item.id, locationId: item.defaultLocationId,
-      kind: "ADJUSTMENT",
-      quantity: d.quantityChange,
-      unitCost,
-      totalCost: d.quantityChange * unitCost,
-      averageCostAfter: unitCost,
-      quantityAfter: newQty,
-      sourceType: "InventoryAdjustment", sourceId: adj.id,
-      notes: d.notes,
-      createdByUserId: principal.id,
+
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on
+  // ClubSubscription serializes against suspension.  The GL adapter
+  // call stays OUTSIDE the tx (createPostedFromAdapter opens its own
+  // guard'd tx) so no DB lock is held across its boundary.
+  const adj = await withPostingGuard(
+    principal,
+    clubId,
+    "inventory.adjust",
+    async (tx) => {
+      // Adjustment row.
+      const created = await tx.inventoryAdjustment.create({
+        data: {
+          clubId, itemId: d.itemId,
+          locationId: item.defaultLocationId,
+          quantityChange: d.quantityChange,
+          unitCost,
+          reasonCode: d.reasonCode,
+          notes: d.notes ?? null,
+          postedAt: new Date(),
+          postedByUserId: principal.id,
+        },
+      });
+
+      // Update item quantity + transaction.
+      await tx.inventoryItem.update({
+        where: { id: item.id },
+        data: { quantityOnHand: newQty },
+      });
+      await tx.inventoryTransaction.create({
+        data: {
+          clubId, itemId: item.id, locationId: item.defaultLocationId,
+          kind: "ADJUSTMENT",
+          quantity: d.quantityChange,
+          unitCost,
+          totalCost: d.quantityChange * unitCost,
+          averageCostAfter: unitCost,
+          quantityAfter: newQty,
+          sourceType: "InventoryAdjustment", sourceId: created.id,
+          notes: d.notes,
+          createdByUserId: principal.id,
+        },
+      });
+      return created;
     },
-  });
+    { entityType: "InventoryItem", entityId: d.itemId },
+  );
 
   // GL: positive adjustment → DR Inventory / CR Adjustment expense
   //     negative adjustment → DR Adjustment expense / CR Inventory
@@ -358,7 +371,6 @@ export async function postSale(
   args: { itemId: string; quantity: number; sourceType: string; sourceId: string; transactionDate?: Date }
 ) {
   requirePermission(principal, clubId, "inventory:write");
-  await assertPostingAllowed(principal, clubId, "inventory.sale", "InventoryItem", args.itemId);
   const item = await prisma.inventoryItem.findUnique({ where: { id: args.itemId }, include: { inventoryAccount: true, category: { include: { inventoryAccount: true, cogsAccount: true } } } });
   if (!item || item.clubId !== clubId) throw new NotFoundError("InventoryItem", args.itemId);
   if (item.kind === "SERVICE") {
@@ -374,22 +386,33 @@ export async function postSale(
   const txDate = args.transactionDate ?? new Date();
   const newQty = Number(item.quantityOnHand.toString()) - args.quantity;
 
-  await prisma.inventoryItem.update({
-    where: { id: item.id },
-    data: { quantityOnHand: newQty },
-  });
-  const txn = await prisma.inventoryTransaction.create({
-    data: {
-      clubId, itemId: item.id, locationId: item.defaultLocationId,
-      kind: "SALE",
-      quantity: -args.quantity, unitCost,
-      totalCost: -totalCost,
-      averageCostAfter: unitCost, quantityAfter: newQty,
-      transactionDate: txDate,
-      sourceType: args.sourceType, sourceId: args.sourceId,
-      createdByUserId: principal.id,
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on
+  // ClubSubscription serializes against suspension.  The GL adapter
+  // call stays OUTSIDE the tx so no lock is held across its own tx.
+  const txn = await withPostingGuard(
+    principal,
+    clubId,
+    "inventory.sale",
+    async (tx) => {
+      await tx.inventoryItem.update({
+        where: { id: item.id },
+        data: { quantityOnHand: newQty },
+      });
+      return tx.inventoryTransaction.create({
+        data: {
+          clubId, itemId: item.id, locationId: item.defaultLocationId,
+          kind: "SALE",
+          quantity: -args.quantity, unitCost,
+          totalCost: -totalCost,
+          averageCostAfter: unitCost, quantityAfter: newQty,
+          transactionDate: txDate,
+          sourceType: args.sourceType, sourceId: args.sourceId,
+          createdByUserId: principal.id,
+        },
+      });
     },
-  });
+    { entityType: "InventoryItem", entityId: args.itemId },
+  );
   const journal = await createPostedFromAdapter(
     principal, clubId,
     {

@@ -18,7 +18,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, hasPermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import { emitWorkCompletionEvent } from "../work-intake/completion";
 import { _bulkMarkApproved, _bulkMarkDraft } from "./approved-time";
@@ -273,9 +273,6 @@ export async function approveDepartmentTime(
   departmentId: string,
 ): Promise<ApproveDepartmentResult> {
   requirePermission(principal, clubId, "payroll:timesheets:approve");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.department-time.approve", ENTITY, departmentId,
-  );
 
   const tallies = await tallyDepartmentsForPeriod(clubId, payPeriodId);
   const tally = tallies.get(departmentId);
@@ -322,29 +319,40 @@ export async function approveDepartmentTime(
   });
   const workIntakeItemId = linkedOrigin?.workIntakeItemId ?? null;
 
-  const approval = await prisma.payrollDepartmentTimeApproval.upsert({
-    where: {
-      clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
-    },
-    update: {
-      state: "APPROVED",
-      approvedAt: now,
-      approvedByUserId: principal.id,
-      reopenedAt: null,
-      reopenedByUserId: null,
-      reopenReason: null,
-      workIntakeItemId,
-    },
-    create: {
-      clubId,
-      payPeriodId,
-      departmentId,
-      state: "APPROVED",
-      approvedAt: now,
-      approvedByUserId: principal.id,
-      workIntakeItemId,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Scope note: the posting-guard protects the state-changing upsert of
+  // the approval row. The _bulkMarkApproved helper and work-intake side
+  // effects below remain outside the tx — they consume prisma directly
+  // and are follow-up writes keyed off the approval row.
+  const approval = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.department-time.approve",
+    async (tx) => tx.payrollDepartmentTimeApproval.upsert({
+      where: {
+        clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
+      },
+      update: {
+        state: "APPROVED",
+        approvedAt: now,
+        approvedByUserId: principal.id,
+        reopenedAt: null,
+        reopenedByUserId: null,
+        reopenReason: null,
+        workIntakeItemId,
+      },
+      create: {
+        clubId,
+        payPeriodId,
+        departmentId,
+        state: "APPROVED",
+        approvedAt: now,
+        approvedByUserId: principal.id,
+        workIntakeItemId,
+      },
+    }),
+    { entityType: ENTITY, entityId: departmentId },
+  );
   const approvedCount = await _bulkMarkApproved(clubId, tally.entryIds, principal.id);
   await audit(principal, {
     action: "payroll.department-time.approve",
@@ -406,9 +414,6 @@ export async function reopenDepartmentTime(
   reason?: string,
 ): Promise<{ id: string; state: "REOPENED"; reactivatedEntryCount: number }> {
   requirePermission(principal, clubId, "payroll:timesheets:approve");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.department-time.reopen", ENTITY, departmentId,
-  );
 
   const approval = await prisma.payrollDepartmentTimeApproval.findUnique({
     where: {
@@ -431,15 +436,26 @@ export async function reopenDepartmentTime(
   const reactivatedEntryCount = await _bulkMarkDraft(clubId, entryIds);
 
   const now = new Date();
-  const updated = await prisma.payrollDepartmentTimeApproval.update({
-    where: { id: approval.id },
-    data: {
-      state: "REOPENED",
-      reopenedAt: now,
-      reopenedByUserId: principal.id,
-      reopenReason: reason?.trim() || null,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Scope note: the posting-guard protects the state-changing update of
+  // the approval row. _bulkMarkDraft above and work-intake side effects
+  // below remain outside the tx — they use prisma directly and are
+  // follow-up writes keyed off the approval row.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.department-time.reopen",
+    async (tx) => tx.payrollDepartmentTimeApproval.update({
+      where: { id: approval.id },
+      data: {
+        state: "REOPENED",
+        reopenedAt: now,
+        reopenedByUserId: principal.id,
+        reopenReason: reason?.trim() || null,
+      },
+    }),
+    { entityType: ENTITY, entityId: departmentId },
+  );
 
   // Reactivate the WI card. Prefer the row's own workIntakeItemId
   // when set (fast path); otherwise resolve via the canonical

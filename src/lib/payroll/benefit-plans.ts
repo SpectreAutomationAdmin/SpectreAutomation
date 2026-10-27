@@ -15,7 +15,7 @@ import { prisma } from "../prisma";
 import { Prisma } from "@prisma/client";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { NotFoundError, ValidationError, ConflictError } from "../errors";
 
 const ENTITY = "PayrollBenefitPlan";
@@ -131,7 +131,6 @@ export async function createBenefitPlan(
   input: CreatePlanInput,
 ): Promise<BenefitPlanView> {
   requirePermission(principal, clubId, "payroll:config:write");
-  await assertPostingAllowed(principal, clubId, "payroll.benefit_plan.create", ENTITY, clubId);
 
   if (!KINDS.includes(input.kind)) {
     throw new ValidationError([{ path: "kind", message: `kind must be one of ${KINDS.join(", ")}; got ${input.kind}` }]);
@@ -220,27 +219,36 @@ export async function createBenefitPlan(
     throw new ValidationError([{ path: "effectiveTo", message: "effectiveTo must be after effectiveFrom." }]);
   }
 
-  const row = await prisma.payrollBenefitPlan.create({
-    data: {
-      clubId,
-      kind: input.kind,
-      code: input.code.trim(),
-      name: input.name.trim(),
-      description: input.description ?? null,
-      providerName: input.providerName ?? null,
-      active: true,
-      effectiveFrom,
-      effectiveTo,
-      employeeComponentId: input.employeeComponentId ?? null,
-      employerComponentId: input.employerComponentId ?? null,
-      defaultElectionKind: electionKind,
-      eligibleEarningsBasis: input.eligibleEarningsBasis ?? null,
-      employerMatchBps: input.employerMatchBps ?? null,
-      employerMatchCapBps: input.employerMatchCapBps ?? null,
-      notes: input.notes ?? null,
-      createdByUserId: principal.id,
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.benefit_plan.create",
+    async (tx) => {
+      return tx.payrollBenefitPlan.create({
+        data: {
+          clubId,
+          kind: input.kind,
+          code: input.code.trim(),
+          name: input.name.trim(),
+          description: input.description ?? null,
+          providerName: input.providerName ?? null,
+          active: true,
+          effectiveFrom,
+          effectiveTo,
+          employeeComponentId: input.employeeComponentId ?? null,
+          employerComponentId: input.employerComponentId ?? null,
+          defaultElectionKind: electionKind,
+          eligibleEarningsBasis: input.eligibleEarningsBasis ?? null,
+          employerMatchBps: input.employerMatchBps ?? null,
+          employerMatchCapBps: input.employerMatchCapBps ?? null,
+          notes: input.notes ?? null,
+          createdByUserId: principal.id,
+        },
+      });
     },
-  });
+    { entityType: ENTITY, entityId: clubId },
+  );
 
   await audit(principal, {
     action: "payroll.benefit_plan.create",
@@ -391,7 +399,6 @@ export async function changeBenefitPlanConfiguration(
   input: ChangePlanConfigurationInput,
 ): Promise<{ predecessor: BenefitPlanView; successor: BenefitPlanView; migratedEnrolmentCount: number }> {
   requirePermission(principal, clubId, "payroll:config:write");
-  await assertPostingAllowed(principal, clubId, "payroll.benefit_plan.change", ENTITY, planId);
 
   const existing = await prisma.payrollBenefitPlan.findFirst({ where: { id: planId, clubId } });
   if (!existing) throw new NotFoundError(ENTITY, planId);
@@ -432,6 +439,8 @@ export async function changeBenefitPlanConfiguration(
   const successorCode = await nextSuccessorCode(clubId, existing.code);
 
   const result = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.benefit_plan.change", ENTITY, planId, { tx });
     // 1. Close predecessor at cutover.
     await tx.payrollBenefitPlan.update({
       where: { id: existing.id },

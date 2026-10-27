@@ -29,7 +29,7 @@
 // still apply.
 
 import { prisma } from "../prisma";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { audit } from "../audit";
 import type { Principal } from "../rbac";
 
@@ -137,14 +137,6 @@ export async function autoAssignSinglePayGroupOnActivation(input: {
 }): Promise<PayGroupAutoAssignOutcome> {
   const { principal, clubId, employeeId, now } = input;
 
-  await assertPostingAllowed(
-    principal,
-    clubId,
-    "payroll.pay-group-member.auto-assign",
-    "PayrollPayGroupMember",
-    employeeId,
-  );
-
   const payGroups = await prisma.payrollPayGroup.findMany({
     where: { clubId, active: true },
     select: { id: true, name: true },
@@ -201,18 +193,30 @@ export async function autoAssignSinglePayGroupOnActivation(input: {
     return { status: "SKIPPED_NO_EFFECTIVE_FROM" };
   }
 
-  const row = await prisma.payrollPayGroupMember.create({
-    data: {
-      clubId,
-      payGroupId: payGroup.id,
-      employeeId,
-      effectiveFrom: eff.effectiveFrom,
-      effectiveTo: null,
-      notes: `Auto-assigned on activation (source: ${eff.source}).`,
-      createdByUserId: principal.id,
-    },
-    select: { id: true, payGroupId: true, effectiveFrom: true },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  // Scope note: the SKIPPED outcomes above (no pay group, multi pay
+  // group, already-member, no effective-from) short-circuit before
+  // this point and emit audit entries only; they are not posting
+  // events and therefore do not need the subscription lock. The
+  // guard fires only on the actual membership create.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group-member.auto-assign",
+    async (tx) => tx.payrollPayGroupMember.create({
+      data: {
+        clubId,
+        payGroupId: payGroup.id,
+        employeeId,
+        effectiveFrom: eff.effectiveFrom,
+        effectiveTo: null,
+        notes: `Auto-assigned on activation (source: ${eff.source}).`,
+        createdByUserId: principal.id,
+      },
+      select: { id: true, payGroupId: true, effectiveFrom: true },
+    }),
+    { entityType: "PayrollPayGroupMember", entityId: employeeId },
+  );
   await audit(principal, {
     action: "payroll.pay-group-member.auto-assign.assigned",
     entityType: "PayrollPayGroupMember",

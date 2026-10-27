@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import { resolveDocumentStorage } from "../documents/storage";
 
@@ -141,7 +141,6 @@ export async function createQuickLink(
   input: CreateQuickLinkInput,
 ): Promise<QuickLinkView> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "employee-portal.quick-link.create", ENTITY, clubId);
 
   const count = await prisma.employeePortalQuickLink.count({ where: { clubId } });
   if (count >= QUICK_LINK_MAX_COUNT) {
@@ -165,18 +164,25 @@ export async function createQuickLink(
   });
   const sortOrder = (maxSort._max.sortOrder ?? -1) + 1;
 
-  const row = await prisma.employeePortalQuickLink.create({
-    data: {
-      clubId,
-      label,
-      destinationType: input.destinationType,
-      url,
-      sortOrder,
-      isActive: input.isActive ?? true,
-      createdByUserId: principal.id,
-      updatedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "employee-portal.quick-link.create",
+    async (tx) => tx.employeePortalQuickLink.create({
+      data: {
+        clubId,
+        label,
+        destinationType: input.destinationType,
+        url,
+        sortOrder,
+        isActive: input.isActive ?? true,
+        createdByUserId: principal.id,
+        updatedByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "employee-portal.quick-link.create",
     entityType: ENTITY,
@@ -201,7 +207,6 @@ export async function updateQuickLink(
   input: UpdateQuickLinkInput,
 ): Promise<QuickLinkView> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "employee-portal.quick-link.update", ENTITY, id);
 
   const row = await prisma.employeePortalQuickLink.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -235,10 +240,17 @@ export async function updateQuickLink(
   }
   if (input.isActive !== undefined) patch.isActive = input.isActive;
 
-  const updated = await prisma.employeePortalQuickLink.update({
-    where: { id: row.id },
-    data: patch as never,
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "employee-portal.quick-link.update",
+    async (tx) => tx.employeePortalQuickLink.update({
+      where: { id: row.id },
+      data: patch as never,
+    }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "employee-portal.quick-link.update",
     entityType: ENTITY,
@@ -256,7 +268,6 @@ export async function reorderQuickLinks(
   orderedIds: string[],
 ): Promise<QuickLinkView[]> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "employee-portal.quick-link.reorder", ENTITY, clubId);
 
   const existing = await prisma.employeePortalQuickLink.findMany({
     where: { clubId },
@@ -273,13 +284,20 @@ export async function reorderQuickLinks(
     }
     seen.add(id);
   }
-  await prisma.$transaction(
-    orderedIds.map((id, index) =>
-      prisma.employeePortalQuickLink.update({
-        where: { id },
-        data: { sortOrder: index, updatedByUserId: principal.id },
-      }),
-    ),
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "employee-portal.quick-link.reorder",
+    async (tx) => {
+      for (const [index, id] of orderedIds.entries()) {
+        await tx.employeePortalQuickLink.update({
+          where: { id },
+          data: { sortOrder: index, updatedByUserId: principal.id },
+        });
+      }
+    },
+    { entityType: ENTITY, entityId: clubId },
   );
   await audit(principal, {
     action: "employee-portal.quick-link.reorder",
@@ -297,11 +315,17 @@ export async function deleteQuickLink(
   id: string,
 ): Promise<void> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "employee-portal.quick-link.delete", ENTITY, id);
 
   const row = await prisma.employeePortalQuickLink.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
-  await prisma.employeePortalQuickLink.delete({ where: { id: row.id } });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "employee-portal.quick-link.delete",
+    async (tx) => tx.employeePortalQuickLink.delete({ where: { id: row.id } }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "employee-portal.quick-link.delete",
     entityType: ENTITY,
@@ -330,7 +354,6 @@ export async function attachQuickLinkFile(
   input: AttachQuickLinkFileInput,
 ): Promise<QuickLinkView> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "employee-portal.quick-link.attach-file", ENTITY, id);
 
   const row = await prisma.employeePortalQuickLink.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -351,20 +374,32 @@ export async function attachQuickLinkFile(
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const storageKey = `clubs/${clubId}/quick-links/${row.id}/${sha256}`;
   const storage = await resolveDocumentStorage({ clubId });
+  // M1d (2026-10-27) -- external storage.put() HAPPENS BEFORE the
+  // posting-guard'd tx opens so no DB lock is held during the network
+  // write (founder rule: no external network calls while locks are
+  // held).  The DB update then runs inside the guard'd tx with FOR
+  // UPDATE on ClubSubscription.
   await storage.put({ storageKey, body: buf, mimeType });
 
-  const updated = await prisma.employeePortalQuickLink.update({
-    where: { id: row.id },
-    data: {
-      destinationType: "file",
-      storageKey,
-      fileMimeType: mimeType,
-      fileSizeBytes: buf.length,
-      fileOriginalName: input.originalName || "quick-link.pdf",
-      url: null,
-      updatedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "employee-portal.quick-link.attach-file",
+    async (tx) => tx.employeePortalQuickLink.update({
+      where: { id: row.id },
+      data: {
+        destinationType: "file",
+        storageKey,
+        fileMimeType: mimeType,
+        fileSizeBytes: buf.length,
+        fileOriginalName: input.originalName || "quick-link.pdf",
+        url: null,
+        updatedByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "employee-portal.quick-link.attach-file",
     entityType: ENTITY,

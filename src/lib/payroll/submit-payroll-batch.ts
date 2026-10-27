@@ -85,7 +85,6 @@ export async function submitPayrollBatch(
   options: { note?: string | null } = {},
 ): Promise<SubmitPayrollBatchResult> {
   requirePermission(principal, clubId, "payroll:submit");
-  await assertPostingAllowed(principal, clubId, "payroll.batch.submit-for-approval", ENTITY, batchId);
 
   const batch = await prisma.payrollBatch.findFirst({
     where: { id: batchId, clubId },
@@ -246,6 +245,8 @@ export async function submitPayrollBatch(
       if (gate.count !== 1) {
         throw new SubmitConcurrencyConflictError(batchId, "CALCULATED", batch.calculationVersion);
       }
+      // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+      await assertPostingAllowed(principal, clubId, "payroll.batch.submit-for-approval", ENTITY, batchId, { tx });
       // Idempotent upsert of the Controller card, inside the same
       // transaction as the batch CAS.
       const existing = await tx.workIntakeOrigin.findFirst({

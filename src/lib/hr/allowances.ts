@@ -11,7 +11,7 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
 
 const ENTITY = "EmployeeAllowance";
@@ -159,7 +159,6 @@ export async function addAllowance(
 ): Promise<{ id: string }> {
   const emp = await loadEmployee(principal, employeeId);
   requirePermission(principal, emp.clubId, "hr:allowance:write");
-  await assertPostingAllowed(principal, emp.clubId, "hr.allowance.add", ENTITY, employeeId);
 
   const allowanceType = normaliseType(input.allowanceType);
   const amount = normaliseAmount(input.amount);
@@ -179,23 +178,30 @@ export async function addAllowance(
     }
   }
 
-  const row = await prisma.employeeAllowance.create({
-    data: {
-      clubId: emp.clubId,
-      employeeId,
-      assignmentId: input.assignmentId ?? null,
-      allowanceType,
-      description: input.description?.trim() || null,
-      amount,
-      currency: input.currency?.trim().toUpperCase() || null,
-      frequency,
-      taxable: input.taxable,
-      effectiveFrom,
-      effectiveTo,
-      notes: input.notes?.trim() || null,
-      createdByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const row = await withPostingGuard(
+    principal,
+    emp.clubId,
+    "hr.allowance.add",
+    async (tx) => tx.employeeAllowance.create({
+      data: {
+        clubId: emp.clubId,
+        employeeId,
+        assignmentId: input.assignmentId ?? null,
+        allowanceType,
+        description: input.description?.trim() || null,
+        amount,
+        currency: input.currency?.trim().toUpperCase() || null,
+        frequency,
+        taxable: input.taxable,
+        effectiveFrom,
+        effectiveTo,
+        notes: input.notes?.trim() || null,
+        createdByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: employeeId },
+  );
 
   await audit(principal, {
     action: "hr.allowance.add",
@@ -235,16 +241,22 @@ export async function endAllowance(
   if (!row) throw new NotFoundError(ENTITY, allowanceId);
   assertTenantOwned({ clubId: row.clubId }, principal);
   requirePermission(principal, row.clubId, "hr:allowance:write");
-  await assertPostingAllowed(principal, row.clubId, "hr.allowance.end", ENTITY, allowanceId);
   if (row.effectiveTo !== null) throw new ConflictError("Allowance already ended.");
   const effectiveTo = normaliseDate(input.effectiveTo, "effectiveTo");
   if (effectiveTo <= row.effectiveFrom) {
     throw new ValidationError([{ path: "effectiveTo", message: "End date must be after start date." }]);
   }
-  await prisma.employeeAllowance.update({
-    where: { id: allowanceId },
-    data: { effectiveTo, notes: input.notes?.trim() || undefined },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  await withPostingGuard(
+    principal,
+    row.clubId,
+    "hr.allowance.end",
+    async (tx) => tx.employeeAllowance.update({
+      where: { id: allowanceId },
+      data: { effectiveTo, notes: input.notes?.trim() || undefined },
+    }),
+    { entityType: ENTITY, entityId: allowanceId },
+  );
   await audit(principal, {
     action: "hr.allowance.end",
     entityType: ENTITY,

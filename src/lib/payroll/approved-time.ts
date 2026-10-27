@@ -26,7 +26,7 @@ import type { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 
 const ENTITY = "PayrollApprovedTimeEntry";
@@ -298,7 +298,6 @@ export async function createTimeEntry(
 ): Promise<CreateTimeEntryResult> {
   requirePermission(principal, clubId, "payroll:timesheets:read");
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.time-entry.create", ENTITY, input.employeeId);
 
   await assertEmployeeBelongsToClub(clubId, input.employeeId);
   const workDate = toCivilMidnight(input.workDate);
@@ -310,18 +309,25 @@ export async function createTimeEntry(
     ? validateClassification(input.earningClassification)
     : "REGULAR";
 
-  const row = await prisma.payrollApprovedTimeEntry.create({
-    data: {
-      clubId,
-      employeeId: input.employeeId,
-      employmentAssignmentId: input.employmentAssignmentId ?? null,
-      workDate,
-      hours,
-      earningClassification: cls,
-      approvalState: "DRAFT",
-      notes: input.notes?.trim() || null,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.time-entry.create",
+    async (tx) => tx.payrollApprovedTimeEntry.create({
+      data: {
+        clubId,
+        employeeId: input.employeeId,
+        employmentAssignmentId: input.employmentAssignmentId ?? null,
+        workDate,
+        hours,
+        earningClassification: cls,
+        approvalState: "DRAFT",
+        notes: input.notes?.trim() || null,
+      },
+    }),
+    { entityType: ENTITY, entityId: input.employeeId },
+  );
   await audit(principal, {
     action: "payroll.time-entry.create",
     entityType: ENTITY,
@@ -359,7 +365,6 @@ export async function updateTimeEntry(
   input: UpdateTimeEntryInput,
 ): Promise<{ entry: TimeEntryView; departmentId: string | null }> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.time-entry.update", ENTITY, id);
 
   const row = await prisma.payrollApprovedTimeEntry.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -393,10 +398,17 @@ export async function updateTimeEntry(
   if (input.earningClassification !== undefined) patch.earningClassification = validateClassification(input.earningClassification);
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
 
-  const updated = await prisma.payrollApprovedTimeEntry.update({
-    where: { id: row.id },
-    data: patch,
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.time-entry.update",
+    async (tx) => tx.payrollApprovedTimeEntry.update({
+      where: { id: row.id },
+      data: patch,
+    }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "payroll.time-entry.update",
     entityType: ENTITY,
@@ -430,7 +442,6 @@ export async function deleteTimeEntry(
   id: string,
 ): Promise<{ departmentId: string | null; workDate: Date }> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.time-entry.delete", ENTITY, id);
 
   const row = await prisma.payrollApprovedTimeEntry.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -443,7 +454,14 @@ export async function deleteTimeEntry(
       },
     ]);
   }
-  await prisma.payrollApprovedTimeEntry.delete({ where: { id: row.id } });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.time-entry.delete",
+    async (tx) => tx.payrollApprovedTimeEntry.delete({ where: { id: row.id } }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "payroll.time-entry.delete",
     entityType: ENTITY,

@@ -22,7 +22,7 @@ import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned, tenantWhere } from "../services/tenant";
 import { ConflictError, NotFoundError, ValidationError, ForbiddenError } from "../errors";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { createSale, completeSale } from "./index";
 import {
   LOUNGE_LOCATION_CODE,
@@ -714,9 +714,17 @@ export async function settleCheck(principal: Principal, checkId: string, raw: un
     throw new ConflictError(`${draftLines.length} item${draftLines.length === 1 ? " is" : "s are"} unsent — send to the kitchen/bar first, or pass allowUnsentLines=true to settle without sending.`);
   }
 
-  // Fire the posting-guard early with a write-flavoured action name
-  // so a READ_ONLY support session is rejected before any DB writes.
-  await assertPostingAllowed(principal, check.clubId, "pos.check.settle.post", "POSCheck", check.id);
+  // M1d (2026-10-27) -- bare pre-write assertPostingAllowed removed;
+  // settleCheck orchestrates createSale + completeSale (each opens
+  // its own tx with its own posting-guard) plus post-settlement
+  // fire-and-forget email + reservation-link work.  Wrapping the
+  // whole function in withPostingGuard would hold a FOR UPDATE lock
+  // on ClubSubscription across those external and nested-tx calls,
+  // which violates the "no external network calls while locks are
+  // held" rule.  Instead, the critical point-of-no-return state
+  // transition on pOSCheck (CLOSED or PAYMENT_PENDING) is wrapped
+  // below in its own withPostingGuard tx so FOR UPDATE on
+  // ClubSubscription serializes against suspension at that moment.
 
   // ---- Apply the same discount math as the legacy lounge service ---
   // Chit-level pct can be updated at settlement (server may have
@@ -884,17 +892,23 @@ export async function settleCheck(principal: Principal, checkId: string, raw: un
     // Snapshot sale-line modifiers now (they're derived from the
     // priced array and don't change between request and confirm).
     await snapshotSaleLineModifiers(check.clubId, draft.id, priced);
-    // Move the check into the PAYMENT_PENDING active-list bucket.
-    await prisma.pOSCheck.update({
-      where: { id: check.id },
-      data: {
-        status: "PAYMENT_PENDING",
-        settledByUserId: principal.id,
-        settlementMethod: "QR_PAY",
-        posSaleId: draft.id,
-        chitDiscountPct: chitPct,
-      },
-    });
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await withPostingGuard(
+      principal,
+      check.clubId,
+      "pos.check.settle.post",
+      async (tx) => tx.pOSCheck.update({
+        where: { id: check.id },
+        data: {
+          status: "PAYMENT_PENDING",
+          settledByUserId: principal.id,
+          settlementMethod: "QR_PAY",
+          posSaleId: draft.id,
+          chitDiscountPct: chitPct,
+        },
+      }),
+      { entityType: "POSCheck", entityId: check.id },
+    );
     await prisma.pOSCheckEvent.create({
       data: {
         clubId: check.clubId, checkId: check.id, type: "QR_PAYMENT_REQUESTED",
@@ -916,18 +930,25 @@ export async function settleCheck(principal: Principal, checkId: string, raw: un
 
   // Close the check, link the sale, mark lines SERVED.
   const now = new Date();
-  await prisma.pOSCheck.update({
-    where: { id: check.id },
-    data: {
-      status: "CLOSED",
-      settledAt: now,
-      closedAt: now,
-      settledByUserId: principal.id,
-      settlementMethod: "MEMBER_ACCOUNT",
-      posSaleId: completed.id,
-      chitDiscountPct: chitPct,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    check.clubId,
+    "pos.check.settle.post",
+    async (tx) => tx.pOSCheck.update({
+      where: { id: check.id },
+      data: {
+        status: "CLOSED",
+        settledAt: now,
+        closedAt: now,
+        settledByUserId: principal.id,
+        settlementMethod: "MEMBER_ACCOUNT",
+        posSaleId: completed.id,
+        chitDiscountPct: chitPct,
+      },
+    }),
+    { entityType: "POSCheck", entityId: check.id },
+  );
   // Step 13 — flip the dining table SEATED → DIRTY on full close so the
   // floor map immediately shows "needs reset". updateMany with the
   // SEATED guard prevents stomping a RESERVED/OUT_OF_SERVICE/DIRTY

@@ -9,7 +9,7 @@
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import { ALLOWED_PAY_FREQUENCIES, type PayFrequency } from "./club-config";
 import {
@@ -215,7 +215,6 @@ export async function createPayGroup(
   input: CreatePayGroupInput,
 ): Promise<PayGroupView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.pay-group.create", ENTITY, clubId);
 
   const code = validateCode(input.code);
   const name = validateName(input.name);
@@ -241,20 +240,27 @@ export async function createPayGroup(
   if (!(PAY_DATE_ADJUSTMENTS as readonly string[]).includes(payDateAdjustment)) {
     throw new ValidationError([{ path: "payDateAdjustment", message: `must be one of ${PAY_DATE_ADJUSTMENTS.join(", ")}` }]);
   }
-  const row = await prisma.payrollPayGroup.create({
-    data: {
-      clubId,
-      code,
-      name,
-      payFrequency,
-      payDateOffsetDays,
-      calendarAnchorDate,
-      payDateAdjustment,
-      notes: input.notes?.trim() || null,
-      active: input.active ?? true,
-      createdByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group.create",
+    async (tx) => tx.payrollPayGroup.create({
+      data: {
+        clubId,
+        code,
+        name,
+        payFrequency,
+        payDateOffsetDays,
+        calendarAnchorDate,
+        payDateAdjustment,
+        notes: input.notes?.trim() || null,
+        active: input.active ?? true,
+        createdByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "payroll.pay-group.create",
     entityType: ENTITY,
@@ -299,7 +305,6 @@ export async function updatePayGroup(
   input: UpdatePayGroupInput,
 ): Promise<PayGroupView> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(principal, clubId, "payroll.pay-group.update", ENTITY, id);
 
   const row = await prisma.payrollPayGroup.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -353,7 +358,14 @@ export async function updatePayGroup(
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
   if (input.active !== undefined) patch.active = input.active;
 
-  const updated = await prisma.payrollPayGroup.update({ where: { id: row.id }, data: patch });
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "payroll.pay-group.update",
+    async (tx) => tx.payrollPayGroup.update({ where: { id: row.id }, data: patch }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "payroll.pay-group.update",
     entityType: ENTITY,

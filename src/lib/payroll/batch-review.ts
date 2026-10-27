@@ -284,7 +284,6 @@ export async function attestBatchReview(
   dimension: ReviewDimension,
 ): Promise<{ id: string; fingerprint: string }> {
   requirePermission(principal, clubId, "payroll:edit");
-  await assertPostingAllowed(principal, clubId, "payroll.batch-review.attest", ENTITY, batchId);
 
   const batch = await prisma.payrollBatch.findFirst({ where: { id: batchId, clubId } });
   if (!batch) throw new NotFoundError("PayrollBatch", batchId);
@@ -295,6 +294,8 @@ export async function attestBatchReview(
   const fingerprint = await computeReviewFingerprint(clubId, batchId, dimension);
 
   const created = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(principal, clubId, "payroll.batch-review.attest", ENTITY, batchId, { tx });
     // Invalidate any prior current attestation for this pair.
     await tx.payrollBatchReviewAttestation.updateMany({
       where: { clubId, batchId, dimension, invalidatedAt: null },

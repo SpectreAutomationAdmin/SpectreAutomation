@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import { resolveDocumentStorage } from "../documents/storage";
 
@@ -85,7 +85,6 @@ export async function setClubMedia(
   input: SetClubMediaInput,
 ): Promise<{ id: string; category: string; storageKey: string; uploadedAt: Date }> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "club.media.update", ENTITY, clubId);
 
   if (!isKnownClubMediaCategory(input.category)) {
     throw new ValidationError([
@@ -111,6 +110,9 @@ export async function setClubMedia(
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const storageKey = `clubs/${clubId}/media/${input.category}/${sha256}`;
 
+  // M1d (2026-10-27) -- storage.put is a cross-service network call;
+  // keep it OUTSIDE the posting-guard tx so no DB lock is held across
+  // the external I/O.
   const storage = await resolveDocumentStorage({ clubId });
   await storage.put({ storageKey, body: buf, mimeType });
 
@@ -119,28 +121,35 @@ export async function setClubMedia(
     select: { id: true, sha256: true },
   });
 
-  const row = await prisma.clubMedia.upsert({
-    where: { clubId_category: { clubId, category: input.category } },
-    create: {
-      clubId,
-      category: input.category,
-      storageKey,
-      mimeType,
-      sizeBytes: buf.length,
-      sha256,
-      displayName: input.displayName ?? null,
-      uploadedByUserId: principal.id,
-    },
-    update: {
-      storageKey,
-      mimeType,
-      sizeBytes: buf.length,
-      sha256,
-      displayName: input.displayName ?? null,
-      uploadedByUserId: principal.id,
-      uploadedAt: new Date(),
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "club.media.update",
+    async (tx) => tx.clubMedia.upsert({
+      where: { clubId_category: { clubId, category: input.category } },
+      create: {
+        clubId,
+        category: input.category,
+        storageKey,
+        mimeType,
+        sizeBytes: buf.length,
+        sha256,
+        displayName: input.displayName ?? null,
+        uploadedByUserId: principal.id,
+      },
+      update: {
+        storageKey,
+        mimeType,
+        sizeBytes: buf.length,
+        sha256,
+        displayName: input.displayName ?? null,
+        uploadedByUserId: principal.id,
+        uploadedAt: new Date(),
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
 
   await audit(principal, {
     action: "club.media.update",
@@ -169,14 +178,20 @@ export async function clearClubMedia(
   category: ClubMediaCategory,
 ): Promise<{ cleared: boolean }> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "club.media.delete", ENTITY, clubId);
 
   const existing = await prisma.clubMedia.findFirst({
     where: { clubId, category },
     select: { id: true, sha256: true },
   });
   if (!existing) return { cleared: false };
-  await prisma.clubMedia.delete({ where: { id: existing.id } });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "club.media.delete",
+    async (tx) => tx.clubMedia.delete({ where: { id: existing.id } }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "club.media.delete",
     entityType: ENTITY,
@@ -253,7 +268,6 @@ export async function updateClubMediaFraming(
   input: UpdateClubMediaFramingInput,
 ): Promise<{ id: string; framing: EmployeePortalHeroFraming }> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "club.media.framing.update", ENTITY, clubId);
 
   if (!isKnownClubMediaCategory(input.category)) {
     throw new ValidationError([
@@ -292,15 +306,22 @@ export async function updateClubMediaFraming(
     update.mobileZoom = m.zoom;
   }
 
-  const updated = await prisma.clubMedia.update({
-    where: { id: row.id },
-    data: update as never,
-    select: {
-      id: true,
-      desktopFocalX: true, desktopFocalY: true, desktopZoom: true,
-      mobileFocalX: true, mobileFocalY: true, mobileZoom: true,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "club.media.framing.update",
+    async (tx) => tx.clubMedia.update({
+      where: { id: row.id },
+      data: update as never,
+      select: {
+        id: true,
+        desktopFocalX: true, desktopFocalY: true, desktopZoom: true,
+        mobileFocalX: true, mobileFocalY: true, mobileZoom: true,
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
 
   const after = resolveStoredHeroFraming(updated);
 
@@ -327,7 +348,6 @@ export async function resetClubMediaFraming(
   mode: "desktop" | "mobile" | "both",
 ): Promise<{ id: string; framing: EmployeePortalHeroFraming }> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "club.media.framing.reset", ENTITY, clubId);
 
   const row = await prisma.clubMedia.findFirst({
     where: { clubId, category },
@@ -350,15 +370,22 @@ export async function resetClubMediaFraming(
     update.mobileZoom = null;
   }
 
-  const updated = await prisma.clubMedia.update({
-    where: { id: row.id },
-    data: update as never,
-    select: {
-      id: true,
-      desktopFocalX: true, desktopFocalY: true, desktopZoom: true,
-      mobileFocalX: true, mobileFocalY: true, mobileZoom: true,
-    },
-  });
+  // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "club.media.framing.reset",
+    async (tx) => tx.clubMedia.update({
+      where: { id: row.id },
+      data: update as never,
+      select: {
+        id: true,
+        desktopFocalX: true, desktopFocalY: true, desktopZoom: true,
+        mobileFocalX: true, mobileFocalY: true, mobileZoom: true,
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
 
   const framing = resolveStoredHeroFraming(updated);
   await audit(principal, {

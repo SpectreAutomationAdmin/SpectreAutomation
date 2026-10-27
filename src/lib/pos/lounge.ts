@@ -17,7 +17,7 @@ import { prisma } from "../prisma";
 import { requirePermission, type Principal } from "../rbac";
 import { tenantWhere, assertTenantOwned } from "../services/tenant";
 import { ConflictError, NotFoundError, ValidationError } from "../errors";
-import { assertPostingAllowed } from "../posting-guard";
+import { withPostingGuard } from "../posting-guard";
 import { createSale, completeSale } from "./index";
 
 // Hard-coded to the seeded lounge identifiers. If/when more lounges
@@ -274,7 +274,24 @@ export async function ringUpLoungeSale(principal: Principal, clubId: string, raw
   // so a READ_ONLY support session would slip past. Using
   // `pos.lounge.charge.post` makes the gate fire on the lounge entry
   // point regardless of how `completeSale`'s keyword list evolves.
-  await assertPostingAllowed(principal, clubId, "pos.lounge.charge.post", "Member", cart.memberId);
+  //
+  // M1d (2026-10-27) -- posting-guard INSIDE tx so FOR UPDATE on ClubSubscription serializes against suspension.
+  // The body is intentionally empty: the actual AR + GL writes happen
+  // in the downstream `completeSale` call, which opens its own
+  // withPostingGuard'd tx. Wrapping completeSale here instead would
+  // nest two `prisma.$transaction` scopes and self-deadlock on the
+  // ClubSubscription row-lock. This front-door guard-only tx takes
+  // the lock briefly to run the lounge-flavoured action gate (and
+  // reject writes against suspended tenants) before the real work
+  // begins; completeSale re-acquires the lock atomically with its
+  // state transition.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "pos.lounge.charge.post",
+    async () => { /* front-door gate; downstream completeSale wraps the write */ },
+    { entityType: "Member", entityId: cart.memberId },
+  );
 
   // The active open session, if any. createSale doesn't require one,
   // but linking sales to a session gives the reconciliation reports

@@ -20,7 +20,8 @@ const PHASE_2H = readFileSync(
 
 describe("M1 · posting-guard tx-aware surface", () => {
   it("assertPostingAllowed accepts an opts.tx parameter", () => {
-    expect(POSTING_GUARD).toMatch(/export async function assertPostingAllowed[\s\S]+?opts\?: \{ tx\?: MinimalTxClient \}/m);
+    // M1d (2026-10-27): tx accepts `unknown` for caller ergonomics; internal narrow.
+    expect(POSTING_GUARD).toMatch(/export async function assertPostingAllowed[\s\S]+?opts\?: \{ tx\?: unknown \}/m);
   });
   it("withPostingGuard helper is exported + opens prisma.$transaction", () => {
     expect(POSTING_GUARD).toMatch(/export async function withPostingGuard</);

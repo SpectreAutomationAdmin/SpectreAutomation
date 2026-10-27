@@ -39,10 +39,6 @@ export async function resolveLateAdjustment(
   principal: Principal, clubId: string, input: ResolveLateInput,
 ): Promise<ResolveLateResult> {
   requirePermission(principal, clubId, "payroll:write");
-  await assertPostingAllowed(
-    principal, clubId, "payroll.time-adjustment.resolve",
-    ENTITY, input.adjustmentId,
-  );
 
   const adj = await prisma.payrollTimeAdjustment.findFirst({
     where: { id: input.adjustmentId, clubId },
@@ -93,6 +89,12 @@ export async function resolveLateAdjustment(
     if (cas.count === 0) {
       throw new ConflictError("Adjustment was already resolved by another user.");
     }
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, clubId, "payroll.time-adjustment.resolve",
+      ENTITY, input.adjustmentId,
+      { tx },
+    );
 
     if (input.resolution === "DEFER_NEXT_PAYROLL" && adj.reason === "LATE_APPROVAL") {
       // Move affected frozen rows (unconsumed only) to DEFERRED so

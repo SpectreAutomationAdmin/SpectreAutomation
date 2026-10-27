@@ -138,11 +138,16 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
     stripePaymentIntentId: pi,
   });
 
-  // M1c (2026-10-26, founder §5) -- MULTI-SIGNAL webhook classification.
+  // M1d (2026-10-27, founder §6) -- SEVEN-SIGNAL + AMBIGUOUS classification.
   //
-  // Classification MUST not rely on a single signal (e.g.
-  // settlementConfirmedAt alone).  Instead we evaluate every
-  // available correlator:
+  // M1c introduced multi-signal correlation; founder §6 closes the
+  // remaining ambiguity surface where correlators DISAGREE.  The
+  // classifier now evaluates seven signals and routes every
+  // disagreement to an AMBIGUOUS_PAYMENT_FAILURE operator alert
+  // WITHOUT triggering suspension.  The failed-renewal suspension
+  // path fires only when the signals unanimously point to a
+  // previously-settled, operationally-active cycle AND no later
+  // settlement contradicts this failure.
   //
   //   (1) Provider event identity: the webhook was persisted +
   //       verified upstream (route.ts); dedup on event.id.
@@ -150,17 +155,31 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
   //       resolved a row.
   //   (3) Subscription identity: the owning Club has a
   //       ClubSubscription row (operator-managed).
-  //   (4) Previous-settlement signal: cycle.settlementConfirmedAt
-  //       is non-null AND the cycle previously saw a settled
-  //       charge (reconciliationLedger has a PAYMENT_SETTLED entry).
-  //   (5) Operational-active signal: ClubSubscription.subscriptionStatus
+  //   (4) Timestamp-settlement signal: cycle.settlementConfirmedAt
+  //       is non-null (hasTimestamp).
+  //   (5) Ledger-settlement signal: the cycle previously saw a
+  //       settled charge in paymentReconciliationEntry with entryType
+  //       PAYMENT_SETTLED recorded BEFORE this event's receivedAt
+  //       (hasLedgerEntry).
+  //   (6) Operational-active signal: ClubSubscription.subscriptionStatus
   //       === "ACTIVE".
+  //   (7) Monotonicity signal: NO reconciliation entry with
+  //       entryType PAYMENT_SETTLED exists with recordedAt STRICTLY
+  //       AFTER this event's receivedAt (laterSettlement is null).
+  //       A later settlement contradicts the current failure --
+  //       classification is ambiguous.
   //
-  // A failed payment is classified as RENEWAL only when ALL of
-  // (1)-(5) are satisfied.  Any missing signal falls back to
-  // INITIAL (safer -- no suspension).  This closes the founder's
-  // closure §5 concern: don't infer renewal solely from
-  // settlementConfirmedAt.
+  // isAmbiguous = (hasTimestamp !== hasLedgerEntry)                    -- signals 4/5 disagree
+  //            OR (hasTimestamp AND hasLedgerEntry AND sub === null)   -- settled but no subscription row
+  //            OR (laterSettlement !== null)                           -- out-of-order / replay
+  //
+  // multiSignalRenewal = !isAmbiguous AND hasTimestamp AND hasLedgerEntry
+  //                    AND sub !== null AND sub.subscriptionStatus === "ACTIVE"
+  //
+  // isInitialPaymentFailure = !multiSignalRenewal AND !isAmbiguous
+  //
+  // Ambiguous events raise an AMBIGUOUS_PAYMENT_FAILURE operator
+  // alert and return WITHOUT suspending.  Human operator reconciles.
 
   const sub = await prisma.clubSubscription.findUnique({
     where: { clubId: cycle.clubId },
@@ -168,15 +187,61 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
   });
   const priorSettlement = await prisma.paymentReconciliationEntry.findFirst({
     where: { billingCycleId: cycle.id, entryType: "PAYMENT_SETTLED" },
-    select: { id: true },
+    select: { id: true, recordedAt: true },
   });
-  const multiSignalRenewal =
-    cycle.settlementConfirmedAt !== null &&       // signal 4a
-    priorSettlement !== null &&                   // signal 4b
-    sub !== null &&                               // signal 3
-    sub.subscriptionStatus === "ACTIVE";          // signal 5
+  const thisEventRow = await prisma.stripeWebhookEvent.findUnique({
+    where: { id: event.id },
+    select: { receivedAt: true },
+  });
+  const laterSettlement = thisEventRow
+    ? await prisma.paymentReconciliationEntry.findFirst({
+        where: {
+          billingCycleId: cycle.id,
+          entryType: "PAYMENT_SETTLED",
+          recordedAt: { gt: thisEventRow.receivedAt },
+        },
+        select: { id: true, recordedAt: true },
+      })
+    : null;
 
-  const isInitialPaymentFailure = !multiSignalRenewal;
+  const hasTimestamp = cycle.settlementConfirmedAt !== null;
+  const hasLedgerEntry = priorSettlement !== null;
+  const isAmbiguous =
+    (hasTimestamp !== hasLedgerEntry) ||
+    (hasTimestamp && hasLedgerEntry && sub === null) ||
+    laterSettlement !== null;
+  const multiSignalRenewal =
+    !isAmbiguous &&
+    hasTimestamp &&
+    hasLedgerEntry &&
+    sub !== null &&
+    sub.subscriptionStatus === "ACTIVE";
+  const isInitialPaymentFailure = !multiSignalRenewal && !isAmbiguous;
+
+  if (isAmbiguous) {
+    await writeOperatorAlert({
+      clubId: cycle.clubId,
+      billingCycleId: cycle.id,
+      severity: "IMMEDIATE",
+      category: "AMBIGUOUS_PAYMENT_FAILURE",
+      title: "Ambiguous payment failure -- correlation signals disagree",
+      body:
+        `BillingCycle ${cycle.id.slice(-6)} received payment_intent.payment_failed but the correlation signals disagree. ` +
+        `hasTimestamp=${hasTimestamp}, hasLedgerEntry=${hasLedgerEntry}, subscriptionPresent=${sub !== null}, ` +
+        `subscriptionStatus=${sub?.subscriptionStatus ?? "null"}, laterSettlementPresent=${laterSettlement !== null}. ` +
+        `No suspension triggered; operator must reconcile.`,
+      providerEventId: event.id,
+    });
+    logger.warn("stripe.webhook.ambiguous_payment_failed", {
+      cycleIdTail: cycle.id.slice(-6),
+      hasTimestamp,
+      hasLedgerEntry,
+      subscriptionPresent: sub !== null,
+      subscriptionStatus: sub?.subscriptionStatus ?? null,
+      laterSettlementPresent: laterSettlement !== null,
+    });
+    return;
+  }
 
   await writeOperatorAlert({
     clubId: cycle.clubId,

@@ -14,7 +14,7 @@
 import { prisma } from "./prisma";
 import { audit } from "./audit";
 import { requirePermission, type Principal } from "./rbac";
-import { assertPostingAllowed } from "./posting-guard";
+import { withPostingGuard } from "./posting-guard";
 import { ValidationError, NotFoundError } from "./errors";
 
 // Uses the existing `ClubAnnouncement` Prisma model (extended in
@@ -207,7 +207,6 @@ export async function createAnnouncement(
   input: CreateAnnouncementInput,
 ): Promise<AnnouncementView> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "announcement.create", ENTITY, clubId);
 
   const audience = validateAudience(input.audience);
   const title = validateTitle(input.title);
@@ -217,20 +216,27 @@ export async function createAnnouncement(
     ? (input.publishedAt ?? new Date())
     : null;
 
-  const row = await prisma.clubAnnouncement.create({
-    data: {
-      clubId,
-      audience,
-      title,
-      body,
-      isPublished,
-      publishedAt,
-      expiresAt: input.expiresAt ?? null,
-      isPinned: input.isPinned ?? false,
-      createdByUserId: principal.id,
-      updatedByUserId: principal.id,
-    },
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const row = await withPostingGuard(
+    principal,
+    clubId,
+    "announcement.create",
+    async (tx) => tx.clubAnnouncement.create({
+      data: {
+        clubId,
+        audience,
+        title,
+        body,
+        isPublished,
+        publishedAt,
+        expiresAt: input.expiresAt ?? null,
+        isPinned: input.isPinned ?? false,
+        createdByUserId: principal.id,
+        updatedByUserId: principal.id,
+      },
+    }),
+    { entityType: ENTITY, entityId: clubId },
+  );
   await audit(principal, {
     action: "announcement.create",
     entityType: ENTITY,
@@ -258,7 +264,6 @@ export async function updateAnnouncement(
   input: UpdateAnnouncementInput,
 ): Promise<AnnouncementView> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "announcement.update", ENTITY, id);
 
   const row = await prisma.clubAnnouncement.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
@@ -291,10 +296,17 @@ export async function updateAnnouncement(
   if (input.expiresAt !== undefined) patch.expiresAt = input.expiresAt;
   if (input.isPinned !== undefined) patch.isPinned = input.isPinned;
 
-  const updated = await prisma.clubAnnouncement.update({
-    where: { id: row.id },
-    data: patch,
-  });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  const updated = await withPostingGuard(
+    principal,
+    clubId,
+    "announcement.update",
+    async (tx) => tx.clubAnnouncement.update({
+      where: { id: row.id },
+      data: patch,
+    }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "announcement.update",
     entityType: ENTITY,
@@ -322,11 +334,17 @@ export async function deleteAnnouncement(
   id: string,
 ): Promise<void> {
   requirePermission(principal, clubId, "settings:write");
-  await assertPostingAllowed(principal, clubId, "announcement.delete", ENTITY, id);
 
   const row = await prisma.clubAnnouncement.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
-  await prisma.clubAnnouncement.delete({ where: { id: row.id } });
+  // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  await withPostingGuard(
+    principal,
+    clubId,
+    "announcement.delete",
+    async (tx) => tx.clubAnnouncement.delete({ where: { id: row.id } }),
+    { entityType: ENTITY, entityId: id },
+  );
   await audit(principal, {
     action: "announcement.delete",
     entityType: ENTITY,

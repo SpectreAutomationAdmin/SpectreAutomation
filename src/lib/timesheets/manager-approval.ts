@@ -128,10 +128,6 @@ export async function approveTimesheetScope(
   principal: Principal, input: ApproveScopeInput,
 ): Promise<ApproveScopeResult> {
   await assertScopeAuthorization(principal, input.clubId, input.departmentId);
-  await assertPostingAllowed(
-    principal, input.clubId, "payroll.timesheet-scope.approve",
-    ENTITY, input.departmentId,
-  );
 
   // Re-read readiness + revision inside the tx to close TOCTOU.
   const review = await getScopeReview(input.clubId, input.payPeriodId, input.departmentId);
@@ -200,6 +196,11 @@ export async function approveTimesheetScope(
   const attestedScopeVersion = input.expectedScopeVersion ?? bootScopeState.version;
 
   const approval = await prisma.$transaction(async (tx) => {
+    // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
+    await assertPostingAllowed(
+      principal, input.clubId, "payroll.timesheet-scope.approve",
+      ENTITY, input.departmentId, { tx },
+    );
     // Slice 7B — DB-CAS gate FIRST inside the tx.
     await casScopeVersion(
       input.clubId, input.payPeriodId, input.departmentId,

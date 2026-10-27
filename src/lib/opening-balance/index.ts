@@ -148,7 +148,7 @@ export async function postSet(principal: Principal, setId: string, periodId: str
     // M1c: tx-bound posting-guard with FOR UPDATE on ClubSubscription.
     await assertPostingAllowed(
       principal, set.clubId, "opening_balance.post", "OpeningBalanceSet", setId,
-      { tx: tx as unknown as { $queryRawUnsafe: (sql: string, ...args: unknown[]) => Promise<unknown[]> } },
+      { tx },
     );
     const je = await tx.journalEntry.create({
       data: {
