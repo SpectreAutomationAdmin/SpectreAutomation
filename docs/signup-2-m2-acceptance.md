@@ -1454,3 +1454,126 @@ Coverage:
 
 **End of M2-SyntheticSandbox slice.** Ready for founder PATH A
 test-window authorisation.
+
+---
+
+## 21. Final security + deployment audit (founder 2026-10-27)
+
+**Status.** Hardening deployed. **GO** for founder-driven Stripe sandbox Checkout once founder authorises the test-window flag flip.
+
+### 21a Deployment verification
+
+| Field | Value |
+|---|---|
+| DRH-1 run (first fix) | 40535492816 — success |
+| DRH-1 run (hardening) | **40539575357 — success** |
+| Final commit | `sha-16fc3391e3a1e3d6e6ff6f6f7f84d5f06d7cc3f` |
+| Final image | `registry.fly.io/spectre-staging:sha-16fc3391e3a1` |
+| Final Fly release | **v959** |
+| `/api/health` | **HTTP 200** |
+| Postgres migration applied | ✓ (deploy conclusion success; `prisma migrate deploy --schema prisma-postgres/schema.prisma` ran as release command; v957 brought up the columns + indexes) |
+| All 5 `syntheticTestOnly` columns | ✓ present on `SignupRegistration`, `SubscriptionAuthorisationAttestation`, `SubscriptionPaymentMandate`, `OperatorVerificationRecord`, `BillingCycle` |
+| 3 founder-installed Stripe secrets preserved | ✓ (digests identical to §19 close: `13da253279ef579e`, `be00663289dbbf6a`, `53f3d2f00139e274`) |
+| `SPECTRE_STRIPE_SDK_MODE` | **UNSET** (adapter = mock) |
+| `SPECTRE_SIGNUP_2E_PAYMENT_LIVE` | **UNSET** |
+| `SPECTRE_SIGNUP_2B_ATTESTATION_LIVE` | **UNSET** |
+| `SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX` | **UNSET** |
+| 2F / 2G / 2H activation / provisioning / suspension flags | **UNSET** |
+
+### 21b Synthetic endpoint security audit — PASS / FAIL table
+
+| # | Requirement | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Synthetic initiation requires authenticated, founder-authorized access; env flags alone are insufficient | **PASS** | `/api/signup/mandate/synthetic-initiate` route calls `getCurrentUser()` FIRST, returns 401 if unauthenticated, 403 if non-SUPER_ADMIN. Env guards run SECOND. See [tests/signup-2-m2-synthetic-sandbox.test.ts](tests/signup-2-m2-synthetic-sandbox.test.ts) scenarios covering AUTH ordering + 401 + SUPER_ADMIN requirement. |
+| 2 | Synthetic return is securely correlated to an authorized, single-use test session (state/nonce verification) | **PASS** | `issueSyntheticReturnNonce` generates 32-byte `crypto.randomBytes` nonce bound to the registration + operator user id; `consumeSyntheticReturnNonce` uses `crypto.timingSafeEqual` constant-time compare + conditional `updateMany` for single-use atomicity. Return handler consumes BEFORE persistence. Nonce embedded in Stripe Checkout `success_url`. See scenarios "single-use nonce" in test file. |
+| 3 | No unauthenticated external user can initiate arbitrary Stripe Checkout sessions | **PASS** | `/api/signup/mandate/synthetic-initiate` returns 401 for any request without an authenticated SUPER_ADMIN session cookie. Env guards + synthetic marker provide defense-in-depth but the AUTH gate is the first and primary refusal. |
+| 4 | Synthetic service cannot be enabled in production by setting env variables | **PASS** | `FLY_APP_NAME === "spectre-staging"` guard is the FIRST check in `assertSyntheticSandboxGuardsPass`. Production Fly app is `spectre-production` (different name); env vars at that app would fail-closed regardless of other flag state. Verified by the test `FLY_APP_NAME=spectre-production` scenario. |
+| 5 | Synthetic registrations cannot activate or provision tenants through any existing or future code path | **PASS** | FOUR independent refusals: (a) `refuseIfSyntheticTestOnly(reg.id)` in `initiateMandateCollection`; (b) same in `persistSignedMandate`; (c) Phase 2F `authoriseActivation` reads `cycle.syntheticTestOnly` and returns `G1_NOT_READY`; (d) Phase 2G `tickProvisioningJob` reads `signupRegistration.syntheticTestOnly` and returns `MOCK_EVIDENCE_REJECTED` + operator alert. Phase 2H (suspension) is naturally safe because synthetic cycles never create a `ClubSubscription`. |
+| 6 | Synthetic payment events remain subject to normal Stripe webhook signature verification, idempotency, and reconciliation | **PASS** | Webhook route is **unchanged** — same signature verification via `stripe.webhooks.constructEvent`, same `livemode=true` 403 guard, same unique-index dedup on `StripeWebhookEvent.id`, same 7-signal correlator for renewal classification. Synthetic cycles natively integrate through the same path. |
+| 7 | Synthetic data excluded from operational reporting through actual query filters, not merely a database index | **PARTIAL** | `syntheticTestOnly` column + `@@index` on all 5 tables provides O(1) exclusion capability. **Current operational reports** (which read `BillingCycle` + `ClubSubscription`) naturally exclude synthetic rows because synthetic cycles never produce a `ClubSubscription` row (service writes nothing beyond pre-tenancy chain). **Deferred:** adding `WHERE syntheticTestOnly: { not: true }` filters to admin-facing signup-registration + reconciliation-ledger views when those surfaces are built. **Not a blocker for sandbox testing** — no operational report reads the synthetic chain today. |
+| 8 | Existing commercial Terms of Service approval gate remains unchanged | **PASS** | `assertTermsOfServiceApproved()` in `src/lib/billing/terms-of-service.ts` is **byte-identical** to the pre-M2-Synthetic version. Verified by regression test scenario §1 ("still refuses DEVELOPMENT_FIXTURE status" + "still refuses labels starting with ToS-dev-fixture" + does NOT accept SYNTHETIC_TEST_ONLY). The synthetic service reads its own ToS doc via a SEPARATE `readSyntheticTermsOfService()` helper. |
+
+### 21c Validation summary
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run tests/signup-2-m2-synthetic-sandbox.test.ts` — **57/57 pass** (45 original + 12 new hardening scenarios)
+- `npx vitest run tests/signup-2*.test.ts` — **1260/1260 pass + 5 Postgres-only skips** across 54 files
+- DRH-1 40539575357 — conclusion: success
+- Staging health 200
+- All founder-installed secret digests unchanged
+
+### 21d Final M2-SyntheticSandbox acceptance recommendation
+
+**🟢 GO** for founder-driven Stripe sandbox Checkout.
+
+**Precise activation sequence** (claude will NOT execute until founder explicitly authorises in a subsequent message):
+
+```bash
+# Step 1 — enable the two env flags.  Both are reversible single
+#          secret-set operations; neither touches founder-installed
+#          Stripe credentials.
+flyctl secrets set --app spectre-staging \
+  SPECTRE_STRIPE_SDK_MODE=test \
+  SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX=1
+
+# Step 2 — claude will drive the synthetic-fixture + Checkout session
+#          creation via the authenticated admin route or an operator-
+#          CLI invocation.  Claude authenticates as a staging
+#          SUPER_ADMIN; synthetic initiate route checks the session
+#          cookie + SUPER_ADMIN role.
+
+# Step 3 — founder receives a Stripe-hosted Checkout URL (cs_test_...
+#          on checkout.stripe.com).  Founder completes the ACSS
+#          mandate signing in a browser using Stripe's published
+#          test banking details (routing 11000-000-11; account
+#          000123456789 per Stripe docs).
+
+# Step 4 — on return, the single-use nonce is consumed + the mandate
+#          is persisted with syntheticTestOnly=true.  Subscription
+#          creation + webhook delivery proceed through the normal
+#          M1d + M2 pathways with the marker intact.
+
+# Step 5 — teardown (claude-driven):
+teardownSyntheticTestFixtures()  // deletes all syntheticTestOnly=true rows
+flyctl secrets unset --app spectre-staging SPECTRE_STRIPE_SDK_MODE SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX
+
+# Step 6 — verify 3 founder-installed Stripe secret digests unchanged + health 200.
+```
+
+**Flags enabled during the test window:**
+- `SPECTRE_STRIPE_SDK_MODE=test` — engages the real Stripe SDK adapter against founder-installed sandbox credentials
+- `SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX=1` — unlocks the synthetic sandbox code path (gated additionally by `FLY_APP_NAME === "spectre-staging"` + authenticated SUPER_ADMIN)
+
+**Flags that remain OFF throughout the window:**
+- `SPECTRE_SIGNUP_2B_ATTESTATION_LIVE` (synthetic path uses its own synthetic ToS, not the attestation production flow)
+- `SPECTRE_SIGNUP_2E_PAYMENT_LIVE` (webhook dispatcher stays in `received_disabled` mode)
+- `SPECTRE_SIGNUP_2F_ACTIVATION_LIVE` (activation gate stays off; synthetic cycles can't reach it anyway)
+- `SPECTRE_SIGNUP_2G_PROVISIONING_LIVE` (provisioning stays off)
+- `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE` (suspension lifecycle stays off)
+
+**Duration:** short — ideally under 2 hours wall-clock for the full §16f scenario drill. The two env flags are torn down immediately after fixture teardown.
+
+**Rollback:** `flyctl secrets unset SPECTRE_STRIPE_SDK_MODE SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX` reverts to v959-equivalent state (mode=mock, no synthetic sandbox reachable). Full teardown of synthetic rows via `teardownSyntheticTestFixtures()`.
+
+### 21e Non-authorisations preserved (founder §3)
+
+- No Stripe SDK enabled (mode still unset).
+- No synthetic sandbox flag set.
+- No Stripe Checkout initiated.
+- No test subscriptions created.
+- No founder-installed secrets modified.
+- No DEVELOPMENT_FIXTURE ToS relabelled as APPROVED.
+- No commercial ToS gate weakened for production paths.
+- No activation / provisioning / suspension flag set.
+- No real customer tenants touched.
+- No production deployment.
+
+### 21f Residual follow-ons (not blockers)
+
+- **§7 reporting-filter follow-on:** when admin-facing signup-registration or reconciliation-ledger views are built, add `WHERE syntheticTestOnly: false` filters. Current operational surfaces don't read these chains.
+- **Operator CLI script:** a thin `scripts/signup-2-m2-synthetic-driver.mjs` could streamline fixture create → nonce issue → URL print → wait → teardown. Can be delivered as part of the actual test window; not needed for authorisation.
+
+---
+
+**End of §21.** Hardened baseline at `sha-16fc3391e3a1` / Fly v959
+is READY for founder-authorised PATH A sandbox Checkout.
