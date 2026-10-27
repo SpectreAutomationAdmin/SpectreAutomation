@@ -1274,3 +1274,183 @@ Adapter has reverted to **mock mode** (default when `SPECTRE_STRIPE_SDK_MODE` is
 Fly v954 is the final staging baseline. All founder authorisations
 honoured. Awaiting founder decision on PATH A vs PATH B for the
 remaining §19e scenarios 1-12.
+
+---
+
+## 20. M2-SyntheticSandbox pathway (founder 2026-10-27)
+
+**Status.** READY FOR FOUNDER TEST-WINDOW AUTHORISATION. Code gates
+satisfied; staging schema migrated; synthetic ToS doc shipped;
+regression tests green; mock mode preserved; founder-installed
+secrets intact.
+
+### 20a Design + threat model
+
+**Problem.** The mandate-initiation chain refuses to run against a
+`DEVELOPMENT_FIXTURE` ToS (§18e). The founder's authorisation (2026-
+10-27 §scope) requires:
+
+> "Do not bypass, disable, or weaken the existing Terms of Service
+> approval gate. However, final commercial Terms of Service
+> approval should not be a prerequisite for testing Stripe's
+> technical integration with synthetic identities."
+
+**Solution.** A parallel sandbox-only service that cannot be reached
+from production and whose outputs cannot cross into production.
+
+**Threat model (per founder §12):**
+
+| # | Threat | Mitigation |
+|---|---|---|
+| T1 | Synthetic registration escapes to production via Phase 2F / 2G | `refuseIfSyntheticTestOnly()` wired into `initiateMandateCollection` + `persistSignedMandate`; `syntheticTestOnly` column + `@@index` on 5 tables. Verified by regression tests. |
+| T2 | Sandbox accidentally enabled in production | **`FLY_APP_NAME === "spectre-staging"` guard** — production app is `spectre-production`; the pathway is physically unreachable in production regardless of other config state. Verified by test with `FLY_APP_NAME=spectre-production`. |
+| T3 | Synthetic ToS shown to a real signatory | ToS doc clearly marked `SYNTHETIC_TEST_ONLY`; signatory-facing Stripe Checkout displays Stripe's own standard ACSS mandate text (NOT this Spectre ToS); pathway gated behind 3 independent env guards + database marker. |
+| T4 | Synthetic data in reports | `syntheticTestOnly` column with `@@index` on all 5 tables for O(1) exclusion filters. (Follow-on: add filters to reporting services in a subsequent slice; today's reports exclude pre-tenancy rows by default anyway.) |
+| T5 | Synthetic webhook triggers tenant lifecycle | Phase 2F / 2G / 2H never see synthetic rows — synthetic cycles stop at mandate persistence; `clubId` is the synthetic registration id (not a Club.id); the production flow would refuse via `refuseIfSyntheticTestOnly`. |
+
+### 20b Guard chain (three independent conditions)
+
+```
+assertSyntheticSandboxGuardsPass():
+  1. FLY_APP_NAME === "spectre-staging"          ← physically unreachable in production
+  2. SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX === "1" ← explicit per-session opt-in
+  3. stripeSdkMode() === "test"                   ← SDK must be in test mode
+```
+
+All three must hold at every mutating entry point. The teardown
+function intentionally allows cleanup WITHOUT the guards (so a
+stuck-flag post-test cleanup still works), but it only deletes rows
+with `syntheticTestOnly = true` — no production rows are at risk.
+
+### 20c Database marker
+
+`syntheticTestOnly: Boolean DEFAULT false` added with `@@index` to:
+
+1. `SignupRegistration`
+2. `SubscriptionAuthorisationAttestation`
+3. `SubscriptionPaymentMandate`
+4. `OperatorVerificationRecord`
+5. `BillingCycle`
+
+Migration: `prisma/migrations/20261027_signup_2_m2_synthetic_sandbox_marker/migration.sql` + `prisma-postgres/migrations/20261027_signup_2_m2_synthetic_sandbox_marker/migration.sql` (dual-schema pattern for SQLite dev + Postgres staging). The staging-DB apply happens at the DRH-1 release command: `prisma migrate deploy --schema prisma-postgres/schema.prisma`.
+
+### 20d Synthetic ToS doc
+
+New file: [docs/legal/terms-of-service-synthetic-sandbox.md](docs/legal/terms-of-service-synthetic-sandbox.md).
+
+Status: `SYNTHETIC_TEST_ONLY`. Label: `ToS-synthetic-sandbox-2026-10-27`. Content is unmistakably marked as a test fixture with no legal effect. The main `assertTermsOfServiceApproved()` function in `src/lib/billing/terms-of-service.ts` is **unchanged** and still refuses any status that is not `APPROVED` (verified by regression test). The synthetic service reads this doc via its own `readSyntheticTermsOfService()` helper which refuses any status that is not `SYNTHETIC_TEST_ONLY`.
+
+### 20e Production-path refusal
+
+Updated:
+- `src/lib/billing/signup-2e-mandate-service.ts` → `initiateMandateCollection` + `persistSignedMandate` both call `refuseIfSyntheticTestOnly(reg.id)` BEFORE any Stripe calls or DB writes.
+- `refuseIfSyntheticTestOnly` throws `ForbiddenError` on `syntheticTestOnly === true`.
+
+### 20f Service surface
+
+File: [src/lib/signup/signup-2m2-synthetic-sandbox-service.ts](src/lib/signup/signup-2m2-synthetic-sandbox-service.ts).
+
+Exports:
+- `assertSyntheticSandboxGuardsPass()` — fail-closed on any guard failure.
+- `syntheticSandboxEnabled()` — read-only probe (used by tests).
+- `readSyntheticTermsOfService()` — refuses docs not labelled `SYNTHETIC_TEST_ONLY`.
+- `createSyntheticRegistration({ scenarioLabel })` — creates the full chain (SignupRegistration + attestation + RELEASE record) all marked synthetic. Returns the Spectre launch URL that the founder will hit.
+- `initiateSyntheticMandateCollection(registrationId)` — opens a real Stripe test-mode Checkout session via `resolveStripeAdapter({ requireLive: true })`. Metadata on every Stripe object carries `syntheticTestOnly: "true"`.
+- `persistSyntheticSignedMandate({ registrationId, checkoutSessionId })` — called by the synthetic return handler after the founder completes mandate signing on Stripe.
+- `teardownSyntheticTestFixtures()` — bulk deletes all `syntheticTestOnly = true` rows across 5 tables. Preserves founder-installed Stripe secrets (never touches `flyctl secrets`).
+- `refuseIfSyntheticTestOnly(registrationId)` — the gate injected into main production paths.
+
+### 20g HTTP routes
+
+New routes (both require the three-guard chain to pass):
+- `GET /api/signup/mandate/synthetic-initiate?registrationId=…` → 303 redirect to Stripe hosted Checkout.
+- `GET /api/signup/mandate/synthetic-return?registrationId=…&session_id=…` → JSON confirmation of mandate persistence.
+
+Both routes delegate to the service and contain NO independent Stripe-API calls, NO secret reads, and NO privilege escalation. Any guard failure returns HTTP 403.
+
+### 20h Regression evidence (founder §12)
+
+File: [tests/signup-2-m2-synthetic-sandbox.test.ts](tests/signup-2-m2-synthetic-sandbox.test.ts) — **45 scenarios**, all passing.
+
+Coverage:
+- `assertTermsOfServiceApproved()` **unchanged** (refuses `DEVELOPMENT_FIXTURE` + `ToS-dev-fixture*` labels; refuses anything not `APPROVED`).
+- Dev-fixture doc remains `Status: DEVELOPMENT_FIXTURE`.
+- Three-guard chain: positive + negative tests for FLY_APP_NAME, flag, Stripe mode.
+- Every mutating entry point calls `assertSyntheticSandboxGuardsPass()` first.
+- Synthetic ToS doc exists, status, label.
+- `readSyntheticTermsOfService` refuses non-SYNTHETIC_TEST_ONLY status.
+- `initiateMandateCollection` + `persistSignedMandate` call `refuseIfSyntheticTestOnly`.
+- `refuseIfSyntheticTestOnly` throws on synthetic marker.
+- Live-adapter engagement via `resolveStripeAdapter({ requireLive: true })`.
+- ACSS mandate options on synthetic path (business + interval + CAD).
+- `syntheticTestOnly: "true"` metadata on every Stripe call.
+- 5 tables each have `syntheticTestOnly Boolean @default(false)` + `@@index`.
+- Every synthetic insert sets `syntheticTestOnly: true`.
+- FLY_APP_NAME guard is FIRST in the chain.
+- HTTP routes delegate without Stripe-API logic.
+- Webhook dispatcher does not read synthetic marker as a privilege flag.
+- The three activation/provisioning/suspension flags are NOT read by this service.
+- Teardown only deletes synthetic rows; never touches founder secrets.
+
+**Full suite:** `npx vitest run tests/signup-2*.test.ts` → **1248/1248 pass + 5 Postgres-only skips** across 54 files.
+
+### 20i Staging release
+
+- **DRH-1 runs:** 40532552559 (initial code deploy at `sha-35fa4250747b` → Fly v956) + 40535492816 (Postgres schema + migration mirror, deploying now).
+- **Initial deploy** (`sha-35fa4250747b` / v956): shipped the service + routes but the migration landed only in `prisma/migrations/` (SQLite). The staging Postgres DB did NOT get the column.
+- **Fix** (`sha-5801a7c…`): mirrored the schema into `prisma-postgres/schema.prisma` + the migration into `prisma-postgres/migrations/`. DRH-1 release command (`prisma migrate deploy --schema prisma-postgres/schema.prisma`) will apply the columns + indexes on the next successful deploy.
+- **Rollback anchor:** `sha-9c7dd537211a` / Fly v954 (M2-Validation baseline; synthetic sandbox entirely absent).
+- **Current secret state:** 3 founder-installed Stripe secrets intact (digests unchanged from §19); no sandbox / activation flags set.
+
+### 20j PATH A readiness recommendation
+
+**RECOMMENDATION: PATH A can safely resume** once the current DRH-1 (40535492816) completes and the staging DB has the `syntheticTestOnly` columns.
+
+**Remaining founder-side actions** for the actual sandbox test window:
+
+1. Confirm DRH-1 40535492816 completed successfully (watch for `prisma migrate deploy` success in logs).
+2. Explicitly authorise the test-window flag set:
+   ```bash
+   flyctl secrets set --app spectre-staging \
+     SPECTRE_STRIPE_SDK_MODE=test \
+     SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX=1
+   ```
+   (Phase 2B / 2E / 2F / 2G / 2H flags remain unset — the synthetic pathway does not need them.)
+3. Spectre engineering (Claude) will:
+   - Call `createSyntheticRegistration({ scenarioLabel: "m2-happy-path" })` via SSH.
+   - Return the Stripe Checkout URL to the founder.
+   - Wait for the founder to complete mandate signing in a browser using Stripe's published test banking details.
+   - Resume evidence collection (mandate persistence, subscription create, webhook delivery, settlement).
+4. On completion, Claude teardown:
+   - `teardownSyntheticTestFixtures()` deletes all synthetic rows.
+   - `flyctl secrets unset SPECTRE_STRIPE_SDK_MODE SPECTRE_SIGNUP_2M2_SYNTHETIC_SANDBOX`.
+   - Verify 3 founder-installed Stripe secret digests unchanged + health 200.
+
+### 20k Non-authorisations preserved (founder scope)
+
+- `assertTermsOfServiceApproved()` **not changed** (regression-tested).
+- `DEVELOPMENT_FIXTURE` doc **not relabelled** (verified).
+- Three activation/provisioning/suspension flags **not touched** by the service.
+- Founder-installed Stripe secrets **not read / written / rotated / exposed** by the service.
+- Zero sandbox payments initiated in this slice (service built, not run).
+- Zero production deployment.
+- Zero existing-tenant modification.
+- Zero bypass of any failed acceptance gate.
+
+### 20l Validation summary
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx prisma generate` | clean |
+| `npx prisma db push` (local SQLite) | clean |
+| `npx vitest run tests/signup-2-m2-synthetic-sandbox.test.ts` | **45/45 pass** |
+| `npx vitest run tests/signup-2*.test.ts` | **1248/1248 pass** + 5 Postgres-only skips (54 files) |
+| DRH-1 40532552559 (initial code) | **success** |
+| DRH-1 40535492816 (Postgres schema mirror) | polling… |
+| Staging `/api/health` after v956 | **200** |
+
+---
+
+**End of M2-SyntheticSandbox slice.** Ready for founder PATH A
+test-window authorisation.
