@@ -152,21 +152,35 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
     async createMandateCheckoutSession(args: CreateMandateSessionArgs): Promise<MandateSessionRef> {
       const session = await withStripeRetry(
         () => stripe.checkout.sessions.create(
-          // M2 (2026-10-27): payment_method_types is set via the
-          // typed `payment_method_configuration` surface in the
-          // Clover API; here we pass the ACSS mandate options via
-          // `payment_method_options.acss_debit`.  The API infers
-          // acss_debit from the mandate options presence.
+          // M2-ACSS-Audit (2026-10-27): per Stripe docs the Canadian
+          // ACSS Debit flow for ANNUAL SUBSCRIPTIONS must:
+          //   1. Use Checkout `mode: "setup"` (subscription mode is
+          //      explicitly unsupported for ACSS per
+          //      https://docs.stripe.com/payments/acss-debit).
+          //   2. Set `payment_method_types: ["acss_debit"]` EXPLICITLY
+          //      (not inferred from payment_method_options).
+          //   3. Set `payment_method_options.acss_debit.mandate_options.
+          //      default_for = ["invoice", "subscription"]` so the saved
+          //      mandate can be reused by future invoices + subscription
+          //      renewals without re-collecting from the signatory.
+          //   4. Set `payment_method_options.acss_debit.setup_future_usage
+          //      = "off_session"` so Stripe treats the mandate as valid
+          //      for future unattended renewals.
+          //   5. Keep `payment_schedule: "interval"` + `interval_description`
+          //      + `transaction_type: "business"` (ACSS requires these).
           {
             mode: "setup",
             customer: args.stripeCustomerId,
+            payment_method_types: ["acss_debit"],
             payment_method_options: {
               acss_debit: {
                 currency: "cad",
+                setup_future_usage: "off_session",
                 mandate_options: {
                   payment_schedule: "interval",
                   interval_description: args.acssMandate.intervalDescription,
                   transaction_type: "business",
+                  default_for: ["invoice", "subscription"],
                 },
               },
             },
