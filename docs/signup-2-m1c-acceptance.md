@@ -20,12 +20,11 @@ The strengthened static regression guard prevents the pending count
 from growing silently; mechanical migration tracked for follow-on
 micro-slices.
 
-**Implementation commit.** `sha-c5faf3c6439fb195a27bdabad56bfde37cca610b`
-on branch `staging-deploy/web1b1-framer-fidelity`.
-**Deployed image.** `registry.fly.io/spectre-staging:sha-c5faf3c6439f`
-(digest `sha256:353f47504b4443dbc1dff5f8d18dd242a2e7ccf84f1cfda873f747fd7ef33ec5`)
-on Fly release **v930**.
-**DRH-1 run.** 40430152156 — conclusion: success.
+**Implementation commits.**
+- `sha-c5faf3c6439fb195a27bdabad56bfde37cca610b` — 7-path migration + multi-signal classifier + strict static guard. Deployed as **v930** on `sha-c5faf3c6439f`. DRH-1 run 40430152156.
+- `sha-c478eafd3678bfc7e7ff1b23eac0a9b4a8c56fdc` — fixture `PaymentReconciliationEntry(PAYMENT_SETTLED)` seed to simulate complete prior-settled state for the multi-signal classifier. Deployed as **v932** on `sha-c478eafd3678`. DRH-1 run 40432236942.
+
+**Final deployed image.** `registry.fly.io/spectre-staging:sha-c478eafd3678` on Fly release **v932**.
 **Rollback anchor.** M1b image `sha-ae18df921017` / Fly v926.
 **Authored branch.** `staging-deploy/web1b1-framer-fidelity`.
 **Date.** 2026-10-26 → 2026-10-27 (acceptance window).
@@ -350,9 +349,11 @@ M1b spec on the M1c image proves the regression suite still passes.
 
 ```
 $ npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated
-  ok 1 [staging-authenticated] › tests\e2e\signup-2-m1b-posting-race.staging.spec.ts
-  1 passed  (M1c target image sha-c5faf3c6439f / Fly v930)
+  ok 1 [staging-authenticated] › tests\e2e\signup-2-m1b-posting-race.staging.spec.ts (2.5m)
+  1 passed  (2.8m)
 ```
+
+Final image under test: `sha-c478eafd3678` / Fly **v932**.
 
 | # | Scenario | Observed | Pass |
 |---|---|---|---|
@@ -385,18 +386,55 @@ migration of the remaining 41 callers.
 
 ## 8. DRH-1 deployment + image provenance (founder §8)
 
-- **Run:** 40430152156 — conclusion: success
+### Deploy 1 — M1c migration + classifier + strict guard
+
+- **DRH-1 run:** 40430152156 — conclusion: success
 - **Branch:** `staging-deploy/web1b1-framer-fidelity`
 - **Commit:** `sha-c5faf3c6439fb195a27bdabad56bfde37cca610b`
 - **Image:** `registry.fly.io/spectre-staging:sha-c5faf3c6439f`
 - **Digest:** `sha256:353f47504b4443dbc1dff5f8d18dd242a2e7ccf84f1cfda873f747fd7ef33ec5`
 - **Fly release:** v930
-- **Build + push + deploy + verify:** all steps passed; machine `8e256dc7006408` on `sha-c5faf3c6439f`
-- **Worker:** redeployed as part of the standard DRH-1 flow
-- **Health probe:** `/api/health` returned **200** at acceptance open
+- **Health probe at open:** `/api/health` → **200**
+- **First Playwright attempt:** 1 failed (scenario B.renewal — fixture incompleteness surfaced by the stricter classifier). See §8a below for the forensic finding.
+
+### Deploy 2 — fixture `PaymentReconciliationEntry(PAYMENT_SETTLED)` seed fix
+
+- **DRH-1 run:** 40432236942 — conclusion: success
+- **Commit:** `sha-c478eafd3678bfc7e7ff1b23eac0a9b4a8c56fdc`
+- **Image:** `registry.fly.io/spectre-staging:sha-c478eafd3678`
+- **Fly release:** v932
+- **Health probe at open:** `/api/health` → **200**
 - **Rollback anchor:** M1b image `sha-ae18df921017` / Fly v926
 - **Flags during acceptance:** `SPECTRE_SIGNUP_2E_PAYMENT_LIVE=1`, `SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1`, `STRIPE_WEBHOOK_SIGNING_SECRET=***` (spec-managed set + unset)
-- **Flags after acceptance:** all SIGNUP-2 flags unset by spec teardown
+- **Flags after acceptance:** all SIGNUP-2 flags unset by spec teardown (verified via `flyctl secrets list` grep returning 0 matches)
+
+### §8a — First-run forensic finding (resolved in Deploy 2)
+
+The first Playwright run failed scenario B.renewal because the pre-M1c
+active-scenario fixture seeded `cycle.settlementConfirmedAt = now` but
+did NOT seed a corresponding `PaymentReconciliationEntry(entryType=
+PAYMENT_SETTLED, billingCycleId = cycle.id)`. Under M1c's multi-signal
+classifier (founder §5), this reads as an INCOMPLETE prior-settled
+state — one timestamp without a ledger entry — which the classifier
+correctly refuses to treat as RENEWAL. The classifier fell back to
+INITIAL (safer: no suspension), tenant stayed ACTIVE, assertion
+failed.
+
+**This is the hardening working as intended.** A real production
+flow writes BOTH `settlementConfirmedAt` AND the reconciliation
+entry (see `onPaymentIntentSucceeded` in
+`src/lib/billing/signup-2e-webhook-dispatch.ts`). The fixture was
+simulating a partially-persisted state the real system never
+produces.
+
+**Fix:** Deploy 2 extends `m1Seed` in
+`scripts/signup-2-phase-2b-staging-fixture.mjs` to insert the
+reconciliation entry at seed time with the same shape
+`onPaymentIntentSucceeded` would persist (clubId, billingCycleId,
+entryType=`PAYMENT_SETTLED`, amountMinorUnits=3800000n, currency
+=cad, providerEventId, providerPaymentIntentId, providerChargeId,
+occurredAt). The second Playwright run passed all 6 scenarios in
+2.5 m.
 
 ---
 
@@ -478,7 +516,8 @@ subscriptions, cycles, or reconciliation entries remain.
 - **Validation performed.**
   - `npm run typecheck` — clean.
   - `npx vitest run tests/signup-2*.test.ts` — **997/997 pass** across 48 files (full SIGNUP-2 regression).
-  - `npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated` — **1/1 pass** on M1c image (reused M1b spec; same end-to-end suspension-refusal path).
+  - `npx playwright test tests/e2e/signup-2-m1b-posting-race.staging.spec.ts --project=staging-authenticated` — **1/1 pass (2.5 m)** on final M1c image `sha-c478eafd3678` / Fly v932 (reused M1b spec; same end-to-end suspension-refusal path).
+  - First Playwright attempt on `sha-c5faf3c6439f` / v930 failed scenario B.renewal because the pre-M1c fixture was incomplete under the multi-signal classifier. Fixture fix shipped in Deploy 2; re-run passed clean (§8a).
 - **Validation intentionally skipped.** Full `npm run quality` — M1c touches four service modules + one classifier + 2 test files + 1 registry. Risk surface covered by the targeted contract + reused Playwright suite.
 - **Remaining risk.** §11. 41 pending migrations with bounded ms-scale race windows; strict CI guard caps the pending count; follow-on M1d / M1e tracked.
 
