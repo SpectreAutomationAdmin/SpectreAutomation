@@ -35,14 +35,14 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/observability/logger";
 import { AppError, ForbiddenError } from "@/lib/errors";
 import { env } from "@/lib/env";
-import { resolveStripeAdapter, resolveAcssPriceId, stripeAdapterMode } from "./stripe-adapter";
+import { resolveStripeAdapter, resolveAcssPriceId, stripeSdkMode } from "./stripe-adapter";
 
-// M2 (2026-10-27): when the adapter is live, read the real Stripe
-// Price id from STRIPE_ACSS_PRICE_ID.  When mock, fall back to the
-// deterministic Phase 2E placeholder.
+// M2 (2026-10-27): when the adapter is in SDK mode (test), read the
+// real Stripe Price id from STRIPE_ACSS_PRICE_ID.  When mock, fall
+// back to the deterministic Phase 2E placeholder.
 const MOCK_PRICE_ID = "price_signup2e_mock_38kcad_annual";
 function priceId(): string {
-  return stripeAdapterMode() === "live" ? (resolveAcssPriceId() ?? MOCK_PRICE_ID) : MOCK_PRICE_ID;
+  return stripeSdkMode() === "test" ? (resolveAcssPriceId() ?? MOCK_PRICE_ID) : MOCK_PRICE_ID;
 }
 
 export function assertPhase2ePaymentFlag(): void {

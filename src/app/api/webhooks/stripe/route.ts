@@ -40,6 +40,20 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const event = verification.event;
 
+  // M2-Validation (2026-10-27, founder §2): staging MUST refuse any
+  // event whose livemode === true.  Even if someone misconfigures the
+  // Stripe dashboard to send live-money events here, this guard
+  // prevents them from being persisted, dispatched, or processed.
+  // Production reversal of this guard requires a separately-authorised
+  // slice.
+  if (event.livemode === true) {
+    logger.warn("stripe.webhook.livemode_refused", {
+      stripeEventIdTail: event.id.slice(-8),
+      eventType: event.type,
+    });
+    return new NextResponse("livemode_refused", { status: 403 });
+  }
+
   // Durable receipt FIRST.  Dedup on event id (unique index on
   // StripeWebhookEvent.stripeEventId).  Any later processing works
   // off this stored event.

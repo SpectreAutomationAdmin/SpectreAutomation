@@ -258,11 +258,15 @@ describe("SIGNUP-2 M2 · reconciliation service · idempotent + fail-safe", () =
     expect(content).toMatch(/reason: "already_reversed"/);
   });
 
-  it("returns `budget_exhausted` when wall-clock budget expires", async () => {
+  it("returns `budget_exhausted` from the legacy single-shot shim when scheduled polling has not yet terminated", async () => {
+    // M2-Validation (2026-10-27) refactor: the service is now
+    // step-wise + schedule-driven.  The legacy single-shot entry
+    // point still emits `budget_exhausted` for backward compatibility
+    // when the step returns non-terminal (pending / stalled).
     const path = "src/lib/billing/signup-2m2-reconciliation-service.ts";
     const content = readFileSync(join(process.cwd(), path), "utf8");
     expect(content).toMatch(/reason: "budget_exhausted"/);
-    expect(content).toMatch(/now\(\) - started < budget/);
+    expect(content).toMatch(/stepReconcileBalanceTransaction/);
   });
 
   it("terminal success writes PAYMENT_SETTLED entry + flips cycle to SETTLED", async () => {
@@ -282,7 +286,8 @@ describe("SIGNUP-2 M2 · mandate service uses STRIPE_ACSS_PRICE_ID when live", (
     );
     expect(content).toMatch(/const MOCK_PRICE_ID = "price_signup2e_mock_38kcad_annual"/);
     expect(content).toMatch(/function priceId\(\)/);
-    expect(content).toMatch(/stripeAdapterMode\(\) === "live"/);
+    // M2-Validation (2026-10-27): mandate service now uses stripeSdkMode() === "test".
+    expect(content).toMatch(/stripeSdkMode\(\) === "test"/);
     expect(content).toMatch(/resolveAcssPriceId\(\)/);
   });
 
