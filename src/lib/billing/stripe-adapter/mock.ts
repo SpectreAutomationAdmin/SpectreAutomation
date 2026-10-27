@@ -23,6 +23,8 @@ import type {
   VerifyWebhookArgs,
   WebhookVerificationResult,
   StripeEventShape,
+  SetupIntentResult,
+  SetupIntentStatus,
 } from "./types";
 
 function stableIdFromKey(prefix: string, idempotencyKey: string): string {
@@ -57,13 +59,38 @@ export function createMockStripeAdapter(): StripeAdapter {
     async retrieveCheckoutSession(id: string): Promise<CheckoutSessionResult> {
       // Mock: a session retrieval always returns "complete" with a
       // stable mandate id derived from the session id.  The sign-in
-      // moment is purely virtual.
+      // moment is purely virtual.  M3 (2026-10-27) extends the shape
+      // with setupIntentId + setupIntentStatus = "succeeded" so the
+      // instant-verification branch exercises in acceptance tests.
+      // Microdeposit + failure branches are exercised via explicit
+      // webhook injection in the test harness.
       return {
         checkoutSessionId: id,
         status: "complete",
         mandateId: `mandate_mock_${id.slice(-16)}`,
         paymentMethodId: `pm_mock_${id.slice(-16)}`,
         customerId: `cus_mock_${id.slice(-16)}`,
+        setupIntentId: `seti_mock_${id.slice(-16)}`,
+        setupIntentStatus: "succeeded",
+        evidenceSource: "mock-stripe",
+      };
+    },
+
+    async retrieveSetupIntent(id: string): Promise<SetupIntentResult> {
+      // Mock: deterministic succeeded SetupIntent that lets M3's §5
+      // Stripe-state re-validation pass in acceptance tests.
+      // Microdeposit / failure branches are produced via explicit
+      // webhook injection, not by this read.
+      const status: SetupIntentStatus = "succeeded";
+      return {
+        setupIntentId: id,
+        status,
+        customerId: `cus_mock_${id.slice(-16)}`,
+        paymentMethodId: `pm_mock_${id.slice(-16)}`,
+        mandateId: `mandate_mock_${id.slice(-16)}`,
+        nextAction: null,
+        lastSetupErrorCode: null,
+        lastSetupErrorMessage: null,
         evidenceSource: "mock-stripe",
       };
     },

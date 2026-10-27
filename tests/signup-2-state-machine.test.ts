@@ -20,9 +20,16 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 describe("SIGNUP-2 · subscription states enumerated", () => {
-  it("defines exactly the ten documented states", () => {
+  // M3 (2026-10-27): the enum grew from 10 to 13 with the addition of
+  // the bank-verification tier (BANK_VERIFICATION_PENDING, BANK_VERIFIED,
+  // BANK_VERIFICATION_FAILED).  The enum order places them immediately
+  // after AUTHORISED to reflect the lifecycle ordering.
+  it("defines exactly the thirteen documented states (M3)", () => {
     expect(SUBSCRIPTION_STATES).toEqual([
       "AUTHORISED",
+      "BANK_VERIFICATION_PENDING",
+      "BANK_VERIFIED",
+      "BANK_VERIFICATION_FAILED",
       "INITIATED",
       "AWAITING_SETTLEMENT",
       "SETTLED",

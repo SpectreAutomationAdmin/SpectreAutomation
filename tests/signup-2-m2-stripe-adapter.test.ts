@@ -278,25 +278,35 @@ describe("SIGNUP-2 M2 · reconciliation service · idempotent + fail-safe", () =
   });
 });
 
-describe("SIGNUP-2 M2 · mandate service uses STRIPE_ACSS_PRICE_ID when live", () => {
-  it("priceId() delegates to resolveAcssPriceId when mode=live, falls to MOCK otherwise", () => {
+describe("SIGNUP-2 M3 (2026-10-27) · subscriptions.create moved behind bank-verification gate", () => {
+  // M3 removed priceId()/createSubscription from signup-2e-mandate-service.ts.
+  // The sole production call-site is now advanceToPaymentInitiated in
+  // signup-2m3-bank-verification-service.ts, which uses resolveAcssPriceId()
+  // after the §5 Stripe-state re-validation passes.
+  it("M3 service resolves STRIPE_ACSS_PRICE_ID via resolveAcssPriceId()", () => {
     const content = readFileSync(
-      join(process.cwd(), "src/lib/billing/signup-2e-mandate-service.ts"),
+      join(process.cwd(), "src/lib/billing/signup-2m3-bank-verification-service.ts"),
       "utf8",
     );
-    expect(content).toMatch(/const MOCK_PRICE_ID = "price_signup2e_mock_38kcad_annual"/);
-    expect(content).toMatch(/function priceId\(\)/);
-    // M2-Validation (2026-10-27): mandate service now uses stripeSdkMode() === "test".
-    expect(content).toMatch(/stripeSdkMode\(\) === "test"/);
     expect(content).toMatch(/resolveAcssPriceId\(\)/);
+    expect(content).toMatch(/stripePriceId:\s*priceId/);
   });
 
-  it("createSubscription args pass the resolved price id, not the hardcoded mock", () => {
+  it("M3 service's createSubscription uses the deterministic idempotencyKey", () => {
+    const content = readFileSync(
+      join(process.cwd(), "src/lib/billing/signup-2m3-bank-verification-service.ts"),
+      "utf8",
+    );
+    expect(content).toMatch(/stripe\.createSubscription\(\{/);
+    expect(content).toMatch(/idempotencyKey:\s*`signup-2m3-sub:/);
+  });
+
+  it("legacy mandate service no longer calls stripe.createSubscription directly", () => {
     const content = readFileSync(
       join(process.cwd(), "src/lib/billing/signup-2e-mandate-service.ts"),
       "utf8",
     );
-    expect(content).toMatch(/stripePriceId: priceId\(\)/);
+    expect(content).not.toMatch(/stripe\.createSubscription\(/);
   });
 });
 

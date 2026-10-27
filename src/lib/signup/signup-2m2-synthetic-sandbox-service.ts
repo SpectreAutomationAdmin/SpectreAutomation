@@ -551,6 +551,41 @@ export async function persistSyntheticSignedMandate(args: {
     throw new AppError("SIGNUP_2M2_SYNTHETIC_PRICE_ID_MISSING", "STRIPE_ACSS_PRICE_ID unset", 500);
   }
 
+  // SIGNUP-2 M3 (2026-10-27, founder §7): subscriptions.create is
+  // GLOBALLY GATED behind SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION.
+  // Even the synthetic sandbox path refuses when the flag is 0.
+  // The intent is unambiguous: disabling M3's payment-initiation
+  // flag must disable EVERY pathway that could create a Stripe
+  // subscription -- legacy mandate return handler, M3 advance,
+  // recovery endpoint, scheduled job, AND this synthetic path.
+  // When the ACSS amount-limit escalation resolves + the founder
+  // explicitly flips the flag, retries will proceed via
+  // recoverSyntheticSignedMandate.
+  if (process.env.SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION !== "1") {
+    logger.info("signup.synthetic.subscription_create_m3_blocked", {
+      registrationIdTail: reg.id.slice(-6),
+      note: "SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION != 1; no subscriptions.create may fire from any pathway",
+    });
+    await audit(null, {
+      action: "signup.synthetic.subscription_create_m3_blocked",
+      entityType: "SignupRegistration",
+      entityId: reg.id,
+      clubId: null,
+      meta: {
+        registrationIdTail: reg.id.slice(-6),
+        checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
+        stripeMandateIdTail: sessionResult.mandateId!.slice(-8),
+        stripePaymentMethodIdTail: sessionResult.paymentMethodId!.slice(-8),
+        syntheticTestOnly: true,
+      },
+    });
+    throw new AppError(
+      "SIGNUP_2M3_PAYMENT_INITIATION_DISABLED",
+      "SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION is 0 -- subscription creation refused on every pathway including synthetic sandbox. Mandate + PaymentMethod remain valid on Stripe.",
+      403,
+    );
+  }
+
   // M2-SyntheticSandbox-Repair (2026-10-27): wrap subscription
   // creation so a Stripe-side failure (e.g. ACSS amount limit) does
   // not crash the handler.  On failure, we write a structured

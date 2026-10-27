@@ -26,38 +26,73 @@ import { logger } from "@/lib/observability/logger";
 import { resolveStripeAdapter } from "./stripe-adapter";
 import type { StripeEventShape } from "./stripe-adapter";
 import { suspendTenant, type SuspensionTrigger } from "./signup-2h-tenant-lifecycle-service";
+import {
+  markBankVerified,
+  markBankVerificationPending,
+  markBankVerificationFailed,
+  classifyVerificationMethod,
+} from "./signup-2m3-bank-verification-service";
 
 export async function dispatchStripeEvent(event: StripeEventShape): Promise<void> {
-  switch (event.type) {
-    case "payment_intent.processing":
-      await onPaymentIntentProcessing(event);
-      break;
-    case "payment_intent.succeeded":
-      await onPaymentIntentSucceeded(event);
-      break;
-    case "payment_intent.payment_failed":
-      await onPaymentIntentFailed(event);
-      break;
-    case "charge.succeeded":
-      await onChargeSucceeded(event);
-      break;
-    case "charge.refunded":
-      await onChargeRefunded(event);
-      break;
-    case "charge.dispute.created":
-      await onChargeDisputeCreated(event);
-      break;
-    default:
-      logger.info("stripe.webhook.dispatch.unknown_event", {
-        stripeEventIdTail: event.id.slice(-8),
-        eventType: event.type,
-      });
-      break;
+  let deferred = false;
+  try {
+    switch (event.type) {
+      case "payment_intent.processing":
+        await onPaymentIntentProcessing(event);
+        break;
+      case "payment_intent.succeeded":
+        await onPaymentIntentSucceeded(event);
+        break;
+      case "payment_intent.payment_failed":
+        await onPaymentIntentFailed(event);
+        break;
+      case "charge.succeeded":
+        await onChargeSucceeded(event);
+        break;
+      case "charge.refunded":
+        await onChargeRefunded(event);
+        break;
+      case "charge.dispute.created":
+        await onChargeDisputeCreated(event);
+        break;
+      // SIGNUP-2 M3 (2026-10-27) -- bank-verification tier events.
+      case "setup_intent.succeeded":
+      case "setup_intent.requires_action":
+      case "setup_intent.setup_failed":
+      case "setup_intent.canceled":
+        await onSetupIntentEvent(event);
+        break;
+      default:
+        logger.info("stripe.webhook.dispatch.unknown_event", {
+          stripeEventIdTail: event.id.slice(-8),
+          eventType: event.type,
+        });
+        break;
+    }
+  } catch (err) {
+    if (err instanceof SignupM3DeferredEvent) {
+      deferred = true;
+    } else {
+      throw err;
+    }
   }
-  // Mark the stored event as processed.
+  if (deferred) {
+    // §6: do not mark processed.  The row stays with processedAt=null
+    // so replayDeferredSetupIntentEvents in persistSignedMandate picks
+    // it up when the correlating cycle lands.
+    return;
+  }
   await prisma.stripeWebhookEvent.update({
     where: { id: event.id },
     data: { processedAt: new Date(), processingResult: "success" },
+  }).catch((err) => {
+    const code = (err as { code?: string } | undefined)?.code;
+    if (code !== "P2025") {
+      logger.warn("stripe.webhook.mark_processed_failed", {
+        stripeEventIdTail: event.id.slice(-8),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 }
 
@@ -512,6 +547,169 @@ async function writeLedger(args: {
       entryType: args.entryType,
       detail: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/* ============================================================
+ * SIGNUP-2 M3 (2026-10-27) -- setup_intent.* handler
+ * ============================================================
+ * Routes the four setup_intent lifecycle events into the M3 bank-
+ * verification state writers.  Durable orphan reconciliation (§6):
+ * if the correlating BillingCycle has not been persisted yet (i.e.
+ * the signatory's return handler has not fired), DO NOT lose the
+ * event -- leave processedAt=null and log so the §6 replay in
+ * persistSignedMandate picks it up on first-cycle creation. */
+async function onSetupIntentEvent(event: StripeEventShape): Promise<void> {
+  const maybeSiObj = event.data?.object as Record<string, unknown> | undefined;
+  const setupIntentId = typeof maybeSiObj?.id === "string" ? maybeSiObj.id : null;
+  if (!setupIntentId || !maybeSiObj) {
+    logger.warn("stripe.webhook.setup_intent.missing_id", {
+      stripeEventIdTail: event.id.slice(-8),
+      eventType: event.type,
+    });
+    return;
+  }
+  const siObj: Record<string, unknown> = maybeSiObj;
+  // Try to correlate to a BillingCycle.  M3 writes
+  // stripeSetupIntentId on persistSignedMandate; if we can't find
+  // one, defer: the event remains unprocessed and §6 replay picks
+  // it up when the cycle lands.
+  const cycle = await prisma.billingCycle.findFirst({
+    where: { stripeSetupIntentId: setupIntentId },
+    // Deliberately NOT selecting syntheticTestOnly here -- the webhook
+    // dispatcher must not route on that marker; markBank* re-loads the
+    // cycle in its own transaction and records the marker in its audit
+    // meta.  See signup-2-m2-synthetic-sandbox.test.ts §12 regression.
+    select: { id: true, clubId: true, subscriptionStatus: true },
+  });
+  if (!cycle) {
+    logger.info("stripe.webhook.setup_intent.deferred_no_cycle", {
+      stripeEventIdTail: event.id.slice(-8),
+      eventType: event.type,
+      setupIntentIdTail: setupIntentId.slice(-8),
+    });
+    // Signal to dispatchStripeEvent not to mark processedAt.
+    throw new SignupM3DeferredEvent(`no cycle for setup_intent ${setupIntentId.slice(-8)}`);
+  }
+
+  try {
+    switch (event.type) {
+      case "setup_intent.succeeded": {
+        const stripe = resolveStripeAdapter();
+        let method: "INSTANT" | "MICRODEPOSITS" = "INSTANT";
+        try {
+          const si = await stripe.retrieveSetupIntent(setupIntentId);
+          method = classifyVerificationMethod({
+            previousState: (cycle.subscriptionStatus as any) ?? null,
+            si,
+          });
+        } catch (err) {
+          logger.warn("stripe.webhook.setup_intent.retrieve_failed", {
+            setupIntentIdTail: setupIntentId.slice(-8),
+            detail: err instanceof Error ? err.message : String(err),
+          });
+          // Fall back to history-based classification.
+          method = cycle.subscriptionStatus === "BANK_VERIFICATION_PENDING" ? "MICRODEPOSITS" : "INSTANT";
+        }
+        await markBankVerified({
+          billingCycleId: cycle.id,
+          verificationMethod: method,
+          stripeSetupIntentId: setupIntentId,
+          providerEventId: event.id,
+        });
+        break;
+      }
+      case "setup_intent.requires_action": {
+        const nextAction = siObj.next_action as Record<string, unknown> | undefined;
+        const verify = nextAction?.verify_with_microdeposits as { arrival_date?: number; hosted_verification_url?: string } | undefined;
+        const r = await markBankVerificationPending({
+          billingCycleId: cycle.id,
+          stripeSetupIntentId: setupIntentId,
+          arrivalDate: verify?.arrival_date ? new Date(verify.arrival_date * 1000) : null,
+          hostedVerificationUrl: verify?.hosted_verification_url ?? null,
+          providerEventId: event.id,
+        });
+        if (!r.noop) {
+          await writeOperatorAlert({
+            clubId: cycle.clubId,
+            billingCycleId: cycle.id,
+            severity: "INFORMATIONAL",
+            category: "BANK_VERIFICATION_PENDING",
+            title: "Signatory selected microdeposit verification",
+            body:
+              `BillingCycle ${cycle.id.slice(-6)}: the signatory chose microdeposit verification for ACSS Debit. ` +
+              `Stripe will deposit two small amounts (statement descriptor ACCTVERIFY) within 1-2 business days. ` +
+              `The signatory must confirm them via the Stripe-hosted page within 10 calendar days. ` +
+              `No further action is required unless the verification fails.`,
+            providerEventId: event.id,
+          });
+        }
+        break;
+      }
+      case "setup_intent.setup_failed":
+        await markBankVerificationFailed({
+          billingCycleId: cycle.id,
+          reason: "STRIPE_SETUP_FAILED",
+          providerEventId: event.id,
+          errorCode: (siObj.last_setup_error as { code?: string } | undefined)?.code ?? null,
+          errorMessage: (siObj.last_setup_error as { message?: string } | undefined)?.message ?? null,
+        });
+        await writeOperatorAlert({
+          clubId: cycle.clubId,
+          billingCycleId: cycle.id,
+          severity: "IMMEDIATE",
+          category: "BANK_VERIFICATION_FAILED",
+          title: "Bank verification failed -- signatory must re-collect bank details",
+          body:
+            `BillingCycle ${cycle.id.slice(-6)}: Stripe refused the SetupIntent (verification failed). ` +
+            `Signatory must open a new Checkout session and re-enter bank details. ` +
+            `Error code: ${(siObj.last_setup_error as { code?: string } | undefined)?.code ?? "unknown"}. ` +
+            `Spectre has not debited any funds; no subscription was created.`,
+          providerEventId: event.id,
+        });
+        break;
+      case "setup_intent.canceled":
+        await markBankVerificationFailed({
+          billingCycleId: cycle.id,
+          reason: "SIGNATORY_CANCELED",
+          providerEventId: event.id,
+        });
+        await writeOperatorAlert({
+          clubId: cycle.clubId,
+          billingCycleId: cycle.id,
+          severity: "IMMEDIATE",
+          category: "BANK_VERIFICATION_CANCELED",
+          title: "Signatory canceled bank verification",
+          body:
+            `BillingCycle ${cycle.id.slice(-6)}: the signatory canceled the SetupIntent before verification completed. ` +
+            `A new Checkout session is required to restart the flow.`,
+          providerEventId: event.id,
+        });
+        break;
+    }
+  } catch (err) {
+    // M3 flag OFF -> markBank* throws ForbiddenError.  Log + swallow
+    // so dispatchStripeEvent marks the event processed and we don't
+    // retry forever.  Pre-M3 behaviour.
+    if ((err as { message?: string } | undefined)?.message?.includes("SIGNUP-2 M3 bank-verification workflow is disabled")) {
+      logger.info("stripe.webhook.setup_intent.m3_disabled", {
+        stripeEventIdTail: event.id.slice(-8),
+        eventType: event.type,
+        cycleIdTail: cycle.id.slice(-6),
+      });
+      return;
+    }
+    throw err;
+  }
+}
+
+/** M3 (2026-10-27) -- marker exception.  When the dispatcher catches
+ *  this, it leaves processedAt=null so the §6 orphan replay in
+ *  persistSignedMandate picks the event up on first-cycle creation. */
+export class SignupM3DeferredEvent extends Error {
+  constructor(detail: string) {
+    super(`signup-2m3-deferred: ${detail}`);
+    this.name = "SignupM3DeferredEvent";
   }
 }
 

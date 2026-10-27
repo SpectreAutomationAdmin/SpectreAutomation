@@ -8316,6 +8316,19 @@ model BillingCycle {
   // SIGNUP-2 M2-SyntheticSandbox marker.
   syntheticTestOnly Boolean @default(false)
 
+  // SIGNUP-2 M3 Bank Verification (2026-10-27) -- additive nullable columns.
+  // Stripe SetupIntent correlation + microdeposit metadata.  Spectre
+  // does NOT force-fail at bankVerificationExpiresAt (founder §1);
+  // Stripe owns the 10d TTL.
+  stripeSetupIntentId           String?   @unique
+  bankVerificationMethod        String?
+  bankVerifiedAt                DateTime?
+  bankVerificationPendingAt     DateTime?
+  bankVerificationFailedAt      DateTime?
+  bankVerificationExpiresAt     DateTime?
+  bankVerificationHostedUrl     String?
+  bankVerificationFailureReason String?
+
   provisioningJob       TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
 
@@ -8325,6 +8338,7 @@ model BillingCycle {
   @@index([stripePaymentIntentId])
   @@index([releasedByOperatorRecordId])
   @@index([syntheticTestOnly])
+  @@index([stripeSetupIntentId])
 }
 
 // =========================================================================

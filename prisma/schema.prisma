@@ -8535,6 +8535,24 @@ model BillingCycle {
   // SIGNUP-2 M2-SyntheticSandbox marker.
   syntheticTestOnly Boolean @default(false)
 
+  // SIGNUP-2 M3 Bank Verification (2026-10-27) -- additive nullable columns.
+  // Correlation anchor for the Stripe SetupIntent that produced the
+  // mandate.  Populated once by persistSignedMandate; never rewritten.
+  stripeSetupIntentId         String?   @unique
+  // "INSTANT" (Financial Connections) | "MICRODEPOSITS" | null
+  bankVerificationMethod      String?
+  bankVerifiedAt              DateTime?
+  bankVerificationPendingAt   DateTime?
+  bankVerificationFailedAt    DateTime?
+  // Stripe-reported arrival_date on microdeposits; informational only.
+  // Spectre does NOT force-fail at this timestamp (founder §1); Stripe
+  // owns the 10d TTL.
+  bankVerificationExpiresAt   DateTime?
+  // Stripe hosted_verification_url for the microdeposit confirmation page.
+  bankVerificationHostedUrl   String?
+  // "STRIPE_SETUP_FAILED" | "SIGNATORY_CANCELED" | "STRIPE_TTL_EXCEEDED" | null
+  bankVerificationFailureReason String?
+
   provisioningJob   TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
 
@@ -8544,6 +8562,7 @@ model BillingCycle {
   @@index([stripePaymentIntentId])
   @@index([releasedByOperatorRecordId])
   @@index([syntheticTestOnly])
+  @@index([stripeSetupIntentId])
 }
 
 // =========================================================================

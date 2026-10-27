@@ -35,15 +35,14 @@ import { audit } from "@/lib/audit";
 import { logger } from "@/lib/observability/logger";
 import { AppError, ForbiddenError } from "@/lib/errors";
 import { env } from "@/lib/env";
-import { resolveStripeAdapter, resolveAcssPriceId, stripeSdkMode } from "./stripe-adapter";
+import { resolveStripeAdapter } from "./stripe-adapter";
 
-// M2 (2026-10-27): when the adapter is in SDK mode (test), read the
-// real Stripe Price id from STRIPE_ACSS_PRICE_ID.  When mock, fall
-// back to the deterministic Phase 2E placeholder.
-const MOCK_PRICE_ID = "price_signup2e_mock_38kcad_annual";
-function priceId(): string {
-  return stripeSdkMode() === "test" ? (resolveAcssPriceId() ?? MOCK_PRICE_ID) : MOCK_PRICE_ID;
-}
+// SIGNUP-2 M3 (2026-10-27): the previous priceId() helper used by
+// persistSignedMandate's direct subscriptions.create call is no
+// longer needed here -- subscription creation moved behind M3's
+// advanceToPaymentInitiated, which resolves the Stripe Price via
+// resolveAcssPriceId() internally.  Retained import kept to the
+// still-used symbols only.
 
 export function assertPhase2ePaymentFlag(): void {
   if (process.env.SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1") {
@@ -232,23 +231,54 @@ export async function persistSignedMandate(args: {
     );
   }
 
-  const subscription = await stripe.createSubscription({
-    idempotencyKey: `signup-2e-subscription:${reg.id}:first`,
-    stripeCustomerId: sessionResult.customerId,
-    stripePriceId: priceId(),
-    defaultPaymentMethodId: sessionResult.paymentMethodId,
-    metadata: { signupRegistrationIdTail: reg.id.slice(-6) },
-  });
+  // SIGNUP-2 M3 (2026-10-27) -- bank-verification gate inserted.
+  //
+  // Before M3, this function immediately created a Stripe Subscription.
+  // Under M3, the subscription is deferred until BANK_VERIFIED is
+  // reached (via setup_intent.succeeded webhook OR the SetupIntent
+  // status read from the Checkout session) AND advanceToPaymentInitiated
+  // is explicitly called behind SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION=1.
+  //
+  // §7 enforcement: when SPECTRE_SIGNUP_2M3_BANK_VERIFICATION=1 we
+  // STOP here after persisting the mandate + first-cycle shell in
+  // either BANK_VERIFIED (instant path) or BANK_VERIFICATION_PENDING
+  // (microdeposit path).  No subscriptions.create fires in this
+  // function anymore -- that call-site moved to the M3 service.
+  //
+  // Backward-compat: when SPECTRE_SIGNUP_2M3_BANK_VERIFICATION=0,
+  // the legacy immediate-subscription path REMAINS DISABLED.  Both
+  // flags coordinate -- with M3 off, this function creates the
+  // mandate + cycle shell in INITIATED state ONLY IF the second
+  // flag SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION is also 1 (which
+  // the founder has NOT authorised).  Default: neither flag flipped,
+  // and the mandate + cycle are persisted in AUTHORISED state,
+  // waiting on explicit M3 progression.
+  const m3BankVerificationEnabled = process.env.SPECTRE_SIGNUP_2M3_BANK_VERIFICATION === "1";
+  const m3PaymentInitiationEnabled = process.env.SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION === "1";
 
-  // Mandate + BillingCycle creation in one $transaction.  The
-  // ClubSubscription row is deferred to Phase 2G (no Club shell
-  // exists yet), so BillingCycle.clubId is a synthetic staging-only
-  // placeholder of the registration id until Phase 2G backfills.
+  // M3 §5: use the setup_intent status from the Checkout session as
+  // the initial transition target.  Instant path => BANK_VERIFIED.
+  // Microdeposit path => BANK_VERIFICATION_PENDING.  Unknown =>
+  // AUTHORISED (safe pre-verification holding state).
+  let initialSubscriptionStatus: "AUTHORISED" | "BANK_VERIFIED" | "BANK_VERIFICATION_PENDING" = "AUTHORISED";
+  let bankVerifiedAtInitial: Date | null = null;
+  let bankVerificationPendingAtInitial: Date | null = null;
+  let bankVerificationMethodInitial: "INSTANT" | "MICRODEPOSITS" | null = null;
+  if (m3BankVerificationEnabled && sessionResult.setupIntentStatus) {
+    if (sessionResult.setupIntentStatus === "succeeded") {
+      initialSubscriptionStatus = "BANK_VERIFIED";
+      bankVerifiedAtInitial = new Date();
+      bankVerificationMethodInitial = "INSTANT";
+    } else if (sessionResult.setupIntentStatus === "requires_action") {
+      initialSubscriptionStatus = "BANK_VERIFICATION_PENDING";
+      bankVerificationPendingAtInitial = new Date();
+      bankVerificationMethodInitial = "MICRODEPOSITS";
+    }
+  }
+
   const now = new Date();
   const result = await prisma.$transaction(async (tx) => {
     const mandateText = `ACSS Debit mandate for Spectre Automation subscription -- registration ${reg.id.slice(-6)}, Stripe mandate ${sessionResult.mandateId}.  Payment schedule: interval (annual).  Transaction type: business.`;
-    // Phase 2G backfills clubId once the Club shell is provisioned.
-    // Omitting the field is equivalent to writing null.
     const mandate = await tx.subscriptionPaymentMandate.create({
       data: {
         signupRegistrationId: reg.id,
@@ -264,12 +294,6 @@ export async function persistSignedMandate(args: {
       select: { id: true },
     });
 
-    // Phase 2E baseline: BillingCycle.clubId stores the
-    // signupRegistrationId as the correlation anchor until Phase 2G
-    // provisions a Club shell + rewrites the clubId.  The existing
-    // schema requires `clubId` non-nullable; downstream reads must
-    // treat a clubId that matches a SignupRegistration.id as the
-    // pre-tenancy state.
     const cycle = await tx.billingCycle.create({
       data: {
         clubId: reg.id, // temporary -- Phase 2G rewrites on provision
@@ -279,30 +303,84 @@ export async function persistSignedMandate(args: {
         totalDue: 38000.00,
         totalPaid: 0.00,
         status: "OPEN",
-        subscriptionStatus: "INITIATED",
+        // M3 (2026-10-27): initial state is bank-verification tier,
+        // NOT INITIATED.  Subscription creation is deferred.
+        subscriptionStatus: initialSubscriptionStatus,
         source: "STRIPE_ACSS",
-        stripePaymentIntentId: subscription.firstPaymentIntentId,
+        // M3: stripePaymentIntentId is NO LONGER written here --
+        // it populates when advanceToPaymentInitiated creates the
+        // Stripe Subscription.
+        stripePaymentIntentId: null,
         releasedByOperatorRecordId: releaseRecord.id,
+        stripeSetupIntentId: sessionResult.setupIntentId ?? null,
+        bankVerificationMethod: bankVerificationMethodInitial,
+        bankVerifiedAt: bankVerifiedAtInitial,
+        bankVerificationPendingAt: bankVerificationPendingAtInitial,
       },
       select: { id: true },
     });
 
     await tx.paymentReconciliationEntry.create({
       data: {
-        clubId: reg.id, // temporary; Phase 2G rewrites
+        clubId: reg.id,
         billingCycleId: cycle.id,
-        entryType: "SUBSCRIPTION_INITIATED",
+        entryType: "MANDATE_PERSISTED",
         amountMinorUnits: 0n,
         currency: "cad",
-        providerEventId: subscription.stripeSubscriptionId,
-        providerPaymentIntentId: subscription.firstPaymentIntentId,
+        providerEventId: args.checkoutSessionId,
+        providerPaymentIntentId: null,
         occurredAt: now,
-        reconciliationNotes: `Phase 2E first-cycle initiation; mandate ${mandate.id.slice(-6)}`,
+        reconciliationNotes:
+          `M3 mandate persist; initial subscriptionStatus=${initialSubscriptionStatus}; ` +
+          `setupIntentId=${sessionResult.setupIntentId?.slice(-8) ?? "null"}; mandate ${mandate.id.slice(-6)}`,
       },
     });
 
     return { mandateId: mandate.id, billingCycleId: cycle.id };
   });
+
+  // M3 §6: replay any orphan setup_intent.* webhook events that
+  // arrived BEFORE this cycle was persisted.  Idempotent -- noops
+  // if the state has already advanced past the event's transition.
+  if (sessionResult.setupIntentId && m3BankVerificationEnabled) {
+    try {
+      const { replayDeferredSetupIntentEvents } = await import("./signup-2m3-bank-verification-service");
+      await replayDeferredSetupIntentEvents({
+        billingCycleId: result.billingCycleId,
+        stripeSetupIntentId: sessionResult.setupIntentId,
+      });
+    } catch (err) {
+      logger.warn("signup.mandate.persist.orphan_replay_failed", {
+        cycleIdTail: result.billingCycleId.slice(-6),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // M3 §2: if (and only if) BANK_VERIFIED and BOTH flags are flipped,
+  // auto-advance to PAYMENT_INITIATED.  Operator approval is NOT
+  // duplicated -- Phase 2D RELEASE already satisfies §2's "existing
+  // legal/signing-authority/operator-release/Stripe eligibility/billing
+  // authorization gates".  This advance performs the §5 re-validation
+  // itself.
+  if (m3BankVerificationEnabled && m3PaymentInitiationEnabled && initialSubscriptionStatus === "BANK_VERIFIED") {
+    try {
+      const { advanceToPaymentInitiated } = await import("./signup-2m3-bank-verification-service");
+      await advanceToPaymentInitiated({
+        billingCycleId: result.billingCycleId,
+        signupRegistrationId: reg.id,
+        invokerSource: "WEBHOOK_AUTOMATION",
+        invokerUserId: null,
+      });
+    } catch (err) {
+      // Do not fail the whole persist flow if advancement refuses --
+      // operator alert + staged state preserved for triage.
+      logger.warn("signup.mandate.persist.auto_advance_failed", {
+        cycleIdTail: result.billingCycleId.slice(-6),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   await audit(null, {
     action: "signup.mandate.persisted",
@@ -314,13 +392,17 @@ export async function persistSignedMandate(args: {
       mandateIdTail: result.mandateId.slice(-6),
       cycleIdTail: result.billingCycleId.slice(-6),
       stripeMandateIdTail: sessionResult.mandateId.slice(-8),
-      stripeSubscriptionIdTail: subscription.stripeSubscriptionId.slice(-8),
-      evidenceSource: subscription.evidenceSource,
+      stripeSetupIntentIdTail: sessionResult.setupIntentId?.slice(-8) ?? null,
+      initialSubscriptionStatus,
+      m3Enabled: m3BankVerificationEnabled,
+      m3PaymentInitiationEnabled,
+      evidenceSource: sessionResult.evidenceSource,
     },
   });
   logger.info("signup.mandate.persisted", {
     registrationIdTail: reg.id.slice(-6),
     cycleIdTail: result.billingCycleId.slice(-6),
+    initialSubscriptionStatus,
   });
 
   return { noop: false, billingCycleId: result.billingCycleId };

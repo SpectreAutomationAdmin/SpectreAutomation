@@ -23,11 +23,49 @@ export const metadata = { title: "Registration saved · Spectre" };
 
 export default async function StatusScreen({
   params,
+  searchParams,
 }: {
   params: { token: string };
+  searchParams?: { bank_verification?: string };
 }) {
   const reg = await resolveRegistrationByToken(params.token);
   if (!reg) notFound();
+
+  // SIGNUP-2 M3 (2026-10-27, founder §3): club-facing bank-verification
+  // state banner.  Driven by the `bank_verification` query param set by
+  // the mandate return handler.  Values:
+  //   - "pending"  -> microdeposit path; signatory must confirm via Stripe-hosted email
+  //   - "verified" -> instant verification succeeded; no further action
+  //   - "failed"   -> re-collect bank details via a new Checkout
+  //   - "signed"   -> pre-M3 flag OFF; neutral confirmation
+  const bankVerificationBanner = (() => {
+    const state = searchParams?.bank_verification;
+    if (!state) return null;
+    if (state === "pending") {
+      return {
+        tone: "info" as const,
+        title: "Bank verification pending",
+        body:
+          "You chose to verify your bank account by microdeposit. Within 1-2 business days you'll receive an email from Stripe with two small deposit amounts to confirm. Please follow that email to complete verification. No funds will be debited until verification is complete.",
+      };
+    }
+    if (state === "verified") {
+      return {
+        tone: "ok" as const,
+        title: "Bank account verified",
+        body: "Your bank account was verified instantly. Spectre will proceed with the annual subscription on the schedule outlined in your enrolment letter.",
+      };
+    }
+    if (state === "failed") {
+      return {
+        tone: "error" as const,
+        title: "Bank verification could not complete",
+        body:
+          "Stripe was not able to verify your bank account. This can happen when details are entered incorrectly or when the account cannot accept pre-authorized debits. Please re-start the mandate step to enter a new account. No funds have been debited.",
+      };
+    }
+    return null;
+  })();
 
   // Determine applicant-friendly ownership verification message.
   // Never discloses dup signals; only the decision axis.
@@ -62,6 +100,32 @@ export default async function StatusScreen({
         </p>
 
         <StepIndicator current="STATUS" />
+
+        {bankVerificationBanner ? (
+          <div
+            data-testid={`signup-bank-verification-${bankVerificationBanner.tone}`}
+            style={{
+              margin: "16px 0 24px",
+              padding: "16px 20px",
+              borderRadius: 10,
+              borderLeft:
+                bankVerificationBanner.tone === "ok"
+                  ? "4px solid #276749"
+                  : bankVerificationBanner.tone === "error"
+                    ? "4px solid #9b2c2c"
+                    : "4px solid #b7791f",
+              background:
+                bankVerificationBanner.tone === "ok"
+                  ? "#f0fdf4"
+                  : bankVerificationBanner.tone === "error"
+                    ? "#fef2f2"
+                    : "#fffbeb",
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{bankVerificationBanner.title}</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }}>{bankVerificationBanner.body}</div>
+          </div>
+        ) : null}
 
         <div className="signup-status-card" data-testid="signup-status-card">
           <h2 style={{ margin: "0 0 16px", fontSize: 18 }}>Club</h2>

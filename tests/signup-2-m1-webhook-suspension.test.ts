@@ -53,10 +53,13 @@ describe("M1 · webhook route invariants (durable receipt + dedup)", () => {
 
 function trySuspendBody(): string {
   const startIdx = DISPATCH.indexOf("async function trySuspendFromWebhook");
+  // M3 (2026-10-27): the dispatch file grew the setup_intent.* handler
+  // + writeLedger + writeOperatorAlert AFTER this function.  Tighten
+  // the slice to the next top-level function boundary so the assertion
+  // only covers trySuspendFromWebhook's body.
   const after = DISPATCH.slice(startIdx);
-  // trySuspendFromWebhook is the LAST function in the file; slice through
-  // the end of the module.
-  return after;
+  const next = after.indexOf("\nasync function ", 1);
+  return next > 0 ? after.slice(0, next) : after;
 }
 
 describe("M1 · suspension safety invariants (founder §4)", () => {

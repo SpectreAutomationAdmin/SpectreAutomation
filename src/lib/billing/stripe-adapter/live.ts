@@ -45,6 +45,9 @@ import type {
   VerifyWebhookArgs,
   WebhookVerificationResult,
   StripeEventShape,
+  SetupIntentResult,
+  SetupIntentStatus,
+  SetupIntentNextAction,
 } from "./types";
 
 const API_VERSION: Stripe.LatestApiVersion = "2026-09-30.endive";
@@ -101,6 +104,25 @@ function isRetriableStripeError(err: unknown): boolean {
   if (anyErr.type === "StripeAPIError") return true;
   if (typeof anyErr.statusCode === "number" && anyErr.statusCode >= 500) return true;
   return false;
+}
+
+/** SIGNUP-2 M3 (2026-10-27) -- narrow Stripe's SetupIntent.Status
+ *  (string + OtherString) to Spectre's documented SetupIntentStatus
+ *  union.  Unknown statuses fall back to "processing" (safe-ish:
+ *  it does not satisfy either the BANK_VERIFIED or BANK_VERIFICATION_FAILED
+ *  branch, forcing operator review). */
+function coerceSetupIntentStatus(raw: string): SetupIntentStatus {
+  switch (raw) {
+    case "requires_payment_method":
+    case "requires_confirmation":
+    case "requires_action":
+    case "processing":
+    case "canceled":
+    case "succeeded":
+      return raw;
+    default:
+      return "processing";
+  }
 }
 
 // ---- Live adapter factory -----------------------------------------
@@ -213,19 +235,30 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
         }),
         "checkout.sessions.retrieve",
       );
-      // Extract mandate + payment method from the setup_intent.
+      // Extract mandate + payment method + setup-intent status from the setup_intent.
+      // SIGNUP-2 M3 (2026-10-27): the setup_intent STATUS is as important
+      // as the session status.  A session can be "complete" while the
+      // setup_intent is still "requires_action" (microdeposit path).
       const setupIntent = session.setup_intent as Stripe.SetupIntent | string | null;
       let mandateId: string | null = null;
       let paymentMethodId: string | null = null;
-      if (setupIntent && typeof setupIntent !== "string") {
-        const si = setupIntent as Stripe.SetupIntent;
-        if (typeof si.mandate === "string") mandateId = si.mandate;
-        else if (si.mandate && typeof si.mandate === "object" && "id" in si.mandate) {
-          mandateId = (si.mandate as Stripe.Mandate).id;
-        }
-        if (typeof si.payment_method === "string") paymentMethodId = si.payment_method;
-        else if (si.payment_method && typeof si.payment_method === "object" && "id" in si.payment_method) {
-          paymentMethodId = (si.payment_method as Stripe.PaymentMethod).id;
+      let setupIntentId: string | null = null;
+      let setupIntentStatus: SetupIntentStatus | null = null;
+      if (setupIntent) {
+        if (typeof setupIntent === "string") {
+          setupIntentId = setupIntent;
+        } else {
+          const si = setupIntent as Stripe.SetupIntent;
+          setupIntentId = si.id;
+          setupIntentStatus = coerceSetupIntentStatus(si.status);
+          if (typeof si.mandate === "string") mandateId = si.mandate;
+          else if (si.mandate && typeof si.mandate === "object" && "id" in si.mandate) {
+            mandateId = (si.mandate as Stripe.Mandate).id;
+          }
+          if (typeof si.payment_method === "string") paymentMethodId = si.payment_method;
+          else if (si.payment_method && typeof si.payment_method === "object" && "id" in si.payment_method) {
+            paymentMethodId = (si.payment_method as Stripe.PaymentMethod).id;
+          }
         }
       }
       const customerId = typeof session.customer === "string" ? session.customer : (session.customer?.id ?? "");
@@ -238,6 +271,55 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
         mandateId,
         paymentMethodId,
         customerId,
+        setupIntentId,
+        setupIntentStatus,
+        evidenceSource: "live-stripe",
+      };
+    },
+
+    async retrieveSetupIntent(id: string): Promise<SetupIntentResult> {
+      // SIGNUP-2 M3 (2026-10-27) -- Stripe-state re-validation (founder §5).
+      // Called immediately before subscriptions.create to verify that
+      // the SetupIntent is really succeeded + its customer / PM / mandate
+      // match what Spectre persisted + no later state regression (e.g.
+      // signatory canceled via Stripe-hosted email).  Also used by the
+      // setup_intent.* webhook enrichment path.
+      const si = await withStripeRetry(
+        () => stripe.setupIntents.retrieve(id, { expand: ["payment_method", "mandate"] }),
+        "setupIntents.retrieve",
+      );
+      let mandateId: string | null = null;
+      if (typeof si.mandate === "string") mandateId = si.mandate;
+      else if (si.mandate && typeof si.mandate === "object" && "id" in si.mandate) {
+        mandateId = (si.mandate as Stripe.Mandate).id;
+      }
+      let paymentMethodId: string | null = null;
+      if (typeof si.payment_method === "string") paymentMethodId = si.payment_method;
+      else if (si.payment_method && typeof si.payment_method === "object" && "id" in si.payment_method) {
+        paymentMethodId = (si.payment_method as Stripe.PaymentMethod).id;
+      }
+      const customerId = typeof si.customer === "string" ? si.customer : (si.customer?.id ?? null);
+      let nextAction: SetupIntentNextAction | null = null;
+      if (si.next_action && si.next_action.type) {
+        const verify = (si.next_action as { verify_with_microdeposits?: { arrival_date?: number; hosted_verification_url?: string; microdeposit_type?: string | null } }).verify_with_microdeposits;
+        nextAction = {
+          type: si.next_action.type,
+          arrivalDate: verify?.arrival_date ? new Date(verify.arrival_date * 1000) : null,
+          hostedUrl: verify?.hosted_verification_url ?? null,
+          depositType: (verify?.microdeposit_type === "amounts" || verify?.microdeposit_type === "descriptor_code")
+            ? verify.microdeposit_type
+            : null,
+        };
+      }
+      return {
+        setupIntentId: si.id,
+        status: coerceSetupIntentStatus(si.status),
+        customerId,
+        paymentMethodId,
+        mandateId,
+        nextAction,
+        lastSetupErrorCode: (si.last_setup_error?.code as string | undefined) ?? null,
+        lastSetupErrorMessage: (si.last_setup_error?.message as string | undefined) ?? null,
         evidenceSource: "live-stripe",
       };
     },

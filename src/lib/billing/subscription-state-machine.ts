@@ -1,27 +1,57 @@
-// SIGNUP-2 Phase 2A (2026-10-25) -- Subscription state machine primitives.
+// SIGNUP-2 Phase 2A (2026-10-25) + M3 (2026-10-27) -- Subscription state machine primitives.
 //
 // Pure functions.  No DB calls, no Stripe calls, no side effects beyond
 // the return value.  The state-transition rules live here so they can
 // be unit-tested without a database AND imported from webhook routes,
 // operator actions, and reconciliation jobs without duplication.
 //
-// Phase 2A ships the state machine + the enums + the transition
-// predicate.  No code path OUTSIDE this file emits a SIGNUP-2
-// subscription-status write in Phase 2A -- actual writes land in
-// Phase 2E (mandate capture) and later.
+// Phase 2A ships the baseline state machine.  M3 (2026-10-27) adds the
+// three bank-verification states that sit between AUTHORISED and
+// INITIATED (aka PAYMENT_INITIATED in M3 vocabulary):
+//
+//   AUTHORISED
+//     -> BANK_VERIFICATION_PENDING   (setup_intent moves to requires_action
+//                                     -- microdeposit path)
+//     -> BANK_VERIFIED               (setup_intent succeeded -- instant path
+//                                     or microdeposit confirmation complete)
+//     -> BANK_VERIFICATION_FAILED    (setup_intent setup_failed / canceled /
+//                                     Stripe-driven TTL expiry)
+//
+//   BANK_VERIFIED -> INITIATED       (operator- or automation-driven call to
+//                                     advanceToPaymentInitiated, gated behind
+//                                     SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION=1)
+//
+// Founder-vocabulary mapping (M3 authorisation 2026-10-27):
+//
+//   PAYMENT_INITIATED  == INITIATED             (subscription + first invoice created)
+//   PAYMENT_PROCESSING == AWAITING_SETTLEMENT   (payment_intent.processing)
+//   FUNDS_AVAILABLE    == ACTIVATION_READY      (balance_transaction available)
+//   TENANT_ACTIVATED   == ACTIVE                (Phase 2G provisioning complete)
+//
+// Preserved verbatim per M3 founder §10 (tenant isolation, webhook sig,
+// idempotency, synthetic restrictions, settled-funds activation gate):
+//   - evaluateActivationGate still requires status==="SETTLED" AND
+//     balance_transaction.status==="available" AND NOT reversed.
+//     Bank verification does NOT imply funds availability (§7).
+//   - All existing permitted transitions remain unchanged.
 
 import { AppError } from "@/lib/errors";
 
-/** The nine SIGNUP-2 subscription states + the operator-elected
- *  manual-invoice branch.  Written to
- *  `ClubSubscription.subscriptionStatus`. */
+/** SIGNUP-2 subscription states + the operator-elected manual-invoice
+ *  branch + the M3 bank-verification tier.  Written to
+ *  `ClubSubscription.subscriptionStatus` and `BillingCycle.subscriptionStatus`. */
 export const SUBSCRIPTION_STATES = [
   "AUTHORISED",
-  "INITIATED",
-  "AWAITING_SETTLEMENT",
+  // -- M3 bank-verification tier (2026-10-27) ------------------------
+  "BANK_VERIFICATION_PENDING",   // microdeposit path -- Stripe owns the 10d TTL
+  "BANK_VERIFIED",               // SetupIntent.succeeded; mandate reusable
+  "BANK_VERIFICATION_FAILED",    // setup_failed / canceled / TTL exhausted
+  // -- Phase 2A payment tier (unchanged) ------------------------------
+  "INITIATED",                   // M3 vocab: PAYMENT_INITIATED
+  "AWAITING_SETTLEMENT",         // M3 vocab: PAYMENT_PROCESSING
   "SETTLED",
-  "ACTIVATION_READY",
-  "ACTIVE",
+  "ACTIVATION_READY",            // M3 vocab: FUNDS_AVAILABLE
+  "ACTIVE",                      // M3 vocab: TENANT_ACTIVATED
   "SUSPENDED",
   "PAYMENT_FAILED",
   "CANCELLED",
@@ -29,15 +59,30 @@ export const SUBSCRIPTION_STATES = [
 ] as const;
 export type SubscriptionState = (typeof SUBSCRIPTION_STATES)[number];
 
+/** M3 (2026-10-27): the three bank-verification states.  Any transition
+ *  OUT of this set and INTO INITIATED must call advanceToPaymentInitiated,
+ *  which performs the mandatory Stripe-state re-validation per founder §5. */
+export const BANK_VERIFICATION_STATES: ReadonlySet<SubscriptionState> = new Set([
+  "BANK_VERIFICATION_PENDING",
+  "BANK_VERIFIED",
+  "BANK_VERIFICATION_FAILED",
+]);
+
 /** Terminal states -- no further forward transitions permitted. */
 export const TERMINAL_STATES: ReadonlySet<SubscriptionState> = new Set([
   "ACTIVE",     // steady-state operation (reversible to SUSPENDED only)
   "CANCELLED",
 ]);
 
-/** States from which the Club is holding Tier 1 (staged) access. */
+/** States from which the Club is holding Tier 1 (staged) access.
+ *  M3 (2026-10-27): the three bank-verification states extend Tier 1 --
+ *  the Club has signed the mandate and attestation but has not been
+ *  debited; access-tier semantics match AUTHORISED. */
 export const TIER1_STATES: ReadonlySet<SubscriptionState> = new Set([
   "AUTHORISED",
+  "BANK_VERIFICATION_PENDING",
+  "BANK_VERIFIED",
+  "BANK_VERIFICATION_FAILED",
   "INITIATED",
   "AWAITING_SETTLEMENT",
   "SETTLED",
@@ -64,8 +109,25 @@ export const SUSPENDED_READ_ONLY_STATES: ReadonlySet<SubscriptionState> =
  * the future is a reviewed change, not a free parameter.
  */
 export const PERMITTED_TRANSITIONS: Readonly<Record<SubscriptionState, readonly SubscriptionState[]>> = {
-  // From AUTHORISED, Spectre creates the Subscription + first invoice.
-  AUTHORISED:          ["INITIATED", "CANCELLED"],
+  // From AUTHORISED (M3 vocabulary: pre-verification), Spectre enters
+  // the bank-verification tier.  The legacy direct edge to INITIATED
+  // remains permitted so that Phase 2E in mock mode (M3 flag OFF) and
+  // historical cycles continue to function.
+  AUTHORISED:          ["BANK_VERIFICATION_PENDING", "BANK_VERIFIED", "BANK_VERIFICATION_FAILED", "INITIATED", "CANCELLED"],
+  // M3: microdeposit path -- resolves to BANK_VERIFIED on signatory
+  // confirmation OR BANK_VERIFICATION_FAILED on failure / Stripe TTL
+  // expiry (Stripe owns the 10-day TTL per founder §1; Spectre does
+  // not force-fail a Stripe-verifiable account).
+  BANK_VERIFICATION_PENDING: ["BANK_VERIFIED", "BANK_VERIFICATION_FAILED", "CANCELLED"],
+  // M3: BANK_VERIFIED is the sole permitted precondition for INITIATED
+  // when SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION=1.  advanceToPaymentInitiated
+  // in signup-2m3-bank-verification-service.ts additionally re-fetches
+  // the SetupIntent from Stripe and re-validates per founder §5.
+  BANK_VERIFIED:       ["INITIATED", "CANCELLED"],
+  // M3: BANK_VERIFICATION_FAILED is recoverable -- a new Checkout
+  // session (new SetupIntent) returns the registration to AUTHORISED,
+  // from which the bank-verification tier restarts.
+  BANK_VERIFICATION_FAILED: ["AUTHORISED", "CANCELLED"],
   // From INITIATED, Stripe moves us to AWAITING_SETTLEMENT (processing)
   // or straight to PAYMENT_FAILED (invalid account, immediate decline).
   INITIATED:           ["AWAITING_SETTLEMENT", "PAYMENT_FAILED"],
@@ -106,12 +168,22 @@ export const FORBIDDEN_TRANSITIONS: readonly { from: SubscriptionState; to: Subs
   { from: "ACTIVE",              to: "AUTHORISED" },
   { from: "ACTIVE",              to: "INITIATED" },
   { from: "ACTIVE",              to: "AWAITING_SETTLEMENT" },
+  { from: "ACTIVE",              to: "BANK_VERIFICATION_PENDING" },
+  { from: "ACTIVE",              to: "BANK_VERIFIED" },
+  { from: "ACTIVE",              to: "BANK_VERIFICATION_FAILED" },
   { from: "SUSPENDED",           to: "AUTHORISED" },
   // Cannot skip the gate.
   { from: "SETTLED",             to: "ACTIVE" },
+  // M3 (2026-10-27): cannot skip bank verification once past it.
+  { from: "INITIATED",           to: "BANK_VERIFICATION_PENDING" },
+  { from: "INITIATED",           to: "BANK_VERIFIED" },
+  { from: "INITIATED",           to: "BANK_VERIFICATION_FAILED" },
+  { from: "AWAITING_SETTLEMENT", to: "BANK_VERIFIED" },
   // Cannot regress from a terminal.
   { from: "CANCELLED",           to: "AUTHORISED" },
   { from: "CANCELLED",           to: "ACTIVE" },
+  { from: "CANCELLED",           to: "BANK_VERIFICATION_PENDING" },
+  { from: "CANCELLED",           to: "BANK_VERIFIED" },
 ] as const;
 
 export function isTransitionPermitted(

@@ -15,6 +15,10 @@ export interface StripeAdapter {
   createSubscription(args: CreateSubscriptionArgs): Promise<SubscriptionRef>;
   retrieveBalanceTransaction(id: string): Promise<BalanceTransactionResult>;
   verifyWebhookSignature(args: VerifyWebhookArgs): WebhookVerificationResult;
+  // SIGNUP-2 M3 (2026-10-27) -- required for the §5 Stripe-state
+  // re-validation performed immediately before subscription creation
+  // and for the setup_intent.* webhook enrichment path.
+  retrieveSetupIntent(id: string): Promise<SetupIntentResult>;
 }
 
 export interface CreateCustomerArgs {
@@ -54,7 +58,50 @@ export interface CheckoutSessionResult {
   mandateId: string | null;      // Stripe mandate id (acss_debit)
   paymentMethodId: string | null;
   customerId: string;
+  // SIGNUP-2 M3 (2026-10-27) -- expanded for the bank-verification tier.
+  setupIntentId: string | null;  // the SetupIntent that produced the mandate
+  setupIntentStatus: SetupIntentStatus | null;
   evidenceSource: "live-stripe" | "mock-stripe";
+}
+
+/** SIGNUP-2 M3 (2026-10-27) -- Stripe SetupIntent lifecycle.
+ *  See https://docs.stripe.com/api/setup_intents and SetupIntents.d.ts
+ *  in stripe@23.0.1 for the full enum; we narrow to the values that
+ *  concern Spectre's bank-verification tier. */
+export type SetupIntentStatus =
+  | "requires_payment_method"
+  | "requires_confirmation"
+  | "requires_action"
+  | "processing"
+  | "canceled"
+  | "succeeded";
+
+/** SIGNUP-2 M3 (2026-10-27) -- fields read by M3's §5 Stripe-state
+ *  re-validation + the setup_intent.* webhook handlers.  Shape is
+ *  deliberately narrow -- we never pass raw Stripe objects around. */
+export interface SetupIntentResult {
+  setupIntentId: string;
+  status: SetupIntentStatus;
+  customerId: string | null;
+  paymentMethodId: string | null;
+  mandateId: string | null;
+  // When status === "requires_action" AND payment is acss_debit:
+  //   nextAction.type        = "verify_with_microdeposits"
+  //   nextAction.arrivalDate = Stripe-reported expected deposit arrival
+  //   nextAction.hostedUrl   = Stripe hosted microdeposit confirmation URL
+  //   nextAction.depositType = "amounts" | "descriptor_code"
+  nextAction: SetupIntentNextAction | null;
+  // last_setup_error.code when status is setup_failed / requires_payment_method.
+  lastSetupErrorCode: string | null;
+  lastSetupErrorMessage: string | null;
+  evidenceSource: "live-stripe" | "mock-stripe";
+}
+
+export interface SetupIntentNextAction {
+  type: "verify_with_microdeposits" | string;
+  arrivalDate: Date | null;
+  hostedUrl: string | null;
+  depositType: "amounts" | "descriptor_code" | null;
 }
 
 export interface CreateSubscriptionArgs {
