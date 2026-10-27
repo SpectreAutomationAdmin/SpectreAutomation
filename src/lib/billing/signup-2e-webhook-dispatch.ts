@@ -78,6 +78,9 @@ async function findCycleByPaymentIntent(paymentIntentId: string | null) {
       clubId: true,
       subscriptionStatus: true,
       reversedAt: true,
+      // M1b: settlementConfirmedAt distinguishes initial vs renewal
+      // payment failure classification (founder §4).
+      settlementConfirmedAt: true,
     },
   });
 }
@@ -134,28 +137,67 @@ async function onPaymentIntentFailed(event: StripeEventShape) {
     stripeEventId: event.id,
     stripePaymentIntentId: pi,
   });
+
+  // M1b (2026-10-26, founder §4) -- EXPLICIT webhook classification.
+  //
+  // payment_intent.payment_failed can mean two very different things:
+  //
+  //   INITIAL payment failure (first-cycle, tenant NOT YET ACTIVE):
+  //     - BillingCycle has never had settlementConfirmedAt.
+  //     - Phase 2H MUST NOT suspend -- there is nothing operational
+  //       to suspend; the tenant has never been activated.
+  //     - Operator alert: INITIAL_PAYMENT_FAILURE (operator remediation
+  //       required at the signup / Phase 2E level).
+  //
+  //   RENEWAL collection failure (tenant was ACTIVE at the time the
+  //   payment attempt was made):
+  //     - BillingCycle previously settled (settlementConfirmedAt set).
+  //     - Phase 2H SHOULD suspend -- the tenant is operationally
+  //       active and the renewal cycle failed.
+  //     - Operator alert: RENEWAL_PAYMENT_FAILURE.
+  //
+  // The classification is DRIVEN BY the BillingCycle state, not by
+  // the raw webhook event alone.  trySuspendFromWebhook also
+  // double-checks the ClubSubscription state (idempotency / out-of-
+  // order safety) so a webhook for a cycle whose tenant is not
+  // ACTIVE is a no-op regardless.
+
+  const isInitialPaymentFailure = cycle.settlementConfirmedAt === null;
+
   await writeOperatorAlert({
     clubId: cycle.clubId,
     billingCycleId: cycle.id,
     severity: "IMMEDIATE",
-    category: "PAYMENT_FAILURE",
-    title: "Payment failed on first-cycle ACSS debit",
-    body: `BillingCycle ${cycle.id.slice(-6)} received payment_intent.payment_failed.  Operator remediation required (Phase 2H).`,
+    category: isInitialPaymentFailure ? "INITIAL_PAYMENT_FAILURE" : "RENEWAL_PAYMENT_FAILURE",
+    title: isInitialPaymentFailure
+      ? "Initial ACSS payment failed (first cycle)"
+      : "Renewal ACSS payment failed",
+    body: isInitialPaymentFailure
+      ? `BillingCycle ${cycle.id.slice(-6)} received payment_intent.payment_failed on an UNSETTLED cycle (initial payment).  Tenant was never activated; no suspension.`
+      : `BillingCycle ${cycle.id.slice(-6)} received payment_intent.payment_failed on a previously-settled cycle (renewal).  Phase 2H FAILED_RENEWAL trigger will attempt suspension if the tenant is currently ACTIVE.`,
     providerEventId: event.id,
   });
-  // M1 (2026-10-26): Phase 2H wiring.  A FAILED_RENEWAL trigger is
-  // raised when the FIRST cycle fails or a renewal cycle fails.
-  // Treat all payment_intent.payment_failed as FAILED_RENEWAL (the
-  // first-cycle case does not deliver settlement, so suspension
-  // only materialises if the tenant was previously ACTIVE -- i.e.
-  // this is a renewal failure).  Suspension is best-effort + idempotent.
+
+  if (isInitialPaymentFailure) {
+    // Do NOT call trySuspendFromWebhook on an initial payment failure.
+    // Operator remediation runs at the signup / Phase 2E level.
+    logger.warn("stripe.webhook.initial_payment_failed", {
+      cycleIdTail: cycle.id.slice(-6),
+      pathway: "no-suspension-initial",
+    });
+    return;
+  }
+
+  // Renewal failure path -- suspend the ACTIVE tenant.  Trigger is
+  // FAILED_RENEWAL; trySuspendFromWebhook will no-op if the
+  // tenant is not currently ACTIVE (idempotent / out-of-order safety).
   await trySuspendFromWebhook({
     clubId: cycle.clubId,
     trigger: "FAILED_RENEWAL",
     stripeEventId: event.id,
     cycleId: cycle.id,
   });
-  logger.warn("stripe.webhook.payment_failed", { cycleIdTail: cycle.id.slice(-6) });
+  logger.warn("stripe.webhook.renewal_payment_failed", { cycleIdTail: cycle.id.slice(-6) });
 }
 
 async function onChargeSucceeded(event: StripeEventShape) {
@@ -297,9 +339,11 @@ async function trySuspendFromWebhook(args: {
 }): Promise<void> {
   // Correlation + enrollment check: skip legacy tenants (null
   // subscriptionStatus) and tenants with no ClubSubscription row.
+  // Only subscriptionStatus is read here; the Phase 2H flip itself
+  // writes both subscriptionStatus + accessTier atomically.
   const sub = await prisma.clubSubscription.findUnique({
     where: { clubId: args.clubId },
-    select: { subscriptionStatus: true, accessTier: true },
+    select: { subscriptionStatus: true },
   });
   if (!sub) {
     logger.info("stripe.webhook.suspension_skipped", {

@@ -28,13 +28,13 @@ describe("SIGNUP-2 Phase 2B · Seam 1 posting-guard wiring", () => {
   it("assertPostingAllowed calls assertAccessTierForPosting(clubId)", () => {
     const block = POSTING_GUARD.match(/export async function assertPostingAllowed[\s\S]+?^}/m);
     expect(block, "assertPostingAllowed function block not found").not.toBeNull();
-    expect(block![0]).toMatch(/await assertAccessTierForPosting\(clubId\)/);
+    expect(block![0]).toMatch(/await assertAccessTierForPosting\(clubId/);
   });
 
   it("assertSensitiveActionAllowed calls assertAccessTierForPosting(clubId)", () => {
     const block = POSTING_GUARD.match(/export async function assertSensitiveActionAllowed[\s\S]+?^}/m);
     expect(block, "assertSensitiveActionAllowed function block not found").not.toBeNull();
-    expect(block![0]).toMatch(/await assertAccessTierForPosting\(clubId\)/);
+    expect(block![0]).toMatch(/await assertAccessTierForPosting\(clubId/);
   });
 
   it("posting-guard preserves the training + support-session gates (order-independent)", () => {
@@ -72,8 +72,12 @@ describe("SIGNUP-2 Phase 2B · gate semantics (null = grandfather)", () => {
     expect(ACCESS_TIER).toMatch(/if \(tier === null\) return \{ pass: true, detail: "legacy-grandfather" \}/);
   });
 
-  it("assertAccessTierForPosting returns silently on tier === FULL", () => {
-    expect(ACCESS_TIER).toMatch(/if \(tier === "FULL"\) return \{ pass: true, detail: "full" \}/);
+  it("assertAccessTierForPosting returns silently on tier === FULL (M1b: unless Phase 2H status blocks)", () => {
+    // M1b (2026-10-26) refactored the tier=FULL branch into a nested
+    // check that first refuses on Phase 2H blocked statuses.  The
+    // happy-path "full" return still exists at the end of the branch.
+    expect(ACCESS_TIER).toMatch(/if \(tier === "FULL"\)/);
+    expect(ACCESS_TIER).toMatch(/return \{ pass: true, detail: "full" \}/);
   });
 
   it("assertAccessTierForPosting returns silently on subscriptionStatus === MANUAL_INVOICE", () => {

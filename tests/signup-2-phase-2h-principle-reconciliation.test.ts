@@ -97,15 +97,17 @@ describe("Founder §5 · Existing-tenant protection", () => {
 });
 
 describe("Founder §6 · Concurrency + safety", () => {
-  it("suspend uses prisma.$transaction + inside-tx state read", () => {
+  it("suspend uses prisma.$transaction + inside-tx state read [M1b: FOR UPDATE]", () => {
     const body = SERVICE.match(/export async function suspendTenant[\s\S]+?^}/m)![0];
     expect(body).toMatch(/prisma\.\$transaction/);
-    expect(body).toMatch(/tx\.clubSubscription\.findUnique/);
+    expect(body).toMatch(/tx\.\$queryRawUnsafe/);
+    expect(body).toMatch(/FOR UPDATE/);
   });
-  it("reinstate uses prisma.$transaction + inside-tx re-read (TOCTOU)", () => {
+  it("reinstate uses prisma.$transaction + inside-tx re-read (TOCTOU) [M1b: FOR UPDATE]", () => {
     const body = sliceFromTo(SERVICE, "export async function reinstateTenant", "export async function isTenantOperationallyActive");
     expect(body).toMatch(/prisma\.\$transaction/);
-    expect(body).toMatch(/tx\.clubSubscription\.findUnique/);
+    expect(body).toMatch(/tx\.\$queryRawUnsafe/);
+    expect(body).toMatch(/FOR UPDATE/);
     expect(body).toMatch(/relock\.subscriptionStatus !== previousStatus/);
   });
   it("no external Stripe network call while holding a DB lock", () => {

@@ -23,7 +23,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../errors";
 import { toMoney, sumMoney, isZero, isNegative, isPositive } from "./decimal";
 import { resolvePostingPeriod } from "./periods";
 import type { JournalSource } from "./types";
-import { assertPostingAllowed } from "../posting-guard";
+import { assertPostingAllowed, withPostingGuard } from "../posting-guard";
 import { DEPARTMENT_CODE_ALIASES } from "./coa-template";
 // DIM-2 (2026-09-29) — central dimensional validation.
 import { validateManyLineDimensions } from "./dimensional-validation";
@@ -356,7 +356,6 @@ export async function post(principal: Principal, journalId: string, opts?: { all
   });
   assertTenantOwned(entry, principal);
   requirePermission(principal, entry.clubId, "gl:post");
-  await assertPostingAllowed(principal, entry.clubId, "gl.journal.post", "JournalEntry", journalId);
   if (entry.status === "POSTED") return entry;
   if (entry.status !== "DRAFT" && entry.status !== "APPROVED") {
     throw new ConflictError(`Cannot post from ${entry.status}`);
@@ -373,10 +372,24 @@ export async function post(principal: Principal, journalId: string, opts?: { all
   // Period gate.
   await resolvePostingPeriod(principal, entry.clubId, entry.entryDate, { allowSoftLockOverride: opts?.allowSoftLockOverride });
 
-  const updated = await prisma.journalEntry.update({
-    where: { id: journalId },
-    data: { status: "POSTED", postedAt: new Date(), postedByUserId: principal.id, totalDebits: debits, totalCredits: credits },
-  });
+  // M1b (2026-10-26) -- posting-guard runs INSIDE the write's
+  // transaction so the ClubSubscription row is FOR UPDATE locked
+  // for the duration of the state flip + audit.  Phase 2H
+  // suspendTenant takes the same lock on the same row, so the
+  // race is closed.
+  const updated = await withPostingGuard(
+    principal,
+    entry.clubId,
+    "gl.journal.post",
+    async (tx) => {
+      const row = await tx.journalEntry.update({
+        where: { id: journalId },
+        data: { status: "POSTED", postedAt: new Date(), postedByUserId: principal.id, totalDebits: debits, totalCredits: credits },
+      });
+      return row;
+    },
+    { entityType: "JournalEntry", entityId: journalId },
+  );
   await audit(principal, {
     action: "gl.journal.post",
     entityType: "JournalEntry", entityId: journalId, clubId: entry.clubId,
@@ -392,17 +405,23 @@ export async function voidDraft(principal: Principal, journalId: string, reason:
   const entry = await prisma.journalEntry.findUnique({ where: { id: journalId } });
   assertTenantOwned(entry, principal);
   requirePermission(principal, entry.clubId, "gl:post");
-  await assertPostingAllowed(principal, entry.clubId, "gl.journal.void", "JournalEntry", journalId);
   if (entry.status === "POSTED") {
     throw new ConflictError("Posted entries cannot be voided. Use reverse instead.");
   }
   if (entry.status === "VOIDED" || entry.status === "REVERSED") {
     throw new ConflictError(`Entry is already ${entry.status}`);
   }
-  const updated = await prisma.journalEntry.update({
-    where: { id: journalId },
-    data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason },
-  });
+  // M1b: tx-bound posting-guard + state flip.
+  const updated = await withPostingGuard(
+    principal,
+    entry.clubId,
+    "gl.journal.void",
+    async (tx) => tx.journalEntry.update({
+      where: { id: journalId },
+      data: { status: "VOIDED", voidedAt: new Date(), voidedByUserId: principal.id, voidReason: reason },
+    }),
+    { entityType: "JournalEntry", entityId: journalId },
+  );
   await audit(principal, {
     action: "gl.journal.void",
     entityType: "JournalEntry", entityId: journalId, clubId: entry.clubId,

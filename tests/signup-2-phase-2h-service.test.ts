@@ -151,9 +151,11 @@ describe("SIGNUP-2 Phase 2H · transaction + audit discipline", () => {
     expect(body).toMatch(/tx\.clubSubscription\.update/);
     expect(body).toMatch(/tx\.tenantLifecycleTransition\.create/);
   });
-  it("reinstate re-reads subscription inside the tx (TOCTOU defence)", () => {
+  it("reinstate re-reads subscription inside the tx (TOCTOU defence) [M1b: via tx.$queryRawUnsafe + FOR UPDATE]", () => {
     const body = blockFromName("export async function reinstateTenant");
-    expect(body).toMatch(/tx\.clubSubscription\.findUnique/);
+    // M1b upgraded reads to `tx.$queryRawUnsafe` with `FOR UPDATE`.
+    expect(body).toMatch(/tx\.\$queryRawUnsafe/);
+    expect(body).toMatch(/FOR UPDATE/);
     expect(body).toMatch(/relock\.subscriptionStatus !== previousStatus/);
   });
   it("audit() is emitted on successful suspend + reinstate", () => {

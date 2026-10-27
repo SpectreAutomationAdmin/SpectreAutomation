@@ -153,6 +153,9 @@ describe("M1 · call-site inventory (per founder §2 'complete route/worker migr
       "src/lib/signup-2/registration-handler.ts",
       "src/lib/timesheets/manager-approval.ts",
       "src/lib/billing/signup-2h-tenant-lifecycle-service.ts",
+      // M1b (2026-10-26) -- the per-caller inventory registry (not a
+      // caller itself; references assertPostingAllowed in comments).
+      "src/lib/posting-guard/legacy-callers.ts",
     ]);
     // The known set is a superset of the actual callers.  If a new
     // caller appears that isn't in `known`, the test fails: the

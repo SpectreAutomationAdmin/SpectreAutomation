@@ -84,10 +84,11 @@ describe("SIGNUP-2 Phase 2E · dispatch handles the required Stripe events", () 
 });
 
 describe("SIGNUP-2 Phase 2E · operator alerts for failures / disputes / reversals", () => {
-  it("payment_intent.payment_failed writes an IMMEDIATE operator alert (PAYMENT_FAILURE)", () => {
-    const h = DISPATCH.match(/async function onPaymentIntentFailed[\s\S]+?^}/m)!;
+  it("payment_intent.payment_failed writes an IMMEDIATE operator alert (M1b: INITIAL_PAYMENT_FAILURE | RENEWAL_PAYMENT_FAILURE)", () => {
+    const h = DISPATCH.match(/async function onPaymentIntentFailed[\s\S]+?async function onChargeSucceeded/m)!;
     expect(h[0]).toMatch(/severity:\s*"IMMEDIATE"/);
-    expect(h[0]).toMatch(/category:\s*"PAYMENT_FAILURE"/);
+    // M1b (2026-10-26) separates initial vs renewal payment failure.
+    expect(h[0]).toMatch(/category: isInitialPaymentFailure \? "INITIAL_PAYMENT_FAILURE" : "RENEWAL_PAYMENT_FAILURE"/);
   });
 
   it("charge.refunded writes an IMMEDIATE operator alert (REVERSAL) + revokes activation per §5", () => {
