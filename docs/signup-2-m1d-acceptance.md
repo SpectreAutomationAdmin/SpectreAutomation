@@ -380,3 +380,124 @@ spec's own teardown.
 **End of acceptance evidence.** M1d coordinated completion is READY FOR
 FOUNDER ACCEPTANCE as a staging-only, mock-backed milestone within the
 launch-readiness plan.
+
+---
+
+## 15. Final M1 verification (founder 2026-10-27 §2–§5)
+
+### 15a Isolated PostgreSQL test database
+
+- **Target:** Docker-isolated Postgres 16 instance at `localhost:55432`, database `spectre_m1d_test`, container `spectre-m1d-test-pg`.
+- **Credentials:** test-only password, not reused anywhere (removed with the container at acceptance close).
+- **Staging data:** untouched. The Docker Postgres is a scratch database created for this verification; no existing staging-tenant data was accessed or stressed.
+- **Schema push:** `DATABASE_URL=postgresql://... npx prisma db push --skip-generate --accept-data-loss` applied the full Prisma schema (`provider = "postgresql"`) in 11.9 s.
+- **Prisma client:** regenerated against the Postgres schema for the test window, then restored to SQLite + regenerated for dev at acceptance close.
+- **Container teardown:** `docker rm -f spectre-m1d-test-pg` executed at the close of the verification window; no residual container, volume, or credential remains.
+
+### 15b Five previously-skipped Postgres-only scenarios executed
+
+```
+$ DATABASE_URL="postgresql://postgres:***@localhost:55432/spectre_m1d_test" \
+  SPECTRE_SIGNUP_2H_SUSPENSION_LIVE=1 \
+  npx vitest run tests/signup-2-m1d-concurrency-stress.test.ts --reporter=default
+
+ ✓ tests/signup-2-m1d-concurrency-stress.test.ts (11 tests) 959ms
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+```
+
+**All 5 previously-skipped Postgres-only scenarios + 6 source-contract tests = 11/11 PASS** against real Postgres with real `prisma.$transaction` calls:
+
+| # | Scenario (Postgres-only) | Observed outcome | Timing | Pass |
+|---|---|---|---|---|
+| 1 | **post-then-suspend**: posting commits before suspension observes it | Sentinel order `["posting-committed", "suspension-committed"]`; `result.ok=true`; `newStatus="UNDER_REVIEW"`. | 121 ms | ✓ |
+| 2 | **suspend-then-post**: posting refuses with `ForbiddenError` after suspension | Suspension flipped `subscriptionStatus=UNDER_REVIEW`; subsequent `withPostingGuard` call threw `ForbiddenError` on the `FOR UPDATE` read; final state `UNDER_REVIEW`. | 57 ms | ✓ |
+| 3 | **10 concurrent posts on an ACTIVE club** | All 10 `Promise.allSettled` entries fulfilled; final state still `ACTIVE`. | 212 ms | ✓ |
+| 4 | **10 concurrent posts + 1 suspension racing** | Posts split cleanly between fulfilled (committed under `ACTIVE` row-lock) and rejected (`ForbiddenError` after the suspension's `FOR UPDATE` won); every rejection is `ForbiddenError` (no orphaned writes, no deadlocks, no retries needed). | 75 ms | ✓ |
+| 5 | **2 concurrent suspension attempts** | ≥1 succeeded; final state `UNDER_REVIEW`; no divergent transitions. | 60 ms | ✓ |
+
+**Representative-mutation source assertions** (6/6 PASS, all green against the Postgres client):
+- journal.ts `post` + `voidDraft` + `reverse` + `createPostedFromAdapter` all via `withPostingGuard` / `{ tx }`.
+- ap/invoices.ts `postInvoice` + `reverseInvoice` via `withPostingGuard`.
+- ap/payments.ts `processPayment` + `voidPayment` via `withPostingGuard`.
+- services/ar.ts six write paths via `withPostingGuard`; `reverseCharge` via `{ tx }`.
+- payroll/approve-and-post.ts `approvePayrollBatch` via `withPostingGuard`; both post branches via `{ tx }`.
+- imports/index.ts commit COA + Opening Trial Balance via `{ tx }`.
+
+### 15c Concurrency outcomes under real Postgres FOR UPDATE
+
+- **Lock ordering:** Posting-guard's `SELECT ... FOR UPDATE` on `ClubSubscription(clubId)` and Phase 2H's `suspendTenant`'s `FOR UPDATE` on the same row serialise correctly. The 10-vs-1 race (scenario 4) showed clean split outcomes — whichever transaction acquires the row-lock first commits first, the other waits and either (a) sees the new state and refuses (posting-side) or (b) completes the transition (suspension-side).
+- **Timeouts / retries:** none observed. All 11 scenarios completed within 212 ms individually; total test file runtime 959 ms including Prisma connection setup + teardown.
+- **Deadlocks:** none observed. Both sides acquire exactly one row-lock on exactly one row; no cross-row lock ordering exists in the hot paths.
+- **No orphaned writes.** Every rejected post in scenario 4 rejected with `ForbiddenError` (not a `PrismaClientKnownRequestError`), meaning the guard's refusal path fired cleanly on the committed-suspension state. Database state remained coherent at every teardown read.
+
+### 15d Migration inventory reconciliation
+
+- **Registry entries:** 48 in [src/lib/posting-guard/legacy-callers.ts](src/lib/posting-guard/legacy-callers.ts) — 46 MIGRATED + 2 READ_ADJACENT.
+- **Filesystem callers (files that currently reference `assertPostingAllowed` by name):** 40 files. The 8-file gap is files whose sub-agent migration fully replaced the symbol with `withPostingGuard` — they no longer import `assertPostingAllowed` at all. All 8 are documented in the registry as MIGRATED via `withPostingGuard`.
+- **Bare operational-write guard calls:** **0** across all 40 filesystem callers. Every `await assertPostingAllowed(...)` call-site now carries `{ tx }` as the 6th argument.
+- **Three zero-call-site files** (classified correctly, no unprotected paths):
+  - `src/lib/hr/sensitive-identity.ts` — READ_ADJACENT (symbol in comment only; SIN reveal is not a financial posting).
+  - `src/lib/permissions.ts` — READ_ADJACENT (symbol in registry comment only).
+  - `src/lib/payroll/opening-balance-import.ts` — MIGRATED (migrationTarget `none-required`: function delegates to `createDraftOpeningBalance` per CSV row; each delegation carries its own `withPostingGuard`).
+- **Strict CI regression preserved:** [tests/signup-2-m1d-strict-inventory.test.ts](tests/signup-2-m1d-strict-inventory.test.ts) auto-reconciles the inventory to source usage on every CI run; a new unguarded caller fails the build.
+
+### 15e Write atomicity — representative paths (founder §4)
+
+For each representative path below, the authorization check and the protected DB mutation share the same `prisma.$transaction` (verified both by source inspection and by the Postgres concurrency scenarios above). Suspension (`suspendTenant`) takes the same `FOR UPDATE` lock on the same `ClubSubscription` row, so the two paths serialise.
+
+| Domain | Path | Transaction binding |
+|---|---|---|
+| Journal | `src/lib/accounting/journal.ts` `post` + `voidDraft` + `reverse` + `createPostedFromAdapter` | Each wraps posting-guard + JE write in one tx; `createPostedFromAdapter` accepts an `externalTx` for payroll-chained posting. |
+| AP | `src/lib/ap/invoices.ts` `postInvoice` + `reverseInvoice`; `src/lib/ap/payments.ts` `processPayment` + `voidPayment` | All four wrap in `withPostingGuard`. `voidPayment` dispatches journal `reverse` BEFORE opening its own tx so the dynamic import doesn't nest. |
+| Payroll | `src/lib/payroll/approve-and-post.ts` `approvePayrollBatch` + `postPayrollBatch` (REVERSAL + STANDARD branches) | Approve wraps CAS updateMany in `withPostingGuard`; both post branches run guard inside the existing tx with `{ tx }`. |
+| POS | `src/lib/pos/index.ts` `completeSale` + `refundSale` + `voidSale`; `src/lib/pos/checks.ts` `settleCheck` | POS writes wrapped in `withPostingGuard`; inventory posting (via `createPostedFromAdapter`) stays outside the outer tx to avoid self-deadlock (both open on the same ClubSubscription row-lock). |
+| Imports | `src/lib/imports/index.ts` `commitBatch` COA branch + OPENING_TRIAL_BALANCE branch | Each branch runs guard inside its own tx. |
+| Workers / backgrounds | AP intelligence (`src/lib/ap-intelligence/materialise.ts` → `src/lib/ap/invoices.ts`), payroll scheduled jobs (`src/lib/payroll/scheduled-one-time-earning.ts`), reconciliation jobs | All downstream posting flows re-enter the same `withPostingGuard` seams; worker invocations do not bypass the guard. |
+
+**External operations outside the lock — verified safe:**
+- `storage.put(...)` in `src/lib/club/media.ts` `setClubMedia`: runs BEFORE the tx opens. If a tenant is suspended between the upload and the DB upsert, the upsert fails on the guard and the uploaded bytes remain orphaned (observable cleanup, no unauthorized financial side effect).
+- Journal `reverse()` call in `src/lib/ap/payments.ts` `voidPayment`: opens its OWN posting-guard'd tx. The surrounding `voidPayment` tx then runs its own guard. Both acquire the same row-lock in sequence; suspension cannot slip between them undetected.
+- Inventory posting (`postInventorySale` + `createPostedFromAdapter`) in `src/lib/pos/index.ts` `completeSale`: each JE call opens its own guarded tx. The outer POS state transition is in its own guarded tx. Interleaved suspension refuses whichever tx opens after the suspension commits.
+- Email + reservation side-effects in `src/lib/pos/checks.ts` `settleCheck`: fire-and-forget calls happen AFTER the guarded `pOSCheck.update` commits. If suspension occurs between the state flip and the email, the flip is already authorised; the email is a notification, not a financial write.
+
+### 15f Any defects + corrections
+
+**None.** All 5 previously-skipped scenarios passed on first execution. No harness repair needed. No path-level fixes required.
+
+### 15g Final regression results
+
+- **SQLite (dev):** `npx vitest run tests/signup-2*.test.ts` → **1106/1106 pass + 5 Postgres-only skips** across 50 files.
+- **Postgres (isolated):** `npx vitest run tests/signup-2-m1d-concurrency-stress.test.ts` → **11/11 pass** (5 scenarios previously skipped on SQLite now fully executed).
+- **Combined:** every `signup-2-*.test.ts` scenario that is logically applicable to its runtime DB now runs and passes.
+
+### 15h Staging health
+
+`/api/health` returned 200 at verification open AND verification close. Staging image remains `sha-16e12308` / Fly v936 (unchanged — the Postgres verification used an isolated Docker instance, not staging).
+
+### 15i Feature-flag state
+
+```
+$ flyctl secrets list --app spectre-staging | grep -iE "SIGNUP_2|STRIPE_WEB"
+(no output)
+```
+
+All SIGNUP-2 flags remain **OFF** on staging post-verification.
+
+### 15j Final implementation / image provenance
+
+- **Branch:** `staging-deploy/web1b1-framer-fidelity`
+- **Final commit on staging:** `sha-eb1a7331...` (acceptance-doc commit on top of the `sha-16e12308...` migration commit)
+- **Deployed image on staging:** `registry.fly.io/spectre-staging:sha-16e12308` / Fly release **v936** (unchanged by this verification — it is the M1d migration + webhook correlator + concurrency harness + strict CI build).
+- **DRH-1 run that landed the M1d code:** 40448333239 (success)
+- **Rollback anchor:** M1c image `sha-c478eafd3678` / Fly v932
+
+### 15k Final acceptance determination
+
+All 5 PostgreSQL concurrency tests pass against an isolated Postgres database.
+Zero applicable unprotected operational-write paths remain.
+All strict CI regression guards hold.
+Staging health 200. All SIGNUP-2 feature flags OFF.
+Non-authorisations preserved.
+
+**M1 is TECHNICALLY ACCEPTED AND CLOSED as the mock-backed staging baseline.** Any future posting-guard work requires either a reproducible defect or an explicit new founder authorisation.
