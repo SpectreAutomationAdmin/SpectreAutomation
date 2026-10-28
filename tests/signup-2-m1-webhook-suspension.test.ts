@@ -46,7 +46,12 @@ describe("M1 · webhook route invariants (durable receipt + dedup)", () => {
     expect(verifyIdx).toBeLessThan(persistIdx);
   });
   it("flag-OFF: event is persisted but dispatch is skipped", () => {
-    expect(WEBHOOK_ROUTE).toMatch(/SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1"/);
+    // M3B (2026-10-28): dispatch now gated by EITHER
+    // SPECTRE_SIGNUP_2E_PAYMENT_LIVE OR the narrow
+    // SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH flag.  Both-off persists
+    // but skips dispatch.
+    expect(WEBHOOK_ROUTE).toMatch(/SPECTRE_SIGNUP_2E_PAYMENT_LIVE === "1"/);
+    expect(WEBHOOK_ROUTE).toMatch(/SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH === "1"/);
     expect(WEBHOOK_ROUTE).toMatch(/received_disabled/);
   });
 });

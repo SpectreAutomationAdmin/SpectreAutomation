@@ -499,7 +499,13 @@ export async function initiateSyntheticMandateCollection(
 export async function persistSyntheticSignedMandate(args: {
   registrationId: string;
   checkoutSessionId: string;
-}): Promise<{ noop: boolean; mandateId?: string; billingCycleId?: string }> {
+}): Promise<{
+  noop: boolean;
+  mandateId?: string;
+  billingCycleId?: string;
+  initialSubscriptionStatus?: "AUTHORISED" | "BANK_VERIFIED" | "BANK_VERIFICATION_PENDING" | "INITIATED";
+  paymentInitiated?: boolean;
+}> {
   assertSyntheticSandboxGuardsPass();
 
   const reg = await prisma.signupRegistration.findUnique({
@@ -551,94 +557,121 @@ export async function persistSyntheticSignedMandate(args: {
     throw new AppError("SIGNUP_2M2_SYNTHETIC_PRICE_ID_MISSING", "STRIPE_ACSS_PRICE_ID unset", 500);
   }
 
-  // SIGNUP-2 M3 (2026-10-27, founder §7): subscriptions.create is
-  // GLOBALLY GATED behind SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION.
-  // Even the synthetic sandbox path refuses when the flag is 0.
-  // The intent is unambiguous: disabling M3's payment-initiation
-  // flag must disable EVERY pathway that could create a Stripe
-  // subscription -- legacy mandate return handler, M3 advance,
-  // recovery endpoint, scheduled job, AND this synthetic path.
-  // When the ACSS amount-limit escalation resolves + the founder
-  // explicitly flips the flag, retries will proceed via
-  // recoverSyntheticSignedMandate.
-  if (process.env.SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION !== "1") {
-    logger.info("signup.synthetic.subscription_create_m3_blocked", {
-      registrationIdTail: reg.id.slice(-6),
-      note: "SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION != 1; no subscriptions.create may fire from any pathway",
-    });
-    await audit(null, {
-      action: "signup.synthetic.subscription_create_m3_blocked",
-      entityType: "SignupRegistration",
-      entityId: reg.id,
-      clubId: null,
-      meta: {
+  // SIGNUP-2 M3C (2026-10-28, founder "disabled payment-initiation flag must
+  // mean 'stop after bank verification', not 'fail registration'"):
+  // We DO persist mandate + cycle regardless of payment-initiation state.
+  // Only subscriptions.create is gated by SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION.
+  //
+  // M3B §3 (2026-10-27): read the SetupIntent status to determine the
+  // initial subscription state.  succeeded -> BANK_VERIFIED (instant);
+  // requires_action -> BANK_VERIFICATION_PENDING (microdeposit).
+  let bankVerifiedAtInitial: Date | null = null;
+  let bankVerificationPendingAtInitial: Date | null = null;
+  let bankVerificationMethodInitial: "INSTANT" | "MICRODEPOSITS" | null = null;
+  let bankVerificationHostedUrlInitial: string | null = null;
+  let bankVerificationExpiresAtInitial: Date | null = null;
+  let setupIntentStatusForLog: string | null = null;
+  if (sessionResult.setupIntentId) {
+    try {
+      const si = await stripe.retrieveSetupIntent(sessionResult.setupIntentId);
+      setupIntentStatusForLog = si.status;
+      if (si.status === "succeeded") {
+        bankVerifiedAtInitial = new Date();
+        bankVerificationMethodInitial = si.nextAction?.type === "verify_with_microdeposits" ? "MICRODEPOSITS" : "INSTANT";
+      } else if (si.status === "requires_action") {
+        bankVerificationPendingAtInitial = new Date();
+        bankVerificationMethodInitial = "MICRODEPOSITS";
+        bankVerificationHostedUrlInitial = si.nextAction?.hostedUrl ?? null;
+        bankVerificationExpiresAtInitial = si.nextAction?.arrivalDate ?? null;
+      }
+    } catch (err) {
+      logger.warn("signup.synthetic.setup_intent_retrieve_failed", {
+        registrationIdTail: reg.id.slice(-6),
+        setupIntentIdTail: sessionResult.setupIntentId.slice(-8),
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Determine initial cycle state.
+  let initialSubscriptionStatus: "AUTHORISED" | "BANK_VERIFIED" | "BANK_VERIFICATION_PENDING" | "INITIATED";
+  if (bankVerifiedAtInitial) initialSubscriptionStatus = "BANK_VERIFIED";
+  else if (bankVerificationPendingAtInitial) initialSubscriptionStatus = "BANK_VERIFICATION_PENDING";
+  else initialSubscriptionStatus = "AUTHORISED";
+
+  // M3C: conditionally create Stripe subscription ONLY when payment
+  // initiation is enabled AND bank is verified.  Default path (flag
+  // OFF) persists mandate + cycle in BANK_VERIFIED / PENDING and
+  // returns -- no subscription, no debit.
+  const paymentInitiationEnabled = process.env.SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION === "1";
+  let subscription: { stripeSubscriptionId: string; firstPaymentIntentId: string } | null = null;
+  if (paymentInitiationEnabled && initialSubscriptionStatus === "BANK_VERIFIED") {
+    try {
+      subscription = await stripe.createSubscription({
+        idempotencyKey: `signup-2m2-syn-sub:${reg.id}:first`,
+        stripeCustomerId: sessionResult.customerId,
+        stripePriceId: priceId,
+        defaultPaymentMethodId: sessionResult.paymentMethodId,
+        metadata: {
+          signupRegistrationIdTail: reg.id.slice(-6),
+          syntheticTestOnly: "true",
+        },
+      });
+      initialSubscriptionStatus = "INITIATED";
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.error("signup.synthetic.subscription_create_failed", {
         registrationIdTail: reg.id.slice(-6),
         checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
         stripeMandateIdTail: sessionResult.mandateId!.slice(-8),
-        stripePaymentMethodIdTail: sessionResult.paymentMethodId!.slice(-8),
-        syntheticTestOnly: true,
-      },
+        priceIdTail: priceId.slice(-8),
+        detail,
+      });
+      await audit(null, {
+        action: "signup.synthetic.subscription_create_failed",
+        entityType: "SignupRegistration",
+        entityId: reg.id,
+        clubId: null,
+        meta: {
+          registrationIdTail: reg.id.slice(-6),
+          stripeError: detail.slice(0, 500),
+          syntheticTestOnly: true,
+        },
+      });
+      throw new AppError(
+        "SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED",
+        `Stripe refused to create the synthetic test subscription: ${detail}. The mandate + payment method remain valid on Stripe; operator can retry via recoverSyntheticSignedMandate once the underlying cause (likely ACSS amount limit) is resolved.`,
+        500,
+      );
+    }
+  } else {
+    logger.info("signup.synthetic.subscription_create_deferred", {
+      registrationIdTail: reg.id.slice(-6),
+      paymentInitiationEnabled,
+      initialSubscriptionStatus,
+      setupIntentStatus: setupIntentStatusForLog,
+      reason: !paymentInitiationEnabled
+        ? "SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION=0 -- deferred until explicit payment-initiation enablement"
+        : `cycle not BANK_VERIFIED (${initialSubscriptionStatus})`,
     });
-    throw new AppError(
-      "SIGNUP_2M3_PAYMENT_INITIATION_DISABLED",
-      "SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION is 0 -- subscription creation refused on every pathway including synthetic sandbox. Mandate + PaymentMethod remain valid on Stripe.",
-      403,
-    );
   }
 
-  // M2-SyntheticSandbox-Repair (2026-10-27): wrap subscription
-  // creation so a Stripe-side failure (e.g. ACSS amount limit) does
-  // not crash the handler.  On failure, we write a structured
-  // operator-visible marker (via the Mandate row's revoke slot would
-  // conflict with legitimate revocation; use the audit log) + throw
-  // an AppError the route maps to a specific error_code.  The
-  // operator can retry via recoverSyntheticSignedMandate once the
-  // underlying cause (ACSS limit, missing capability) is resolved.
-  //
-  // Exactly-once semantics are preserved because the idempotencyKey
-  // is deterministic -- a retry with the same key either returns the
-  // existing subscription OR re-runs the create against Stripe.
-  let subscription;
-  try {
-    subscription = await stripe.createSubscription({
-      idempotencyKey: `signup-2m2-syn-sub:${reg.id}:first`,
-      stripeCustomerId: sessionResult.customerId,
-      stripePriceId: priceId,
-      defaultPaymentMethodId: sessionResult.paymentMethodId,
-      metadata: {
-        signupRegistrationIdTail: reg.id.slice(-6),
-        syntheticTestOnly: "true",
-      },
-    });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    logger.error("signup.synthetic.subscription_create_failed", {
-      registrationIdTail: reg.id.slice(-6),
-      checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
-      stripeCustomerIdTail: sessionResult.customerId.slice(-8),
-      stripeMandateIdTail: sessionResult.mandateId!.slice(-8),
-      stripePaymentMethodIdTail: sessionResult.paymentMethodId!.slice(-8),
-      priceIdTail: priceId.slice(-8),
-      detail,
-    });
-    await audit(null, {
-      action: "signup.synthetic.subscription_create_failed",
-      entityType: "SignupRegistration",
-      entityId: reg.id,
-      clubId: null,
-      meta: {
-        registrationIdTail: reg.id.slice(-6),
-        checkoutSessionIdTail: args.checkoutSessionId.slice(-8),
-        stripeError: detail.slice(0, 500),
-        syntheticTestOnly: true,
-      },
-    });
-    throw new AppError(
-      "SIGNUP_2M2_SYNTHETIC_STRIPE_SUBSCRIPTION_FAILED",
-      `Stripe refused to create the synthetic test subscription: ${detail}.  The mandate + payment method remain valid on Stripe (SetupIntent succeeded); operator can retry via recoverSyntheticSignedMandate once the underlying cause (likely ACSS amount limit on sandbox account) is resolved.`,
-      500,
-    );
-  }
+  // M3C: FK-safe synthetic Club.  Previously `clubId: reg.id`
+  // (a Phase-2E placeholder) which Postgres rejects due to the Club FK.
+  // Upsert a dedicated synthetic Club per registration; teardown
+  // deletes it alongside the cycle.
+  const clubSlug = `synthetic-test-only-m2-${reg.id.slice(-10)}`;
+  const syntheticClub = await prisma.club.upsert({
+    where: { slug: clubSlug },
+    create: {
+      name: `SYNTHETIC_TEST_ONLY ${reg.id.slice(-8)}`,
+      slug: clubSlug,
+      stagingDataMode: "SYNTHETIC_DEMO",
+      isDemoTenant: true,
+    },
+    update: {},
+    select: { id: true },
+  });
 
   const now = new Date();
   const mandateText = `SYNTHETIC_TEST_ONLY ACSS mandate for Stripe sandbox technical acceptance -- registration ${reg.id.slice(-6)}, Stripe mandate ${sessionResult.mandateId}`;
@@ -660,18 +693,25 @@ export async function persistSyntheticSignedMandate(args: {
     });
     const cycle = await tx.billingCycle.create({
       data: {
-        clubId: reg.id,
+        clubId: syntheticClub.id,
         periodLabel: `signup-2m2-syn-first-${reg.id.slice(-8)}`,
         startDate: now,
         endDate: new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
         totalDue: 38000.00,
         totalPaid: 0.00,
         status: "OPEN",
-        subscriptionStatus: "INITIATED",
+        subscriptionStatus: initialSubscriptionStatus,
         source: "STRIPE_ACSS",
-        stripePaymentIntentId: subscription.firstPaymentIntentId,
+        stripePaymentIntentId: subscription?.firstPaymentIntentId ?? null,
         releasedByOperatorRecordId: releaseRecord.id,
         syntheticTestOnly: true,
+        // M3B §3 columns -- authoritative bank-verification state.
+        stripeSetupIntentId: sessionResult.setupIntentId ?? null,
+        bankVerificationMethod: bankVerificationMethodInitial,
+        bankVerifiedAt: bankVerifiedAtInitial,
+        bankVerificationPendingAt: bankVerificationPendingAtInitial,
+        bankVerificationHostedUrl: bankVerificationHostedUrlInitial,
+        bankVerificationExpiresAt: bankVerificationExpiresAtInitial,
       },
       select: { id: true },
     });
@@ -685,13 +725,22 @@ export async function persistSyntheticSignedMandate(args: {
     clubId: null,
     meta: {
       registrationIdTail: reg.id.slice(-6),
-      stripeSubscriptionIdTail: subscription.stripeSubscriptionId.slice(-8),
+      initialSubscriptionStatus,
+      paymentInitiationEnabled,
+      setupIntentStatus: setupIntentStatusForLog,
+      stripeSubscriptionIdTail: subscription?.stripeSubscriptionId.slice(-8) ?? null,
       stripeMandateIdTail: sessionResult.mandateId.slice(-8),
       billingCycleIdTail: result.cycleId.slice(-6),
       syntheticTestOnly: true,
     },
   });
-  return { noop: false, mandateId: result.mandateId, billingCycleId: result.cycleId };
+  return {
+    noop: false,
+    mandateId: result.mandateId,
+    billingCycleId: result.cycleId,
+    initialSubscriptionStatus,
+    paymentInitiated: subscription !== null,
+  };
 }
 
 // ---- Recovery (SUPER_ADMIN-gated retry after a transient subscription-create failure) ----
@@ -722,7 +771,13 @@ export async function persistSyntheticSignedMandate(args: {
 export async function recoverSyntheticSignedMandate(
   registrationId: string,
   checkoutSessionId: string,
-): Promise<{ noop: boolean; mandateId?: string; billingCycleId?: string }> {
+): Promise<{
+  noop: boolean;
+  mandateId?: string;
+  billingCycleId?: string;
+  initialSubscriptionStatus?: "AUTHORISED" | "BANK_VERIFIED" | "BANK_VERIFICATION_PENDING" | "INITIATED";
+  paymentInitiated?: boolean;
+}> {
   // Operator-driven: guards must hold, but NO nonce check (the
   // operator-authenticated SUPER_ADMIN HTTP route gate replaces the
   // signatory nonce for retries).

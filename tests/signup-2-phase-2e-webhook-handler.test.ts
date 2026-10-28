@@ -50,8 +50,10 @@ describe("SIGNUP-2 Phase 2E · flag-OFF path persists but does not dispatch (fou
     expect(flagIdx).toBeGreaterThan(persistIdx);
   });
 
-  it("returns 200 'received_disabled' and does NOT call dispatchStripeEvent when flag unset", () => {
-    const block = WEBHOOK.match(/if \(process\.env\.SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1"\)[\s\S]+?\}\s*/)!;
+  it("returns 200 'received_disabled' and does NOT call dispatchStripeEvent when both flags unset", () => {
+    // M3B (2026-10-28): dispatch is enabled by EITHER
+    // SPECTRE_SIGNUP_2E_PAYMENT_LIVE OR SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH.
+    const block = WEBHOOK.match(/if \(!dispatchEnabled\)[\s\S]+?return new NextResponse\("received_disabled"[\s\S]*?\);\s*\}/)!;
     expect(block[0]).toMatch(/received_disabled/);
     // dispatchStripeEvent is dynamically imported AFTER this block.
     expect(block[0]).not.toMatch(/dispatchStripeEvent/);

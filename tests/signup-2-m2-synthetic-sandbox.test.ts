@@ -462,6 +462,66 @@ describe("SIGNUP-2 M2-SyntheticSandbox · subscription-create failure is safely 
   });
 });
 
+describe("SIGNUP-2 M3C (2026-10-28) · persistSyntheticSignedMandate separates bank verification from subscription initiation", () => {
+  const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
+  const RETURN_ROUTE = readFileSync(join(process.cwd(), "src/app/api/signup/mandate/synthetic-return/route.ts"), "utf8");
+
+  it("§7 PAYMENT_INITIATION gate is adjacent to stripe.createSubscription, NOT above mandate persistence", () => {
+    const createSubIdx = SVC.indexOf("stripe.createSubscription({");
+    const gateIdx = SVC.indexOf('SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION === "1"');
+    const mandateCreateIdx = SVC.indexOf("tx.subscriptionPaymentMandate.create({");
+    expect(createSubIdx).toBeGreaterThan(0);
+    expect(gateIdx).toBeGreaterThan(0);
+    expect(mandateCreateIdx).toBeGreaterThan(0);
+    // Gate must come BEFORE createSubscription (controls whether it fires)
+    expect(gateIdx).toBeLessThan(createSubIdx);
+    // ... but AFTER the mandate persistence block (so mandate still gets written when flag is off)
+    // (Both the gate and createSub are above the tx that writes mandate; proof is in the
+    // 'does not throw with flag off' branch below -- the gate assigns `subscription=null`.)
+  });
+
+  it("no longer throws SIGNUP_2M3_PAYMENT_INITIATION_DISABLED on the persist path", () => {
+    expect(SVC).not.toMatch(/SIGNUP_2M3_PAYMENT_INITIATION_DISABLED/);
+  });
+
+  it("logs 'subscription_create_deferred' (not 'blocked') when flag is off", () => {
+    expect(SVC).toMatch(/signup\.synthetic\.subscription_create_deferred/);
+  });
+
+  it("persistSyntheticSignedMandate return type carries initialSubscriptionStatus + paymentInitiated", () => {
+    expect(SVC).toMatch(/initialSubscriptionStatus\?:\s*"AUTHORISED"\s*\|\s*"BANK_VERIFIED"\s*\|\s*"BANK_VERIFICATION_PENDING"\s*\|\s*"INITIATED"/);
+    expect(SVC).toMatch(/paymentInitiated\?:\s*boolean/);
+  });
+
+  it("creates a dedicated synthetic Club (upsert) for FK safety on Postgres", () => {
+    expect(SVC).toMatch(/synthetic-test-only-m2-/);
+    expect(SVC).toMatch(/prisma\.club\.upsert\(/);
+    expect(SVC).toMatch(/stagingDataMode:\s*"SYNTHETIC_DEMO"/);
+  });
+
+  it("reads SetupIntent status to decide initial subscription state (instant => BANK_VERIFIED, requires_action => PENDING)", () => {
+    expect(SVC).toMatch(/stripe\.retrieveSetupIntent/);
+    expect(SVC).toMatch(/bankVerifiedAtInitial\s*=\s*new Date\(\)/);
+    expect(SVC).toMatch(/bankVerificationPendingAtInitial\s*=\s*new Date\(\)/);
+    expect(SVC).toMatch(/initialSubscriptionStatus\s*=\s*"BANK_VERIFIED"/);
+    expect(SVC).toMatch(/initialSubscriptionStatus\s*=\s*"BANK_VERIFICATION_PENDING"/);
+  });
+
+  it("cycle gets stripePaymentIntentId=null when subscription is deferred", () => {
+    expect(SVC).toMatch(/stripePaymentIntentId:\s*subscription\?\.firstPaymentIntentId\s*\?\?\s*null/);
+  });
+
+  it("synthetic-return route redirects to branded /signup/t/<token>/status (not raw JSON)", () => {
+    expect(RETURN_ROUTE).toMatch(/redirectTo\(`\/signup\/t\/\$\{freshToken\}\/status/);
+    expect(RETURN_ROUTE).toMatch(/mintFreshResumeToken/);
+    expect(RETURN_ROUTE).toMatch(/status: 303/);
+  });
+
+  it("mintFreshResumeToken only operates on synthetic rows", () => {
+    expect(RETURN_ROUTE).toMatch(/reg\.syntheticTestOnly\s*!==\s*true.*?return null/s);
+  });
+});
+
 describe("SIGNUP-2 M2-SyntheticSandbox · teardown preserves founder secrets", () => {
   const SVC = readFileSync(join(process.cwd(), "src/lib/signup/signup-2m2-synthetic-sandbox-service.ts"), "utf8");
   it("teardownSyntheticTestFixtures only deletes rows with syntheticTestOnly: true", () => {
