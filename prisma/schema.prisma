@@ -348,6 +348,8 @@ model Club {
   clubSubscription                 ClubSubscription?
   usageMetrics                     UsageMetric[]
   billingCycles                    BillingCycle[]
+  // SIGNUP-2 M4-schema (2026-10-28) -- durable billing command log back-relation.
+  billingCommands                  BillingCommand[]
   // Phase 11
   webhookSecretVersions            WebhookSecretVersion[]
   webhookSecretRotations           WebhookSecretRotation[]
@@ -8555,6 +8557,12 @@ model BillingCycle {
 
   provisioningJob   TenantProvisioningJob?
   reconciliationEntries PaymentReconciliationEntry[]
+  // SIGNUP-2 M4-schema (2026-10-28) -- billing lifecycle back-relations.
+  billingRelease        ClubBillingRelease?
+  billingCommands       BillingCommand[]
+  paymentAttempts       BillingInvoicePaymentAttempt[]
+  renewalPreflights     BillingRenewalPreflight[]
+  exceptionCases        BillingExceptionCase[]
 
   @@unique([clubId, periodLabel])
   @@index([clubId, status])
@@ -10802,6 +10810,11 @@ model SignupRegistration {
   microsoftTransactions SignupOAuthTransaction[]
   recoveryLinks         SignupRecoveryLink[]
   operatorVerificationRecords OperatorVerificationRecord[]
+  // SIGNUP-2 M4-schema (2026-10-28) -- billing authorization back-relations.
+  contractExecution    ClubContractExecution?
+  billingPricing       ClubBillingPricing?
+  paymentAuthorisation ClubPaymentAuthorisation?
+  billingRelease       ClubBillingRelease?
 
   @@index([status, expiresAt])
   @@index([adminMicrosoftOid, status])
@@ -16037,4 +16050,349 @@ model GolfActivityDay {
 
   @@unique([clubId, activityDate])
   @@index([clubId, activityDate])
+}
+
+// =========================================================================
+// SIGNUP-2 M4-schema (2026-10-28) -- Annual billing authorization +
+// settlement + durable command queue.  Schema-only slice; NO behavior
+// yet (no M4-triggering / settlement / retries / renewal / cancellation
+// implementation per founder authorisation).  Flag-gated behavior
+// lands in later slices.
+//
+// Design decisions reflected here (per founder M4 revision):
+//   #1 Two-operator SoD (commercial authorization + final payment release)
+//   #4 Stripe-confirmed events auto-recorded; operator oversight for
+//      suspension / reinstatement / exceptional actions
+//   #5 Explicit models for executed contract evidence, pricing,
+//      authorisation, release decision (no free-text enrolment-letter
+//      reference as the sole evidence)
+//
+// Design corrections reflected here:
+//   #6 Retries bound to the ORIGINAL Stripe invoice id (no duplicate
+//      collection); BillingInvoicePaymentAttempt tracks attempts per invoice
+//   #10 Durable, idempotent BillingCommand queue for every Stripe
+//       billing mutation -- survives API timeouts, process crashes,
+//       duplicate requests, uncertain outcomes
+//   #11 BillingRenewalPreflight carries pricing/mandate/tax snapshots
+//
+// Everything is additive + nullable; rollback does NOT drop columns
+// or tables.  No existing row is touched; no existing read path breaks.
+// =========================================================================
+
+model ClubContractExecution {
+  // Decision #5: executed-contract evidence replaces the free-text
+  // enrolment-letter reference.
+  id                          String    @id @default(cuid())
+  signupRegistrationId        String    @unique
+  signupRegistration          SignupRegistration @relation(fields: [signupRegistrationId], references: [id])
+  // "MASTER_SERVICES_AGREEMENT_v2" | "ANNUAL_ORDER_FORM_v1" | ...
+  contractType                String
+  contractVersionSha256       String
+  contractExecutedAt          DateTime
+  // Operator who recorded execution (not the club signer; that is
+  // represented via the contract artefact itself).
+  contractRecordedByUserId    String?
+  // Storage pointer for the signed artefact.  Opaque to Prisma;
+  // resolved by the signed-document service.
+  evidenceStorageKey          String
+  evidenceContentType         String
+  evidenceSha256              String
+  evidenceByteLength          Int
+  // Optional governance requirement.  Decision #1: Record additional
+  // governance approval only where required by the clubs contract or
+  // internal policy.
+  governanceRequired          Boolean   @default(false)
+  governanceApprovedByUserId  String?
+  governanceApprovedAt        DateTime?
+  governanceReference         String?
+  syntheticTestOnly           Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  pricing                     ClubBillingPricing?
+  paymentAuthorisation        ClubPaymentAuthorisation?
+
+  @@index([contractExecutedAt])
+  @@index([syntheticTestOnly])
+}
+
+model ClubBillingPricing {
+  // Decision #5: applicable subscription price + tax treatment.
+  id                          String    @id @default(cuid())
+  signupRegistrationId        String    @unique
+  signupRegistration          SignupRegistration @relation(fields: [signupRegistrationId], references: [id])
+  contractExecutionId         String    @unique
+  contractExecution           ClubContractExecution @relation(fields: [contractExecutionId], references: [id])
+  // Stripe Price id snapshot at authorization time.  M4-triggering
+  // (future slice) uses this id for subscription create.
+  stripePriceId               String
+  currency                    String
+  amountMinorUnits            BigInt
+  billingInterval             String
+  // Tax treatment per CA jurisdiction.
+  // "TAX_EXEMPT" | "GST_INCLUSIVE" | "GST_EXCLUSIVE" | "PROVINCIAL_HST_INCLUSIVE"
+  taxTreatment                String
+  taxJurisdiction             String?
+  // Basis points: 500 = 5.00%; null when tax-exempt.
+  gstPercentBps               Int?
+  pstPercentBps               Int?
+  hstPercentBps               Int?
+  // Operator who confirmed pricing selection.
+  priceSelectedByUserId       String
+  priceSelectedAt             DateTime
+  priceEvidenceReference      String?
+  syntheticTestOnly           Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  paymentAuthorisation        ClubPaymentAuthorisation?
+
+  @@index([stripePriceId])
+  @@index([taxJurisdiction])
+  @@index([syntheticTestOnly])
+}
+
+model ClubPaymentAuthorisation {
+  // Decision #1: commercial authorisation (operator A).
+  id                          String    @id @default(cuid())
+  signupRegistrationId        String    @unique
+  signupRegistration          SignupRegistration @relation(fields: [signupRegistrationId], references: [id])
+  pricingId                   String    @unique
+  pricing                     ClubBillingPricing @relation(fields: [pricingId], references: [id])
+  contractExecutionId         String    @unique
+  contractExecution           ClubContractExecution @relation(fields: [contractExecutionId], references: [id])
+  // Operator A -- commercial authorization.
+  commercialApprovedByUserId  String
+  commercialApprovedAt        DateTime
+  commercialApprovalNotes     String?
+  // Snapshot of what was authorised (defensive -- if pricing changes
+  // later, this records the exact amount commercial saw).
+  authorisedAmountMinorUnits  BigInt
+  authorisedCurrency          String
+  syntheticTestOnly           Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  release                     ClubBillingRelease?
+
+  @@index([commercialApprovedByUserId])
+  @@index([commercialApprovedAt])
+  @@index([syntheticTestOnly])
+}
+
+model ClubBillingRelease {
+  // Decision #1: final payment release (operator B).  SoD enforcement
+  // (operator B MUST != operator A) belongs in the release service,
+  // not the schema; here we just carry both ids distinctly.
+  id                              String    @id @default(cuid())
+  signupRegistrationId            String    @unique
+  signupRegistration              SignupRegistration @relation(fields: [signupRegistrationId], references: [id])
+  billingCycleId                  String    @unique
+  billingCycle                    BillingCycle @relation(fields: [billingCycleId], references: [id])
+  authorisationId                 String    @unique
+  authorisation                   ClubPaymentAuthorisation @relation(fields: [authorisationId], references: [id])
+  // Operator B -- final payment release.  Service enforces SoD:
+  // releaseApprovedByUserId != authorisation.commercialApprovedByUserId.
+  releaseApprovedByUserId         String
+  releaseApprovedAt               DateTime
+  releaseApprovalNotes            String?
+  // Correction #10: the release does NOT itself call Stripe.  It
+  // produces a durable BillingCommand (via releaseToken consume) that
+  // the worker executes.
+  releaseToken                    String    @unique
+  releaseTokenConsumedAt          DateTime?
+  consumedByBillingCommandId      String?   @unique
+  syntheticTestOnly               Boolean   @default(false)
+  createdAt                       DateTime  @default(now())
+  updatedAt                       DateTime  @updatedAt
+
+  @@index([releaseApprovedByUserId])
+  @@index([releaseTokenConsumedAt])
+  @@index([syntheticTestOnly])
+}
+
+model BillingCommand {
+  // Correction #10: durable, idempotent billing command queue.
+  // Every Stripe billing mutation (subscriptions.create, invoices.pay,
+  // subscriptions.update for cancel_at_period_end, etc.) runs through
+  // this queue so process crashes, API timeouts, duplicate requests,
+  // and uncertain outcomes recover without duplicate collection.
+  id                          String    @id @default(cuid())
+  // Command intent -- the Stripe call this row authorises.
+  // "SUBSCRIPTION_CREATE_FIRST"
+  //   | "INVOICE_PAY_RETRY"                (correction #6: same invoice id)
+  //   | "SUBSCRIPTION_SCHEDULE_CANCEL"     (correction #7: cancel_at_period_end)
+  //   | "SUBSCRIPTION_RESUME"
+  //   | "MANDATE_VALIDITY_CHECK"           (decision #3: renewal preflight)
+  commandType                 String
+  // Deterministic Stripe idempotencyKey.  Shape: per-command-site
+  // (e.g. "signup-2m4-sub-create:<cycleId>:v1").
+  stripeIdempotencyKey        String    @unique
+  // Scope.
+  billingCycleId              String
+  billingCycle                BillingCycle @relation(fields: [billingCycleId], references: [id])
+  clubId                      String
+  club                        Club      @relation(fields: [clubId], references: [id])
+  // State machine:
+  //   PENDING    -> ATTEMPTED (worker picked up; row LOCKed FOR UPDATE)
+  //   ATTEMPTED  -> SUCCEEDED | FAILED | UNCERTAIN | DEFERRED
+  //   UNCERTAIN  -> SUCCEEDED | FAILED (post-reconciliation with Stripe)
+  //   FAILED     -> PENDING (operator-authorised retry) | TERMINAL
+  state                       String    @default("PENDING")
+  attemptNumber               Int       @default(0)
+  maxAttempts                 Int       @default(1)
+  // Resolved Stripe object after success.
+  stripeResourceId            String?
+  stripeResourceType          String?
+  // Last error for triage.
+  lastErrorCode               String?
+  lastErrorMessage            String?
+  lastErrorAt                 DateTime?
+  // Params the command needs (small JSON string).
+  paramsJson                  String?
+  // Linked release (for subscription create) or null for internal
+  // (retry, preflight).
+  releaseId                   String?
+  // Deferred execution.
+  nextAttemptAt               DateTime  @default(now())
+  // Finalisation timestamps.
+  succeededAt                 DateTime?
+  terminalAt                  DateTime?
+  syntheticTestOnly           Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  @@index([state, nextAttemptAt])
+  @@index([billingCycleId])
+  @@index([clubId])
+  @@index([stripeResourceId])
+  @@index([commandType])
+  @@index([syntheticTestOnly])
+}
+
+model BillingInvoicePaymentAttempt {
+  // Correction #6: retries bound to the ORIGINAL Stripe invoice id;
+  // no new invoice is created on retry.
+  // Decision #2: at most ONE automatic retry at >= 3 bd after failure;
+  // notify club first; never retry invalid/revoked mandates.
+  id                           String    @id @default(cuid())
+  billingCycleId               String
+  billingCycle                 BillingCycle @relation(fields: [billingCycleId], references: [id])
+  // ORIGINAL invoice id -- same across all retry attempts.
+  stripeInvoiceId              String
+  stripePaymentIntentId        String?
+  stripeChargeId               String?
+  attemptNumber                Int
+  attemptScheduledAt           DateTime
+  attemptStartedAt             DateTime?
+  attemptSettledAt             DateTime?
+  outcome                      String?
+  outcomeStripeCode            String?
+  outcomeMessage               String?
+  // Decision #2: the retry attempt chain.
+  originatingAttemptId         String?
+  originatingAttempt           BillingInvoicePaymentAttempt? @relation("retryChain", fields: [originatingAttemptId], references: [id])
+  retries                      BillingInvoicePaymentAttempt[] @relation("retryChain")
+  // Decision #2: club notified BEFORE the retry fired.
+  clubNotifiedAt               DateTime?
+  clubNotificationWorkIntakeId String?
+  // Mandate validity gate (decision #2: no retry on invalid/revoked).
+  mandateValidAtAttemptTime    Boolean?
+  // Correction #8: Stripe-reported invoice billing period identifiers
+  // for safe renewal matching (no event-ordering assumption).
+  stripeInvoicePeriodStart     DateTime?
+  stripeInvoicePeriodEnd       DateTime?
+  stripeSubscriptionId         String?
+  syntheticTestOnly            Boolean   @default(false)
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  @@unique([stripeInvoiceId, attemptNumber])
+  @@index([billingCycleId])
+  @@index([outcome])
+  @@index([attemptScheduledAt])
+  @@index([stripeSubscriptionId])
+  @@index([syntheticTestOnly])
+}
+
+model BillingRenewalPreflight {
+  // Decision #3: T-45 and a second check closer to renewal.
+  // Correction #11: pricing/mandate/tax snapshots at check time.
+  id                          String    @id @default(cuid())
+  billingCycleId              String
+  billingCycle                BillingCycle @relation(fields: [billingCycleId], references: [id])
+  checkpointLabel             String
+  scheduledFor                DateTime
+  executedAt                  DateTime?
+  // Mandate validity snapshot (decision #3 + correction #11).
+  mandateStillValid           Boolean?
+  mandateCheckError           String?
+  // Pricing + tax snapshot at check time -- flags pricing drift.
+  renewalPriceId              String?
+  renewalAmountMinorUnits     BigInt?
+  renewalCurrency             String?
+  renewalTaxTreatment         String?
+  renewalGstPercentBps        Int?
+  renewalPricingDriftDetected Boolean   @default(false)
+  // Outcome.
+  outcome                     String?
+  outcomeNotes                String?
+  // Follow-up tracking.
+  workIntakeId                String?
+  operatorInboxEntryId        String?
+  syntheticTestOnly           Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  @@unique([billingCycleId, checkpointLabel])
+  @@index([scheduledFor, executedAt])
+  @@index([outcome])
+  @@index([syntheticTestOnly])
+}
+
+model BillingExceptionCase {
+  // Decision #4: Stripe-confirmed refunds/reversals/dispute outcomes
+  // auto-recorded; operator oversight for suspension / reinstatement /
+  // exceptional actions.
+  // Correction #9: no hardcoded dispute windows; records the actual
+  // balance_transaction availability + supports later reversals.
+  id                           String    @id @default(cuid())
+  billingCycleId               String
+  billingCycle                 BillingCycle @relation(fields: [billingCycleId], references: [id])
+  // "REFUND" | "DISPUTE_OPENED" | "DISPUTE_FUNDS_WITHDRAWN"
+  //   | "DISPUTE_FUNDS_REINSTATED" | "DISPUTE_CLOSED_WON"
+  //   | "DISPUTE_CLOSED_LOST" | "RETURNED_DEBIT" | "ATTEMPT_FAILURE"
+  //   | "RENEWAL_FAILURE" | "MANDATE_INVALIDATED"
+  category                     String
+  severity                     String
+  // Stripe provenance.
+  stripeEventId                String?
+  stripeResourceId             String?
+  stripeResourceType           String?
+  // Decision #4: Stripe-confirmed events auto-recorded here.
+  autoRecordedAt               DateTime?
+  autoRecordedPayloadJson      String?
+  // Correction #9: balance-transaction effect reference (actual, not assumed).
+  stripeBalanceTransactionId   String?
+  balanceEffectAmountMinor     BigInt?
+  balanceEffectCurrency        String?
+  balanceAvailableAt           DateTime?
+  // Decision #4: operator oversight for consequential actions.
+  requiresOperatorAction       Boolean   @default(false)
+  operatorInboxEntryId         String?
+  operatorAcknowledgedByUserId String?
+  operatorAcknowledgedAt       DateTime?
+  // "SUSPEND_TENANT" | "RETRY_INVOICE" | "SCHEDULE_CANCELLATION"
+  //   | "ACCEPT_LOSS" | "AWAIT_DISPUTE_OUTCOME" | "NO_ACTION"
+  operatorResolution           String?
+  operatorResolutionNotes      String?
+  syntheticTestOnly            Boolean   @default(false)
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  @@index([billingCycleId])
+  @@index([category])
+  @@index([requiresOperatorAction, operatorAcknowledgedAt])
+  @@index([stripeEventId])
+  @@index([syntheticTestOnly])
 }
