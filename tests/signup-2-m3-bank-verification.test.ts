@@ -276,6 +276,40 @@ describe("signup-2 m3 :: verification-method classifier", () => {
   });
 });
 
+describe("signup-2 m3d :: §5 bank-verification copy distinguishes verification from billing authorization", () => {
+  // Per M3D §5: "Do not imply that payment will automatically proceed
+  // unless all required commercial and governance conditions are
+  // satisfied."  Verification is NOT authorization to debit.
+  const STATUS_PAGE_PATH = "src/app/signup/t/[token]/status/page.tsx";
+
+  it("BANK_VERIFIED banner no longer claims subscription will proceed automatically", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const content = readFileSync(join(process.cwd(), STATUS_PAGE_PATH), "utf8");
+    // The pre-M3D copy promised payment would proceed on the enrolment-letter schedule.
+    // That exact claim must be gone.
+    expect(content).not.toMatch(/will proceed with the annual subscription on the schedule outlined in your enrolment letter/);
+  });
+
+  it("BANK_VERIFIED banner states no payment has been initiated and verification is not billing authorization", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const content = readFileSync(join(process.cwd(), STATUS_PAGE_PATH), "utf8");
+    expect(content).toMatch(/No payment has been initiated and no funds have been debited/);
+    expect(content).toMatch(/does NOT itself start billing/);
+    expect(content).toMatch(/commercial and governance conditions/);
+  });
+
+  it("BANK_VERIFICATION_PENDING banner likewise does not imply billing after verification", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const content = readFileSync(join(process.cwd(), STATUS_PAGE_PATH), "utf8");
+    // Must mention microdeposit flow + reinforce no auto-billing-on-verification.
+    expect(content).toMatch(/No payment has been initiated/);
+    expect(content).toMatch(/commercial and governance conditions/);
+  });
+});
+
 describe("signup-2 m3b :: §1 narrow webhook-dispatch flag (SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH)", () => {
   // The M3B founder authorization specifies that if the legacy
   // SPECTRE_SIGNUP_2E_PAYMENT_LIVE flag enables anything beyond

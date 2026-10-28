@@ -64,17 +64,24 @@ export default async function StatusScreen({
         tone: "info" as const,
         title: "Bank verification pending",
         body:
-          "You chose to verify your bank account by microdeposit. Within 1-2 business days you'll receive an email from Stripe with two small deposit amounts to confirm. Please follow that email to complete verification. No funds will be debited until verification is complete.",
+          "You chose to verify your bank account by microdeposit. Within 1-2 business days you'll receive an email from Stripe with two small deposit amounts to confirm. Please follow that email to complete verification. No payment has been initiated and no funds have been or will be debited until Spectre completes the remaining commercial and governance conditions and authorizes billing.",
       };
     }
     if (s === "BANK_VERIFIED") {
+      // M3D §5 (2026-10-28): verification does NOT imply authorization
+      // to debit.  Billing starts only after Spectre's commercial +
+      // governance conditions are satisfied AND payment-initiation is
+      // explicitly authorized.
       const method = cycle.bankVerificationMethod === "MICRODEPOSITS"
         ? "after microdeposit confirmation"
         : "instantly";
       return {
         tone: "ok" as const,
         title: "Bank account verified",
-        body: `Your bank account was verified ${method}. Spectre will proceed with the annual subscription on the schedule outlined in your enrolment letter.`,
+        body:
+          `Your bank account was verified ${method}. No payment has been initiated and no funds have been debited. ` +
+          `Verification confirms Spectre can debit this account when billing is later authorized — it does NOT itself start billing. ` +
+          `Annual billing begins only after Spectre completes the remaining commercial and governance conditions and authorizes the first debit.`,
       };
     }
     if (s === "BANK_VERIFICATION_FAILED") {
