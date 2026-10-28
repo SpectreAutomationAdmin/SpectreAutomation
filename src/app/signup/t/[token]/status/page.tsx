@@ -36,8 +36,17 @@ export default async function StatusScreen({
   // NOT (and cannot) override this.  The webhook dispatcher
   // (onSetupIntentEvent in signup-2e-webhook-dispatch.ts) is the only
   // writer of these states, driven by signed Stripe events.
+  //
+  // Lookup path: BillingCycle links to OperatorVerificationRecord via
+  // releasedByOperatorRecordId; that record carries signupRegistrationId.
+  // We cannot rely on `clubId === reg.id` because the pre-Phase-2G
+  // placeholder is cleared once provisioning rewrites clubId to the
+  // real Club FK.
   const cycle = await prisma.billingCycle.findFirst({
-    where: { clubId: reg.id, source: "STRIPE_ACSS" },
+    where: {
+      source: "STRIPE_ACSS",
+      releasedByOperatorRecord: { signupRegistrationId: reg.id },
+    },
     orderBy: { createdAt: "desc" },
     select: {
       subscriptionStatus: true,
