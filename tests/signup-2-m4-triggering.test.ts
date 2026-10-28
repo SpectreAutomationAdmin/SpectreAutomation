@@ -286,12 +286,12 @@ describe("signup-2 m4-triggering :: §B release authorization durably associated
 });
 
 describe("signup-2 m4-triggering :: Scope boundaries (per founder M4-triggering authorisation §5)", () => {
-  it("no M4-renewal / M4-cancellation service files exist (retries authorised 2026-10-28)", async () => {
+  it("no M4-cancellation service file exists (renewal authorised 2026-10-28)", async () => {
     const { readdirSync, existsSync } = await import("node:fs");
     if (!existsSync(join(process.cwd(), "src/lib/billing"))) return;
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
     const forbidden = files.filter((f) =>
-      /^signup-2m4-(renewal|cancellation)-service\.ts$/.test(f)
+      /^signup-2m4-cancellation-service\.ts$/.test(f)
     );
     expect(forbidden, `forbidden future-slice files present: ${forbidden.join(", ")}`).toEqual([]);
   });

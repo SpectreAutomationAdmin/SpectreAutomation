@@ -25,6 +25,15 @@
 //   webhook delivery, and SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION for
 //   the actual stripe.invoices.pay call (same global sub-create block
 //   M3 §7).
+//
+// M4-renewal §5 correction #3 (OPEN ACCEPTANCE GATE):
+//   Retry-eligibility decisions driven by signed-webhook fixture
+//   invoice.payment_failed events are driven by FIXTURE evidence,
+//   not real Stripe-originated settlement.  A real retry collection
+//   (stripe.invoices.pay) is additionally gated by
+//   SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION, which remains OFF.  Real
+//   Stripe-originated settlement is an explicitly OPEN acceptance
+//   gate.
 
 import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
@@ -80,15 +89,70 @@ export function classifyFailureForRetry(args: {
 }
 
 /* ============================================================
- * Business-day math (Mon-Fri, Canadian default; no stat holiday
- * calendar in this slice -- documented limitation + the floor is a
- * MINIMUM so stat-holiday extensions are safe)
+ * Business-day math (Mon-Fri + Canadian federal + Alberta stat
+ * holidays)
  * ============================================================ */
 
+/** Canadian stat holidays per federal + Alberta observance.
+ *  Pinned explicitly for predictability + testability.  Floor is a
+ *  MINIMUM, so missing a stat holiday only shortens -- never extends --
+ *  the retry delay; the calendar below is additive safety.
+ *
+ *  Entries use ISO date string in UTC.  Expand yearly as needed.
+ *
+ *  Federal holidays included: New Year's Day, Good Friday, Victoria
+ *  Day, Canada Day, Labour Day, Thanksgiving, Remembrance Day,
+ *  Christmas Day, Boxing Day.
+ *  Alberta-specific: Alberta Family Day, Heritage Day.
+ *
+ *  M4-renewal §5 correction #2 (2026-10-28). */
+export const CANADIAN_STAT_HOLIDAYS_UTC: ReadonlySet<string> = new Set([
+  // 2026
+  "2026-01-01", // New Year's Day
+  "2026-02-16", // Alberta Family Day (3rd Mon Feb)
+  "2026-04-03", // Good Friday
+  "2026-05-18", // Victoria Day
+  "2026-07-01", // Canada Day
+  "2026-08-03", // Heritage Day (1st Mon Aug) -- Alberta
+  "2026-09-07", // Labour Day
+  "2026-10-12", // Thanksgiving (2nd Mon Oct)
+  "2026-11-11", // Remembrance Day
+  "2026-12-25", // Christmas Day
+  "2026-12-28", // Boxing Day observed (Dec 26 is a Sat)
+  // 2027
+  "2027-01-01",
+  "2027-02-15",
+  "2027-03-26", // Good Friday
+  "2027-05-24",
+  "2027-07-01",
+  "2027-08-02",
+  "2027-09-06",
+  "2027-10-11",
+  "2027-11-11",
+  "2027-12-27", // Christmas Day observed (Dec 25 is a Sat)
+  "2027-12-28", // Boxing Day observed
+  // 2028
+  "2028-01-03", // New Year's Day observed (Jan 1 is a Sat)
+  "2028-02-21",
+  "2028-04-14",
+  "2028-05-22",
+  "2028-07-03", // Canada Day observed (Jul 1 is a Sat)
+  "2028-08-07",
+  "2028-09-04",
+  "2028-10-09",
+  "2028-11-13", // Remembrance Day observed (Nov 11 is a Sat)
+  "2028-12-25",
+  "2028-12-26",
+]);
+
+function isCanadianStatHoliday(d: Date): boolean {
+  return CANADIAN_STAT_HOLIDAYS_UTC.has(d.toISOString().slice(0, 10));
+}
+
 /** Earliest instant at least `businessDays` business days after `from`.
- *  Business day = Mon..Fri.  Weekends don't count toward the floor.
- *  Returns UTC midnight on the floor day; callers add any
- *  within-day scheduling they want. */
+ *  Business day = Mon..Fri AND NOT a Canadian federal / Alberta stat
+ *  holiday (per CANADIAN_STAT_HOLIDAYS_UTC).  Returns UTC midnight on
+ *  the floor day; callers add any within-day scheduling they want. */
 export function earliestRetryAt(from: Date, businessDays: number): Date {
   const d = new Date(from.getTime());
   d.setUTCHours(0, 0, 0, 0);
@@ -97,7 +161,9 @@ export function earliestRetryAt(from: Date, businessDays: number): Date {
     d.setUTCDate(d.getUTCDate() + 1);
     const dow = d.getUTCDay();
     // 0 = Sunday, 6 = Saturday.
-    if (dow !== 0 && dow !== 6) bdLeft--;
+    if (dow === 0 || dow === 6) continue;
+    if (isCanadianStatHoliday(d)) continue;
+    bdLeft--;
   }
   return d;
 }
@@ -251,13 +317,19 @@ export async function evaluateRetryEligibility(
 export interface ClubNotificationResult {
   notificationId: string;
   channel: "PRE_ACTIVATION_OPERATOR_INBOX" | "TENANT_WORK_INTAKE";
+  emailDelivered: boolean;
+  emailProviderMessageId?: string;
+  emailFailureReason?: string;
 }
 
-/** For pre-activation clubs (no tenant portal yet), the notification
- *  lands in the operator inbox with a dedicated category so operations
- *  can proactively contact the club through the registration channel.
- *  Once a club has an active tenant, this will transition to the real
- *  Work Intake feed (M4-renewal or later). */
+/** M4-renewal §5 correction #1 (2026-10-28): the retry notification
+ *  now ALSO sends email directly to the registration admin email
+ *  (so a human can act), not just the OperatorInboxEntry (operator-
+ *  visibility only).  The OperatorInboxEntry remains for operator
+ *  oversight.  Pre-activation clubs don't have a tenant portal, so
+ *  the registration admin email is the authoritative customer
+ *  channel.  For post-activation clubs this will transition to
+ *  Work Intake (later slice). */
 export async function notifyClubBeforeRetry(args: {
   billingCycleId: string;
   stripeInvoiceId: string;
@@ -266,6 +338,7 @@ export async function notifyClubBeforeRetry(args: {
   retryAttemptNumber: number;
   syntheticTestOnly: boolean;
 }): Promise<ClubNotificationResult> {
+  // 1. OperatorInboxEntry (operator visibility -- unchanged).
   const inbox = await prisma.operatorInboxEntry.create({
     data: {
       severity: "IMMEDIATE",
@@ -273,18 +346,95 @@ export async function notifyClubBeforeRetry(args: {
       clubId: null,
       billingCycleId: args.billingCycleId,
       providerEventId: null,
-      title: "Scheduled ACSS retry -- club must be notified",
+      title: "Scheduled ACSS retry -- club notified by email",
       body:
         `BillingCycle ${args.billingCycleId.slice(-6)} invoice ${args.stripeInvoiceId.slice(-8)} ` +
         `will auto-retry on ${args.retryScheduledFor.toISOString()} (3+ business days after the ` +
-        `insufficient-funds failure).  Please contact the club administrator via the registration ` +
-        `email so they can fund the account.  The retry will NOT fire until this notification is ` +
-        `recorded on the originating attempt.  No sensitive bank details are exposed to the ` +
-        `administrator; the message should reference "a scheduled debit retry" only.`,
+        `insufficient-funds failure).  The club administrator has been emailed directly via ` +
+        `selectPlatformEmailAdapter -- the operator inbox entry is for internal visibility only ` +
+        `and is NOT a substitute for the customer communication.  ` +
+        `No sensitive bank details are exposed in the email body.`,
     },
     select: { id: true },
   });
-  return { notificationId: inbox.id, channel: "PRE_ACTIVATION_OPERATOR_INBOX" };
+
+  // 2. Email send to registration admin (correction #1).  Find the
+  // adminEmail via the cycle -> RELEASE record -> registration lookup.
+  let emailDelivered = false;
+  let emailProviderMessageId: string | undefined;
+  let emailFailureReason: string | undefined;
+  try {
+    const cycle = await prisma.billingCycle.findUnique({
+      where: { id: args.billingCycleId },
+      select: {
+        releasedByOperatorRecord: {
+          select: {
+            signupRegistration: { select: { adminEmail: true, legalName: true, adminDisplayName: true } },
+          },
+        },
+      },
+    });
+    const adminEmail = cycle?.releasedByOperatorRecord?.signupRegistration?.adminEmail;
+    const legalName = cycle?.releasedByOperatorRecord?.signupRegistration?.legalName ?? "your Spectre registration";
+    const adminDisplayName = cycle?.releasedByOperatorRecord?.signupRegistration?.adminDisplayName ?? null;
+    if (!adminEmail) {
+      emailFailureReason = "no_admin_email_on_registration";
+    } else {
+      // Use the platform-level email adapter (same pipeline SIGNUP-1
+      // resume emails use -- Microsoft 365 / SES / SMTP / dev).
+      const { selectPlatformEmailAdapter } = await import("@/lib/integrations/email");
+      const adapter = await selectPlatformEmailAdapter();
+      const greeting = adminDisplayName ? `Hi ${adminDisplayName.split(" ")[0]},` : "Hi there,";
+      const retryDate = args.retryScheduledFor.toISOString().slice(0, 10);
+      const subject = "A scheduled debit retry for your Spectre registration";
+      const body = [
+        greeting,
+        "",
+        `A scheduled debit retry for ${legalName} is planned for ${retryDate}.`,
+        "",
+        `The first attempt was unsuccessful.  Please ensure the account has sufficient funds before ${retryDate}.`,
+        "",
+        `No action is required inside Spectre; the retry will fire automatically.  If you need to`,
+        `change the bank account or discuss the scheduled retry, please reply to this email.`,
+        "",
+        `For your security, no bank account details appear in this message.`,
+        "",
+        "— Spectre",
+      ].join("\n");
+      const result = await adapter.send({
+        clubId: "", channel: "EMAIL",
+        to: { email: adminEmail },
+        subject, body,
+      });
+      emailDelivered = result.status === "SENT";
+      emailProviderMessageId = result.providerMessageId;
+      emailFailureReason = result.failureReason;
+    }
+  } catch (err) {
+    emailFailureReason = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+  }
+
+  await audit(null, {
+    action: "signup.m4.retries.club_notified",
+    entityType: "OperatorInboxEntry",
+    entityId: inbox.id,
+    clubId: null,
+    meta: {
+      billingCycleIdTail: args.billingCycleId.slice(-6),
+      emailDelivered,
+      emailProviderMessageId: emailProviderMessageId ?? null,
+      emailFailureReason: emailFailureReason ?? null,
+      syntheticTestOnly: args.syntheticTestOnly,
+    },
+  });
+
+  return {
+    notificationId: inbox.id,
+    channel: "PRE_ACTIVATION_OPERATOR_INBOX",
+    emailDelivered,
+    emailProviderMessageId,
+    emailFailureReason,
+  };
 }
 
 /* ============================================================

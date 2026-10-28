@@ -27,6 +27,23 @@
 //   (SPECTRE_SIGNUP_2E_PAYMENT_LIVE or SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH)
 //   must be ON for an actual settlement write to fire.
 //
+// M4-renewal §5 correction #3 (OPEN ACCEPTANCE GATE):
+//   Settlement events exercised in staging via the signed-webhook
+//   fixture runner (scripts/signup-2-m4-settlement-signed-webhook-
+//   runner.mjs) are HMAC-signed Stripe-SHAPED fixtures injected into
+//   this service's webhook endpoint.  They are NOT proof of actual
+//   funds settlement at the Stripe clearinghouse.  Real Stripe-
+//   originated settlement remains an explicitly OPEN acceptance gate
+//   that requires:
+//     1. Phase 2E PAYMENT_INITIATION flag released (currently blocked
+//        at the global level by SPECTRE_SIGNUP_2M3_PAYMENT_INITIATION)
+//     2. A real subscription create call against the staging Stripe
+//        test environment
+//     3. A real ACSS Debit payment flowing through the real Stripe
+//        webhook signing path
+//   Nothing in this module is to be read as representing fixture
+//   evidence as production-grade settlement proof.
+//
 // Correction #8 reflected in every correlation lookup:
 //   NEVER assumes webhook event ordering.  Each handler re-derives
 //   state from authoritative Stripe identifiers (invoice.id,

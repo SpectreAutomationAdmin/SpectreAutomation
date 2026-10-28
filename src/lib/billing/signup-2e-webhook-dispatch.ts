@@ -75,6 +75,17 @@ export async function dispatchStripeEvent(event: StripeEventShape): Promise<void
       case "charge.dispute.funds_reinstated":
         await onM4SettlementEvent(event);
         break;
+      // SIGNUP-2 M4-renewal (2026-10-28) -- renewal-cycle reconciliation.
+      // Gated by SPECTRE_SIGNUP_2M4_RENEWAL_LIVE inside the service.
+      // When OFF, the handlers throw ForbiddenError which we catch + log
+      // so the raw event is still persisted (durable receipt) and can be
+      // replayed later.  No webhook delivery ordering is assumed; every
+      // handler correlates by subscription/mandate identifier.
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted":
+      case "mandate.updated":
+        await onM4RenewalEvent(event);
+        break;
       default:
         logger.info("stripe.webhook.dispatch.unknown_event", {
           stripeEventIdTail: event.id.slice(-8),
@@ -757,6 +768,36 @@ async function onM4SettlementEvent(event: StripeEventShape): Promise<void> {
         eventType: event.type,
       });
       throw new SignupM3DeferredEvent(`M4-settlement flag off: ${event.type}`);
+    }
+    throw err;
+  }
+}
+
+/* ============================================================
+ * SIGNUP-2 M4-renewal (2026-10-28) -- renewal lifecycle events
+ * ============================================================
+ * Routes the three new events into the M4-renewal service.  Narrow
+ * flag SPECTRE_SIGNUP_2M4_RENEWAL_LIVE is enforced inside each
+ * handler (fail-closed).  When off, handlers throw ForbiddenError
+ * which we catch + log + leave processedAt=null so the raw event
+ * stays persisted (durable receipt) + can be replayed when the flag
+ * is flipped.  No webhook delivery order assumed. */
+async function onM4RenewalEvent(event: StripeEventShape): Promise<void> {
+  try {
+    const svc = await import("./signup-2m4-renewal-service");
+    switch (event.type) {
+      case "customer.subscription.updated": await svc.handleCustomerSubscriptionUpdated(event); break;
+      case "customer.subscription.deleted": await svc.handleCustomerSubscriptionDeleted(event); break;
+      case "mandate.updated":               await svc.handleMandateUpdated(event); break;
+    }
+  } catch (err) {
+    const msg = (err as { message?: string } | undefined)?.message ?? "";
+    if (msg.includes("SIGNUP-2 M4-renewal workflow is disabled")) {
+      logger.info("stripe.webhook.m4_renewal.deferred_flag_off", {
+        stripeEventIdTail: event.id.slice(-8),
+        eventType: event.type,
+      });
+      throw new SignupM3DeferredEvent(`M4-renewal flag off: ${event.type}`);
     }
     throw err;
   }
