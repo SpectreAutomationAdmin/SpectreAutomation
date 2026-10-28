@@ -294,28 +294,33 @@ describe("SIGNUP-2 M4-schema :: additive-only + FK targets intact", () => {
   });
 });
 
-describe("SIGNUP-2 M4-schema :: NO behavior code shipped in this slice", () => {
-  // Explicit guard: no M4 service file should exist yet.  Keeps the
-  // schema-only authorization honest.
-  it("no signup-2m4-*-service.ts file exists in src/lib", async () => {
+describe("SIGNUP-2 M4-schema :: behavior-slice guard (only the authorised slice's service may exist)", () => {
+  // Guard evolves with each authorised slice.  M4-triggering is now
+  // authorised (2026-10-28) -- its service may exist.  Settlement,
+  // retries, renewal, cancellation remain unauthorised.
+  it("only signup-2m4-triggering-service.ts is permitted; other M4 slice files are forbidden", async () => {
     const { readdirSync, existsSync } = await import("node:fs");
     if (!existsSync(join(process.cwd(), "src/lib/billing"))) return;
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
-    const m4Services = files.filter((f) => /^signup-2m4-.*-service\.ts$/.test(f));
-    expect(m4Services, `M4 behavior files leaked into src/lib/billing: ${m4Services.join(", ")}`).toEqual([]);
+    const permitted = new Set([
+      "signup-2m4-triggering-service.ts", // authorised 2026-10-28
+    ]);
+    const forbidden = files.filter((f) =>
+      /^signup-2m4-.*-service\.ts$/.test(f) && !permitted.has(f),
+    );
+    expect(forbidden, `unauthorised M4 slice files leaked: ${forbidden.join(", ")}`).toEqual([]);
   });
 
-  it("no new HTTP route for M4 subscription creation exists", async () => {
+  it("no HTTP routes for settlement/retries/renewal/cancellation exist (M4-triggering has no HTTP route yet either)", async () => {
     const { existsSync } = await import("node:fs");
     const paths = [
-      "src/app/api/billing/release/route.ts",
       "src/app/api/billing/subscription-create/route.ts",
       "src/app/api/billing/invoice-retry/route.ts",
       "src/app/api/billing/renewal-preflight/route.ts",
       "src/app/api/billing/cancel/route.ts",
     ];
     for (const p of paths) {
-      expect(existsSync(join(process.cwd(), p)), `M4 route leaked: ${p}`).toBe(false);
+      expect(existsSync(join(process.cwd(), p)), `forbidden future-slice route: ${p}`).toBe(false);
     }
   });
 });
