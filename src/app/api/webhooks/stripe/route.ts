@@ -1,11 +1,20 @@
-// SIGNUP-2 Phase 2E (2026-10-26) -- Stripe webhook receiver.
+// SIGNUP-2 Phase 2E (2026-10-26) + M3B (2026-10-28) -- Stripe webhook receiver.
 //
 // Durable receipt + signature verification + dedup.  Processing is
-// gated by SPECTRE_SIGNUP_2E_PAYMENT_LIVE: when OFF, events are
-// still persisted (durable receipt per founder §4 "do not lose
-// financial events merely because the application feature is
-// disabled") but no state transitions fire.  Operators can replay
-// stored events once the flag is on.
+// gated: when OFF, events are still persisted (durable receipt per
+// Phase 2E founder §4) but no state transitions fire.
+//
+// Dispatch gate (EITHER flag enables dispatch; both may be set):
+//   SPECTRE_SIGNUP_2E_PAYMENT_LIVE === "1"
+//     Legacy Phase 2E flag.  Also enables mandate-collection via
+//     signup-2e-mandate-service's assertPhase2ePaymentFlag().  Flipping
+//     this unlocks the production mandate-collection path.
+//
+//   SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH === "1"  (M3B, 2026-10-28)
+//     Narrow flag that gates ONLY the dispatcher here.  Does NOT
+//     unlock mandate collection, subscription creation, provisioning,
+//     or any other production-like behavior.  Introduced per founder
+//     M3B §1 for the signed-webhook integration test on staging.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -88,7 +97,12 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   // Flag-OFF path:  persist only; no state transitions.  Founder §4.
-  if (process.env.SPECTRE_SIGNUP_2E_PAYMENT_LIVE !== "1") {
+  // M3B (2026-10-28): dispatch when EITHER the legacy Phase 2E flag
+  // OR the narrow M3-dispatch flag is set.
+  const dispatchEnabled =
+    process.env.SPECTRE_SIGNUP_2E_PAYMENT_LIVE === "1" ||
+    process.env.SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH === "1";
+  if (!dispatchEnabled) {
     logger.info("stripe.webhook.received_disabled", {
       stripeEventIdTail: event.id.slice(-8),
       eventType: event.type,

@@ -276,6 +276,35 @@ describe("signup-2 m3 :: verification-method classifier", () => {
   });
 });
 
+describe("signup-2 m3b :: §1 narrow webhook-dispatch flag (SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH)", () => {
+  // The M3B founder authorization specifies that if the legacy
+  // SPECTRE_SIGNUP_2E_PAYMENT_LIVE flag enables anything beyond
+  // webhook dispatch, we must introduce a narrower flag.  The audit
+  // showed the legacy flag ALSO gates mandate collection
+  // (initiateMandateCollection + persistSignedMandate via
+  // assertPhase2ePaymentFlag).  M3B therefore introduces
+  // SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH, which gates ONLY the webhook
+  // dispatcher.  The webhook route accepts EITHER flag.
+  it("webhook route source references SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH as a dispatch-enabling flag", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const content = readFileSync(join(process.cwd(), "src/app/api/webhooks/stripe/route.ts"), "utf8");
+    expect(content).toMatch(/SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH/);
+    expect(content).toMatch(/dispatchEnabled/);
+  });
+
+  it("M3 dispatch flag does NOT unlock mandate collection -- assertPhase2ePaymentFlag still refers only to 2E_PAYMENT_LIVE", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const content = readFileSync(join(process.cwd(), "src/lib/billing/signup-2e-mandate-service.ts"), "utf8");
+    // The assert must gate on 2E_PAYMENT_LIVE and MUST NOT accept the
+    // narrower M3 dispatch flag as a bypass.
+    expect(content).toMatch(/assertPhase2ePaymentFlag/);
+    expect(content).toMatch(/SPECTRE_SIGNUP_2E_PAYMENT_LIVE/);
+    expect(content).not.toMatch(/SPECTRE_SIGNUP_2M3_WEBHOOK_DISPATCH/);
+  });
+});
+
 describe("signup-2 m3 :: §1 safe recovery semantics", () => {
   it("BANK_VERIFICATION_FAILED -> AUTHORISED permits restart (never a terminal state)", () => {
     expect(isTransitionPermitted("BANK_VERIFICATION_FAILED", "AUTHORISED")).toBe(true);
