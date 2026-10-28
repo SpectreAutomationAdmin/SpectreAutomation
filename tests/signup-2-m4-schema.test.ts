@@ -295,15 +295,16 @@ describe("SIGNUP-2 M4-schema :: additive-only + FK targets intact", () => {
 });
 
 describe("SIGNUP-2 M4-schema :: behavior-slice guard (only the authorised slice's service may exist)", () => {
-  // Guard evolves with each authorised slice.  M4-triggering is now
-  // authorised (2026-10-28) -- its service may exist.  Settlement,
-  // retries, renewal, cancellation remain unauthorised.
-  it("only signup-2m4-triggering-service.ts is permitted; other M4 slice files are forbidden", async () => {
+  // Guard evolves with each authorised slice.  M4-triggering + M4-settlement
+  // are now authorised (2026-10-28).  Retries, renewal, cancellation remain
+  // unauthorised.
+  it("only authorised M4 slice files may exist (triggering + settlement); other M4 slice files are forbidden", async () => {
     const { readdirSync, existsSync } = await import("node:fs");
     if (!existsSync(join(process.cwd(), "src/lib/billing"))) return;
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
     const permitted = new Set([
       "signup-2m4-triggering-service.ts", // authorised 2026-10-28
+      "signup-2m4-settlement-service.ts", // authorised 2026-10-28
     ]);
     const forbidden = files.filter((f) =>
       /^signup-2m4-.*-service\.ts$/.test(f) && !permitted.has(f),

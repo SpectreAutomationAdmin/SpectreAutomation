@@ -62,6 +62,19 @@ export async function dispatchStripeEvent(event: StripeEventShape): Promise<void
       case "setup_intent.canceled":
         await onSetupIntentEvent(event);
         break;
+      // SIGNUP-2 M4-settlement (2026-10-28) -- invoice + dispute lifecycle.
+      // Gated by SPECTRE_SIGNUP_2M4_SETTLEMENT_LIVE inside the service
+      // handlers; when OFF, the handlers throw ForbiddenError which we
+      // catch + log so the event is still persisted (durable receipt)
+      // and can be replayed later.
+      case "invoice.paid":
+      case "invoice.payment_failed":
+      case "invoice.marked_uncollectible":
+      case "charge.dispute.closed":
+      case "charge.dispute.funds_withdrawn":
+      case "charge.dispute.funds_reinstated":
+        await onM4SettlementEvent(event);
+        break;
       default:
         logger.info("stripe.webhook.dispatch.unknown_event", {
           stripeEventIdTail: event.id.slice(-8),
@@ -710,6 +723,42 @@ export class SignupM3DeferredEvent extends Error {
   constructor(detail: string) {
     super(`signup-2m3-deferred: ${detail}`);
     this.name = "SignupM3DeferredEvent";
+  }
+}
+
+/* ============================================================
+ * SIGNUP-2 M4-settlement (2026-10-28) -- invoice + dispute events
+ * ============================================================
+ * Routes the six new events into the M4-settlement service.
+ * Narrow flag SPECTRE_SIGNUP_2M4_SETTLEMENT_LIVE is enforced by the
+ * individual handlers (fail-closed).  When off, the handlers throw
+ * ForbiddenError which we catch + log; the event stays in
+ * StripeWebhookEvent (durable receipt) + is NOT marked processed, so
+ * the orphan-replay path in M4-triggering can process it when the
+ * flag is later flipped. */
+async function onM4SettlementEvent(event: StripeEventShape): Promise<void> {
+  try {
+    const svc = await import("./signup-2m4-settlement-service");
+    switch (event.type) {
+      case "invoice.paid":                      await svc.handleInvoicePaid(event); break;
+      case "invoice.payment_failed":            await svc.handleInvoicePaymentFailed(event); break;
+      case "invoice.marked_uncollectible":      await svc.handleInvoiceMarkedUncollectible(event); break;
+      case "charge.dispute.closed":             await svc.handleChargeDisputeClosed(event); break;
+      case "charge.dispute.funds_withdrawn":    await svc.handleChargeDisputeFundsWithdrawn(event); break;
+      case "charge.dispute.funds_reinstated":   await svc.handleChargeDisputeFundsReinstated(event); break;
+    }
+  } catch (err) {
+    const msg = (err as { message?: string } | undefined)?.message ?? "";
+    // M4-settlement flag OFF -> treat as deferred (leave processedAt=null
+    // so orphan replay can process it later).
+    if (msg.includes("SIGNUP-2 M4-settlement workflow is disabled")) {
+      logger.info("stripe.webhook.m4_settlement.deferred_flag_off", {
+        stripeEventIdTail: event.id.slice(-8),
+        eventType: event.type,
+      });
+      throw new SignupM3DeferredEvent(`M4-settlement flag off: ${event.type}`);
+    }
+    throw err;
   }
 }
 
