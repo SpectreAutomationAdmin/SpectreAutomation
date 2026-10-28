@@ -11,7 +11,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { ForbiddenError, AppError } from "@/lib/errors";
 import { logger } from "@/lib/observability/logger";
 import { env } from "@/lib/env";
-import { prisma } from "@/lib/prisma";
 import { resolveRegistrationByToken } from "@/lib/signup/registration";
 import { persistSignedMandate } from "@/lib/billing/signup-2e-mandate-service";
 
@@ -33,23 +32,12 @@ export async function GET(req: NextRequest) {
 
   try {
     await persistSignedMandate({ registrationId: reg.id, checkoutSessionId: sessionId });
-    // SIGNUP-2 M3 (2026-10-27, founder §3): club-facing status reflects
-    // the actual bank-verification state, not just "signed".  Read the
-    // first cycle we just persisted + surface its subscriptionStatus.
-    const cycle = await prisma.billingCycle.findFirst({
-      where: { clubId: reg.id, source: "STRIPE_ACSS" },
-      orderBy: { createdAt: "desc" },
-      select: { subscriptionStatus: true, bankVerificationHostedUrl: true },
-    });
-    const state = cycle?.subscriptionStatus ?? "AUTHORISED";
-    const bankVerificationState =
-      state === "BANK_VERIFIED" ? "verified" :
-      state === "BANK_VERIFICATION_PENDING" ? "pending" :
-      state === "BANK_VERIFICATION_FAILED" ? "failed" :
-      "signed";
-    return redirectTo(
-      `/signup/t/${encodeURIComponent(token)}/status?mandate_signed=1&bank_verification=${bankVerificationState}`,
-    );
+    // SIGNUP-2 M3B (2026-10-27, founder §3): status page derives the
+    // bank-verification banner EXCLUSIVELY from server-side state
+    // (BillingCycle.subscriptionStatus).  No `bank_verification`
+    // query param is passed here -- query params cannot override
+    // authoritative state.
+    return redirectTo(`/signup/t/${encodeURIComponent(token)}/status?mandate_signed=1`);
   } catch (err) {
     if (err instanceof ForbiddenError) {
       logger.warn("signup.mandate.return.refused", {

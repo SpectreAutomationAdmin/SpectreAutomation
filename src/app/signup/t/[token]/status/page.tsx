@@ -17,31 +17,40 @@ import "@/app/signup/signup.css";
 import { Wordmark } from "@/components/marketing/Wordmark";
 import { StepIndicator } from "@/app/signup/_components/StepIndicator";
 import { resolveRegistrationByToken } from "@/lib/signup/registration";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Registration saved · Spectre" };
 
 export default async function StatusScreen({
   params,
-  searchParams,
 }: {
   params: { token: string };
-  searchParams?: { bank_verification?: string };
 }) {
   const reg = await resolveRegistrationByToken(params.token);
   if (!reg) notFound();
 
-  // SIGNUP-2 M3 (2026-10-27, founder §3): club-facing bank-verification
-  // state banner.  Driven by the `bank_verification` query param set by
-  // the mandate return handler.  Values:
-  //   - "pending"  -> microdeposit path; signatory must confirm via Stripe-hosted email
-  //   - "verified" -> instant verification succeeded; no further action
-  //   - "failed"   -> re-collect bank details via a new Checkout
-  //   - "signed"   -> pre-M3 flag OFF; neutral confirmation
+  // SIGNUP-2 M3B (2026-10-27, founder §3): club-facing bank-verification
+  // banner is derived EXCLUSIVELY from authoritative server-side state --
+  // the BillingCycle's subscriptionStatus column.  Query parameters do
+  // NOT (and cannot) override this.  The webhook dispatcher
+  // (onSetupIntentEvent in signup-2e-webhook-dispatch.ts) is the only
+  // writer of these states, driven by signed Stripe events.
+  const cycle = await prisma.billingCycle.findFirst({
+    where: { clubId: reg.id, source: "STRIPE_ACSS" },
+    orderBy: { createdAt: "desc" },
+    select: {
+      subscriptionStatus: true,
+      bankVerificationHostedUrl: true,
+      bankVerificationExpiresAt: true,
+      bankVerificationFailureReason: true,
+      bankVerificationMethod: true,
+    },
+  });
   const bankVerificationBanner = (() => {
-    const state = searchParams?.bank_verification;
-    if (!state) return null;
-    if (state === "pending") {
+    if (!cycle) return null;
+    const s = cycle.subscriptionStatus;
+    if (s === "BANK_VERIFICATION_PENDING") {
       return {
         tone: "info" as const,
         title: "Bank verification pending",
@@ -49,14 +58,17 @@ export default async function StatusScreen({
           "You chose to verify your bank account by microdeposit. Within 1-2 business days you'll receive an email from Stripe with two small deposit amounts to confirm. Please follow that email to complete verification. No funds will be debited until verification is complete.",
       };
     }
-    if (state === "verified") {
+    if (s === "BANK_VERIFIED") {
+      const method = cycle.bankVerificationMethod === "MICRODEPOSITS"
+        ? "after microdeposit confirmation"
+        : "instantly";
       return {
         tone: "ok" as const,
         title: "Bank account verified",
-        body: "Your bank account was verified instantly. Spectre will proceed with the annual subscription on the schedule outlined in your enrolment letter.",
+        body: `Your bank account was verified ${method}. Spectre will proceed with the annual subscription on the schedule outlined in your enrolment letter.`,
       };
     }
-    if (state === "failed") {
+    if (s === "BANK_VERIFICATION_FAILED") {
       return {
         tone: "error" as const,
         title: "Bank verification could not complete",
