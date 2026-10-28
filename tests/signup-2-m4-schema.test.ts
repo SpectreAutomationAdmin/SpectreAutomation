@@ -305,6 +305,7 @@ describe("SIGNUP-2 M4-schema :: behavior-slice guard (only the authorised slice'
     const permitted = new Set([
       "signup-2m4-triggering-service.ts", // authorised 2026-10-28
       "signup-2m4-settlement-service.ts", // authorised 2026-10-28
+      "signup-2m4-retries-service.ts",    // authorised 2026-10-28
     ]);
     const forbidden = files.filter((f) =>
       /^signup-2m4-.*-service\.ts$/.test(f) && !permitted.has(f),
