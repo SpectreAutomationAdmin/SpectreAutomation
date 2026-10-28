@@ -98,12 +98,46 @@ export function classifyFailureForRetry(args: {
  *  MINIMUM, so missing a stat holiday only shortens -- never extends --
  *  the retry delay; the calendar below is additive safety.
  *
- *  Entries use ISO date string in UTC.  Expand yearly as needed.
- *
- *  Federal holidays included: New Year's Day, Good Friday, Victoria
- *  Day, Canada Day, Labour Day, Thanksgiving, Remembrance Day,
- *  Christmas Day, Boxing Day.
+ *  Entries use ISO date string in UTC.  Federal holidays included:
+ *  New Year's Day, Good Friday, Victoria Day, Canada Day, Labour Day,
+ *  Thanksgiving, Remembrance Day, Christmas Day, Boxing Day.
  *  Alberta-specific: Alberta Family Day, Heritage Day.
+ *
+ *  ----------------------------------------------------------------
+ *  DURABILITY STRATEGY (M4-renewal §3 founder directive)
+ *  ----------------------------------------------------------------
+ *  The calendar is explicit by design: Canadian stat holidays follow
+ *  nth-weekday patterns + a Western-Easter-derived Good Friday + ad-hoc
+ *  "observed on Monday" substitutions when they fall on a weekend. A
+ *  general compute-it-at-runtime algorithm would need to encode all of
+ *  that correctly for every year, with escape hatches for one-off
+ *  federal proclamations.  Hand-maintained annual pinning is lower
+ *  risk, auditable, and reviewed.
+ *
+ *  Maintenance process:
+ *    1. Each calendar year, add the next FORWARD year of observances
+ *       (12-18 months before the earliest preflight that could land
+ *       in it) BEFORE flipping M4-renewal to live mode in production.
+ *    2. The ops observability function below (`getStatHolidayCalendarCoverage`)
+ *       exposes the latest covered year so a scheduled job + the
+ *       operator inbox can surface "calendar is <N months> from
+ *       expiring" alerts.  M4-renewal preflights that compute a retry
+ *       date beyond the latest covered year emit a `logger.warn` so a
+ *       stale calendar is observable BEFORE it affects a real retry.
+ *    3. Changes to this constant require code review + the matching
+ *       Postgres-schema sync is unaffected (constant lives in app
+ *       code, not DB).
+ *
+ *  Degraded behaviour:  if the calendar is stale, `earliestRetryAt`
+ *  may UNDER-DELAY a retry (treating a holiday Monday as a business
+ *  day).  The protective layers that still apply even with a stale
+ *  calendar are:
+ *    - Weekend skip is unconditional (no calendar lookup).
+ *    - 3-business-day FLOOR remains in effect.
+ *    - Pre-retry notification still fires to the club admin.
+ *    - Stripe Billing's own retry suppression (Smart Retries must
+ *      stay DISABLED per decision #2 preamble) is independent of
+ *      this calendar.
  *
  *  M4-renewal §5 correction #2 (2026-10-28). */
 export const CANADIAN_STAT_HOLIDAYS_UTC: ReadonlySet<string> = new Set([
@@ -149,6 +183,19 @@ function isCanadianStatHoliday(d: Date): boolean {
   return CANADIAN_STAT_HOLIDAYS_UTC.has(d.toISOString().slice(0, 10));
 }
 
+/** Observability helper for the M4-renewal §3 durability contract.
+ *  Returns the highest year present in CANADIAN_STAT_HOLIDAYS_UTC so
+ *  ops dashboards + scheduled jobs can detect calendar staleness
+ *  BEFORE it affects a live retry. */
+export function getStatHolidayCalendarCoverage(): { latestCoveredYear: number; totalEntries: number } {
+  let latestCoveredYear = 0;
+  for (const iso of CANADIAN_STAT_HOLIDAYS_UTC) {
+    const year = Number(iso.slice(0, 4));
+    if (Number.isFinite(year) && year > latestCoveredYear) latestCoveredYear = year;
+  }
+  return { latestCoveredYear, totalEntries: CANADIAN_STAT_HOLIDAYS_UTC.size };
+}
+
 /** Earliest instant at least `businessDays` business days after `from`.
  *  Business day = Mon..Fri AND NOT a Canadian federal / Alberta stat
  *  holiday (per CANADIAN_STAT_HOLIDAYS_UTC).  Returns UTC midnight on
@@ -164,6 +211,20 @@ export function earliestRetryAt(from: Date, businessDays: number): Date {
     if (dow === 0 || dow === 6) continue;
     if (isCanadianStatHoliday(d)) continue;
     bdLeft--;
+  }
+  // §3 durability safeguard: emit an observable warning when the
+  // computed retry date lands in a year the stat-holiday calendar
+  // no longer covers.  Weekends still skip (unconditional), the
+  // 3-business-day floor still applies, and the pre-retry notice
+  // still fires -- but ops needs to extend the calendar before the
+  // next scheduling window.
+  const { latestCoveredYear } = getStatHolidayCalendarCoverage();
+  if (d.getUTCFullYear() > latestCoveredYear) {
+    logger.warn("signup.m4.retries.stat_holiday_calendar.coverage_exceeded", {
+      retryDateYear: d.getUTCFullYear(),
+      latestCoveredYear,
+      detail: "Extend CANADIAN_STAT_HOLIDAYS_UTC before enabling M4-renewal retries beyond the current coverage window.",
+    });
   }
   return d;
 }

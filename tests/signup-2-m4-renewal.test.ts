@@ -15,6 +15,7 @@ import {
 import {
   CANADIAN_STAT_HOLIDAYS_UTC,
   earliestRetryAt,
+  getStatHolidayCalendarCoverage,
 } from "@/lib/billing/signup-2m4-retries-service";
 
 const SVC = readFileSync(
@@ -255,6 +256,12 @@ describe("signup-2 m4-renewal :: §5 correction #2 -- Canadian stat holiday cale
     // Correct: Mon 2026-02-16 is Alberta Family Day -> skip -> Wed 02-18.
     const r = earliestRetryAt(new Date("2026-02-12T00:00:00Z"), 3);
     expect(r.toISOString().slice(0, 10)).toBe("2026-02-18");
+  });
+
+  it("exposes calendar coverage for ops observability (durability contract)", () => {
+    const coverage = getStatHolidayCalendarCoverage();
+    expect(coverage.latestCoveredYear).toBeGreaterThanOrEqual(2028);
+    expect(coverage.totalEntries).toBe(CANADIAN_STAT_HOLIDAYS_UTC.size);
   });
 });
 
