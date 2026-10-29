@@ -21,6 +21,15 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { IconHome, IconProfile, IconFeedback } from "./portal-icons";
 
+// EP-BRAND-1 (2026-10-29) — Employee Portal logo parity.  Reuses
+// the canonical WEB-1B wordmark the admin sidebar renders (see
+// src/components/spectre/SpectreSidebar.tsx line 29).  Importing
+// web1b.css gives us the `.spectre-web1b .w1b-nav-wordmark` rule;
+// we tightly scope with a `<span class="spectre-web1b">` wrapper
+// around just the wordmark so no other WEB-1B rule can match
+// inside the employee portal shell.
+import "@/components/marketing/web1b.css";
+
 interface NavItem {
   key: string;
   label: string;
@@ -54,15 +63,18 @@ export default function EmployeePortalSidebar() {
       style={{ height: "100vh" }}
       data-testid="portal-sidebar"
     >
-      {/* Branding band — matches the h-20 top header height. The
-         wordmark is horizontally centred inside this column so the
-         letters sit visually balanced against the tenant identity
-         across the gold separator. */}
+      {/* Branding band — matches the h-20 top header height.  EP-BRAND-1
+         (2026-10-29) reuses the canonical WEB-1B wordmark + admin-
+         sidebar rendering pattern (SpectreSidebar.tsx lines 184-191).
+         Literal text 'SPECTRE / AUTOMATION' — verbatim from
+         W1bNav.tsx line 26.  Font + color are inherited from the
+         `.spectre-web1b .w1b-nav-wordmark` rule in web1b.css. */}
       <div className="h-20 flex items-center justify-center border-b border-white/10 shrink-0">
-        <div className="flex flex-col leading-tight items-center text-center" data-testid="portal-sidebar-wordmark">
-          <span className="font-serif text-[26px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
-          <span className="font-sans text-[12px] tracking-[0.36em] text-white/75 mt-0.5">AUTOMATION</span>
-        </div>
+        <span className="spectre-web1b" data-testid="portal-sidebar-wordmark">
+          <span className="w1b-nav-wordmark" aria-label="Spectre Automation">
+            SPECTRE / AUTOMATION
+          </span>
+        </span>
       </div>
       <nav className="flex-1 min-h-0 px-3 py-4 space-y-3 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">
         {NAV_GROUPS.map((group, gi) => (

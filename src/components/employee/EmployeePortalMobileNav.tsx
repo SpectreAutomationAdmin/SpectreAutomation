@@ -43,6 +43,11 @@ import { cn } from "@/lib/ui";
 import { EMPLOYEE_NAV } from "@/components/sidebar-nav-data";
 import EmployeePortalUserMenu from "./EmployeePortalUserMenu";
 
+// EP-BRAND-1 (2026-10-29) — same canonical WEB-1B wordmark import
+// as the desktop EmployeePortalSidebar.  Scoped to the mobile
+// top-bar wordmark only.
+import "@/components/marketing/web1b.css";
+
 interface Props {
   clubName: string;
   displayName: string;
@@ -156,10 +161,12 @@ export default function EmployeePortalMobileNav({
           </svg>
         </button>
         <div className="flex items-center min-w-0 flex-1 py-2">
-          <div className="flex flex-col leading-tight px-1" data-testid="portal-mobile-brand-wordmark">
-            <span className="font-serif text-[15px] font-semibold tracking-[0.18em]">SPECTRE</span>
-            <span className="font-sans text-[9px] tracking-[0.28em] text-white/75">AUTOMATION</span>
-          </div>
+          {/* EP-BRAND-1 (2026-10-29) — canonical WEB-1B wordmark. */}
+          <span className="spectre-web1b px-1" data-testid="portal-mobile-brand-wordmark">
+            <span className="w1b-nav-wordmark" aria-label="Spectre Automation">
+              SPECTRE / AUTOMATION
+            </span>
+          </span>
           <div aria-hidden="true" className="mx-3 h-8 w-px bg-white/25" />
           <div
             className="min-w-0 flex-1 font-serif text-[13px] leading-[1.15] text-white/95"

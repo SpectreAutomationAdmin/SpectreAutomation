@@ -6,11 +6,18 @@
 // cookie. Similarly the employee cookie cannot enter /app/admin/**
 // because that layout gates on User + ADMIN_ROLES.
 //
-// Brand discipline: uses the Club's white-label branding
-// (`getActiveBranding()`). The word "Spectre" never appears on any
-// portal surface — per the founder memory
-// [[feedback_member_brand_shielding]] the product is white-labelled
-// per club.
+// Brand discipline:
+//   - The Club's white-label branding (`getActiveBranding()`) is
+//     surfaced for TENANT identity (name, logo, colour accents).
+//   - The MEMBER portal shields "Spectre" entirely from members per
+//     [[feedback_member_brand_shielding]].  The Employee Portal
+//     DOES NOT shield -- club staff + payroll + managers see the
+//     canonical "SPECTRE / AUTOMATION" wordmark alongside their
+//     tenant identity (EP-BRAND-1, 2026-10-29, founder directive).
+//     Both treatments share the same `.spectre-web1b .w1b-nav-wordmark`
+//     typography that the marketing site + admin sidebar use, so
+//     the three Spectre-facing surfaces (marketing, admin portal,
+//     employee portal) read as one brand.
 
 import type { ReactNode } from "react";
 import { Suspense } from "react";
