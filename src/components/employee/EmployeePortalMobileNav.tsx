@@ -161,8 +161,8 @@ export default function EmployeePortalMobileNav({
           </svg>
         </button>
         <div className="flex items-center min-w-0 flex-1 py-2">
-          {/* EP-BRAND-1 (2026-10-29) — canonical WEB-1B wordmark. */}
-          <span className="spectre-web1b px-1" data-testid="portal-mobile-brand-wordmark">
+          {/* EP-BRAND-1 (2026-10-29) + EP-BRAND-1A background correction. */}
+          <span className="spectre-web1b employee-portal-masthead px-1" data-testid="portal-mobile-brand-wordmark">
             <span className="w1b-nav-wordmark" aria-label="Spectre Automation">
               SPECTRE / AUTOMATION
             </span>

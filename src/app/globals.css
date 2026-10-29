@@ -237,6 +237,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     display: inline-flex; align-items: center;
     line-height: 1;
   }
+  /* EP-BRAND-1A (2026-10-29) — the Employee Portal reuses the
+     canonical `.spectre-web1b .w1b-nav-wordmark` typography but
+     renders it inside a club-green header, NOT the marketing
+     site's forest-green `--w1b-dark`.  The `.spectre-web1b` scope
+     normally paints `background: var(--w1b-dark)` which produces
+     a visible dark rectangle against the Employee Portal's
+     different green.  This override pairs the WEB-1B scope with
+     the Employee-Portal-specific class so the background is
+     transparent; the typography rule is untouched.  Does NOT
+     affect marketing (.spectre-web1b alone) or admin
+     (.spectre-web1b.spectre-sidebar-masthead). */
+  .spectre-web1b.employee-portal-masthead {
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+  }
   /* Phase 4R rev-6 (2026-08-15) — sidebar identity block is pinned
      to the same vertical height as the topbar so the divider beneath
      the product name aligns with the topbar's bottom border. This

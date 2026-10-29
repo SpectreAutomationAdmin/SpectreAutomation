@@ -70,7 +70,7 @@ export default function EmployeePortalSidebar() {
          W1bNav.tsx line 26.  Font + color are inherited from the
          `.spectre-web1b .w1b-nav-wordmark` rule in web1b.css. */}
       <div className="h-20 flex items-center justify-center border-b border-white/10 shrink-0">
-        <span className="spectre-web1b" data-testid="portal-sidebar-wordmark">
+        <span className="spectre-web1b employee-portal-masthead" data-testid="portal-sidebar-wordmark">
           <span className="w1b-nav-wordmark" aria-label="Spectre Automation">
             SPECTRE / AUTOMATION
           </span>
