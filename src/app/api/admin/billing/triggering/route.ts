@@ -139,7 +139,7 @@ export async function POST(req: Request): Promise<Response> {
     if (isAppError(err)) {
       return NextResponse.json(
         { ok: false, error: err.code, message: err.safeMessage },
-        { status: err.status },
+        { status: err.httpStatus },
       );
     }
     const msg = err instanceof Error ? err.message : "unknown_error";
