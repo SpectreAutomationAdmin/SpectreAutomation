@@ -1,79 +1,116 @@
-// EP-TRAIN-3 Slice 2 (2026-10-29) -- authenticated staging acceptance.
+// EP-TRAIN-3 Slice 2 + 2A (2026-10-29) -- authenticated staging
+// acceptance for the Training Builder.
 //
-// Verifies the manager-facing Training Builder end-to-end against the
-// deployed staging environment, using the founder's authenticated
-// session via tests/e2e/_lib/staging-auth.ts.
+// This spec is STRICT: it fails if any of the Builder's required
+// sections do not render on the Coulee Ridge Safety & Training admin
+// surface.  It does NOT redirect-tolerate -- a session landed on the
+// wrong page is a failure.
 //
-// Scope (per directive §8):
-//   - navigate to Safety & Training admin
-//   - open the Coulee Ridge Workplace Safety Orientation DRAFT (if
-//     present) or an existing draft version
-//   - verify the Interactive checkpoints section renders when the
-//     version has a video
-//   - verify the Final assessment section renders separately
-//   - take screenshots at 1440 x 900 + 1920 x 1080 for founder review
-//
-// This spec is read-mostly: it inspects the shipped admin UI without
-// creating or deleting checkpoints, so it is safe to run against
-// staging without touching Coulee Ridge training completions. The
-// create/update/delete behaviour is covered by the service-level
-// Vitest suite (ep-train-3-slice2-service.test.ts).
+// It uses whichever identity the SPECTRE_STAGING_BUILDER_* envs
+// provide (falling back to SPECTRE_STAGING_*).  The identity MUST
+// hold hr:training:read + hr:training:write on Coulee Ridge; the
+// founder's existing c.s.turcato@gmail.com account currently holds
+// PAYROLL_ADMIN only, which fails least-privilege and routes to the
+// Employee Directory.  The spec documents that failure clearly rather
+// than silently passing on a different page.
 
 import { test, expect } from "@playwright/test";
 import path from "node:path";
-import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
+import { loginAs, loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
 const outDir = path.resolve(process.cwd(), "test-results/ep-train-3-slice2");
 
-test.describe("EP-TRAIN-3 Slice 2 :: manager training builder", () => {
+async function loginAsBuilderIdentity(browser: import("@playwright/test").Browser, viewport?: { width: number; height: number }) {
+  const email = process.env.SPECTRE_STAGING_BUILDER_EMAIL;
+  const password = process.env.SPECTRE_STAGING_BUILDER_PASSWORD;
+  const context = await browser.newContext(viewport ? { viewport } : undefined);
+  if (email && password) {
+    const page = await loginAs(context, email, password);
+    return page;
+  }
+  // Fall back to the founder identity (will reveal perm failures).
+  return loginAsFounder(context);
+}
+
+test.describe("EP-TRAIN-3 Slice 2 + 2A :: manager training builder (STRICT)", () => {
   test.beforeAll(() => {
     const avail = stagingCredsAvailable();
-    if (!avail.ready) test.skip(true, `Staging creds not available: ${avail.reason}`);
+    if (!avail.ready) test.skip(true, avail.reason!);
   });
 
-  test("safety-training admin surface responds + builder UI is deployed", async ({ browser }) => {
-    const context = await browser.newContext();
-    const page = await loginAsFounder(context);
-    // Confirm the authoring surface is reachable on staging v999.
-    const res = await page.goto(
+  test("Training Builder renders required sections at 1440x900", async ({ browser }) => {
+    const page = await loginAsBuilderIdentity(browser, { width: 1440, height: 900 });
+    await page.goto(
       "https://staging.spectreautomation.com/app/admin/people/safety-training",
-      { waitUntil: "domcontentloaded" },
+      { waitUntil: "networkidle" },
     );
-    expect(res?.status(), "safety-training admin page reachable").toBeLessThan(400);
-    // The founder's SUPER_ADMIN account may land on a different active-club
-    // view (e.g. employees) depending on current context, so the test
-    // tolerates both outcomes: either the Safety & Training listing
-    // renders, or the SUPER_ADMIN gets the active-club fallback (which
-    // is also expected admin behaviour).
-    const url = page.url();
-    expect(url.includes("/app/admin/")).toBeTruthy();
-    // Capture an on-arrival screenshot for the acceptance package.
-    await page.screenshot({
-      path: path.join(outDir, "admin-arrival.png"),
-      fullPage: true,
-    });
+    // STRICT: must land on the Safety & Training admin, not a redirect.
+    expect(page.url(), "must land on safety-training admin index").toContain("/app/admin/people/safety-training");
+    await expect(page.getByRole("heading", { name: "Safety & Training" })).toBeVisible();
+
+    // Enter the first course that has a DRAFT version (if any) --
+    // if none, the test records the state and fails with a clear
+    // message rather than silently passing on an empty catalogue.
+    const draftLink = page.locator('a:has-text("Draft")').first();
+    const anyLink = page.locator('a[href*="/app/admin/people/safety-training/"]').first();
+    if (await draftLink.count() > 0) {
+      await draftLink.click();
+    } else if (await anyLink.count() > 0) {
+      await anyLink.click();
+    } else {
+      throw new Error("No training courses found on Coulee Ridge; cannot verify Builder.");
+    }
+    await page.waitForLoadState("networkidle");
+
+    // On the course-detail page, click into any DRAFT version row.
+    const draftVersion = page.locator('a:has-text("Draft")').first();
+    if (await draftVersion.count() > 0) {
+      await draftVersion.click();
+      await page.waitForLoadState("networkidle");
+    }
+
+    // STRICT assertions on the Builder.
+    await expect(page.getByText("Training video", { exact: true })).toBeVisible();
+    await expect(page.getByText("Final assessment", { exact: true })).toBeVisible();
+    // Interactive checkpoints section is conditional on video presence.
+    // If a video is uploaded, the timeline + track MUST render.
+    const videoSection = page.getByTestId("training-editor-video-section");
+    await expect(videoSection).toBeVisible();
+    const checkpointsSection = page.getByTestId("training-editor-checkpoints-section");
+    if (await checkpointsSection.count() > 0) {
+      await expect(checkpointsSection).toBeVisible();
+      await expect(page.getByTestId("training-timeline-track")).toBeVisible();
+      await expect(page.getByTestId("training-timeline-video")).toBeVisible();
+    }
+
+    await page.screenshot({ path: path.join(outDir, "builder-desktop-1440.png"), fullPage: true });
   });
 
-  for (const [label, w, h] of [["desktop-1440", 1440, 900], ["desktop-1920", 1920, 1080], ["mobile-390", 390, 844]] as const) {
-    test(`screenshot ${label}`, async ({ browser }) => {
-      const context = await browser.newContext({ viewport: { width: w, height: h } });
-      const page = await loginAsFounder(context);
-      await page.setViewportSize({ width: w, height: h });
-      await page.goto("https://staging.spectreautomation.com/app/admin/people/safety-training", { waitUntil: "domcontentloaded" });
-      const first = page.locator('a[href^="/app/admin/people/safety-training/"]').first();
-      if (await first.count() > 0) {
-        await first.click();
-        await page.waitForLoadState("domcontentloaded");
-        const nested = page.locator('a:has-text("Draft"), a:has-text("v")').first();
-        if (await nested.count() > 0) {
-          await nested.click();
-          await page.waitForLoadState("domcontentloaded");
-        }
+  for (const [label, w, h] of [["desktop-1920", 1920, 1080], ["mobile-390", 390, 844]] as const) {
+    test(`Training Builder screenshot ${label}`, async ({ browser }) => {
+      const page = await loginAsBuilderIdentity(browser, { width: w, height: h });
+      await page.goto(
+        "https://staging.spectreautomation.com/app/admin/people/safety-training",
+        { waitUntil: "networkidle" },
+      );
+      expect(page.url()).toContain("/app/admin/people/safety-training");
+      const draftLink = page.locator('a:has-text("Draft")').first();
+      const anyLink = page.locator('a[href*="/app/admin/people/safety-training/"]').first();
+      if (await draftLink.count() > 0) {
+        await draftLink.click();
+      } else if (await anyLink.count() > 0) {
+        await anyLink.click();
+      } else {
+        throw new Error("No training courses on Coulee Ridge; cannot screenshot Builder.");
       }
-      await page.screenshot({
-        path: path.join(outDir, `${label}.png`),
-        fullPage: true,
-      });
+      await page.waitForLoadState("networkidle");
+      const draftVersion = page.locator('a:has-text("Draft")').first();
+      if (await draftVersion.count() > 0) {
+        await draftVersion.click();
+        await page.waitForLoadState("networkidle");
+      }
+      await expect(page.getByText("Final assessment", { exact: true })).toBeVisible();
+      await page.screenshot({ path: path.join(outDir, `builder-${label}.png`), fullPage: true });
     });
   }
 });

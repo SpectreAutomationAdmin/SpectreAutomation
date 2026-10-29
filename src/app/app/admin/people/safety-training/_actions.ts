@@ -423,10 +423,13 @@ export async function deleteCheckpointAction(
   courseId: string,
   versionId: string,
   checkpointId: string,
+  opts: { deleteBoundQuestions?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const principal = await requirePrincipal();
   try {
-    await deleteCheckpoint(principal, checkpointId);
+    await deleteCheckpoint(principal, checkpointId, {
+      deleteBoundQuestions: opts.deleteBoundQuestions === true,
+    });
     revalidatePath(`/app/admin/people/safety-training/${courseId}/${versionId}`);
     return { ok: true };
   } catch (err) {

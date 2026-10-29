@@ -56,6 +56,7 @@ interface Props {
     courseId: string,
     versionId: string,
     checkpointId: string,
+    opts?: { deleteBoundQuestions?: boolean },
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
@@ -153,11 +154,20 @@ export default function TimelineEditor({
   async function handleDelete(checkpointId: string) {
     if (readOnly || pending) return;
     clearError();
-    if (!window.confirm("Delete this checkpoint? Any questions bound to it will become orphaned until reassigned or deleted.")) {
-      return;
-    }
+    const target = sortedCheckpoints.find((c) => c.id === checkpointId);
+    const q = target?.questionCount ?? 0;
+    const confirmMsg = q === 0
+      ? "Delete this checkpoint?"
+      : `This checkpoint has ${q} question${q === 1 ? "" : "s"} bound to it.\n\n` +
+        `Click OK to delete the checkpoint AND the bound questions.\n` +
+        `Click Cancel to keep the checkpoint. (To preserve the questions, ` +
+        `reassign them to another checkpoint or move them to the final ` +
+        `assessment before deleting.)`;
+    if (!window.confirm(confirmMsg)) return;
     startTransition(async () => {
-      const result = await deleteAction(courseId, versionId, checkpointId);
+      const result = await deleteAction(courseId, versionId, checkpointId, {
+        deleteBoundQuestions: q > 0,
+      });
       if (!result.ok) {
         setError(result.error);
       } else {

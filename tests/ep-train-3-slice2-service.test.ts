@@ -365,11 +365,33 @@ describe("EP-TRAIN-3 Slice 2 :: publish readiness extensions", () => {
     expect(r.ready).toBe(true);
   });
 
-  it("deleting a checkpoint reassigns its questions to the final assessment via FK ON DELETE SET NULL", async () => {
-    // The Prisma schema sets ON DELETE SET NULL on TrainingQuestion.checkpointId,
-    // so a checkpoint deletion cannot leave orphans -- bound questions
-    // simply reappear in the final-assessment bucket.  This is the
-    // founder-preferred behaviour (preserves authoring work).
+  it("Slice 2A: deleting a checkpoint with bound active questions is REFUSED by default", async () => {
+    const { principal, versionId } = await seedWithQuestionAndVideo();
+    const { checkpointId } = await createCheckpoint(principal, versionId, { atSecond: 60 });
+    await createQuestion(principal, versionId, {
+      prompt: "Checkpoint prompt",
+      checkpointId,
+      options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
+    });
+    await createQuestion(principal, versionId, {
+      prompt: "Final assessment prompt",
+      options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
+    });
+    await expect(deleteCheckpoint(principal, checkpointId)).rejects.toBeInstanceOf(ConflictError);
+    // The checkpoint survives.
+    const stillThere = await prisma.trainingCheckpoint.findUnique({ where: { id: checkpointId } });
+    expect(stillThere).not.toBeNull();
+  });
+
+  it("Slice 2A: deleting a checkpoint with no active bound questions is allowed", async () => {
+    const { principal, versionId } = await seedWithQuestionAndVideo();
+    const { checkpointId } = await createCheckpoint(principal, versionId, { atSecond: 60 });
+    await deleteCheckpoint(principal, checkpointId);
+    const gone = await prisma.trainingCheckpoint.findUnique({ where: { id: checkpointId } });
+    expect(gone).toBeNull();
+  });
+
+  it("Slice 2A: cascade-delete option removes bound questions AND the checkpoint, never silently promoting them", async () => {
     const { principal, versionId } = await seedWithQuestionAndVideo();
     const { checkpointId } = await createCheckpoint(principal, versionId, { atSecond: 60 });
     const { questionId } = await createQuestion(principal, versionId, {
@@ -381,12 +403,35 @@ describe("EP-TRAIN-3 Slice 2 :: publish readiness extensions", () => {
       prompt: "Final assessment prompt",
       options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
     });
+    await deleteCheckpoint(principal, checkpointId, { deleteBoundQuestions: true });
+    // The checkpoint is gone.
+    const cpGone = await prisma.trainingCheckpoint.findUnique({ where: { id: checkpointId } });
+    expect(cpGone).toBeNull();
+    // The bound question is also gone (NOT silently promoted to final assessment).
+    const qGone = await prisma.trainingQuestion.findUnique({ where: { id: questionId } });
+    expect(qGone).toBeNull();
+    // Final-assessment question count is unchanged (still 1).
+    const finalQs = await prisma.trainingQuestion.count({ where: { courseVersionId: versionId, checkpointId: null } });
+    expect(finalQs).toBe(1);
+  });
+
+  it("Slice 2A: manager can preserve a checkpoint question by moving it to the final assessment first", async () => {
+    const { principal, versionId } = await seedWithQuestionAndVideo();
+    const { checkpointId } = await createCheckpoint(principal, versionId, { atSecond: 60 });
+    const { questionId } = await createQuestion(principal, versionId, {
+      prompt: "Checkpoint prompt to preserve",
+      checkpointId,
+      options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
+    });
+    // Move the question to the final assessment by clearing its checkpointId.
+    await prisma.trainingQuestion.update({
+      where: { id: questionId },
+      data: { checkpointId: null },
+    });
+    // Now the delete succeeds without the cascade option.
     await deleteCheckpoint(principal, checkpointId);
     const q = await prisma.trainingQuestion.findUnique({ where: { id: questionId } });
+    expect(q).not.toBeNull();
     expect(q!.checkpointId).toBeNull();
-    // Publish readiness still passes because the checkpoint is gone
-    // and the previously-bound question now counts for the final assessment.
-    const r = await checkPublishReadiness(versionId);
-    expect(r.ready).toBe(true);
   });
 });

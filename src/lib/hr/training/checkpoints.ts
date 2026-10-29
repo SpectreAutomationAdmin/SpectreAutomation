@@ -246,9 +246,40 @@ export async function updateCheckpoint(
 // Delete checkpoint
 // ---------------------------------------------------------------------------
 
+/** EP-TRAIN-3 Slice 2A (2026-10-29) -- explicit question-handling
+ *  policy on checkpoint deletion.
+ *
+ *  The Prisma FK on TrainingQuestion.checkpointId is ON DELETE SET
+ *  NULL as a defence-in-depth safety net, but the service layer MUST
+ *  NOT allow a checkpoint delete to silently convert the checkpoint's
+ *  questions into final-assessment questions.  That silent promotion
+ *  changes the assessment the published audience would see at next
+ *  publish without an explicit manager decision.
+ *
+ *  Policy (founder decision 2026-10-29):
+ *     deleteCheckpoint REFUSES when the checkpoint has >=1 active
+ *     question bound to it.  The manager must either reassign each
+ *     question to another checkpoint, convert it to a final-assessment
+ *     question explicitly (set checkpointId = null via updateQuestion),
+ *     or delete the question first.
+ *
+ *  Callers can opt into cascading cleanup by passing {deleteBoundQuestions:true}.
+ *  That hard-deletes every question that was bound to the checkpoint
+ *  in the same transaction, with per-question audit rows.  No silent
+ *  promotion ever happens.
+ */
+export interface DeleteCheckpointOptions {
+  /** When true, cascade-delete every active question bound to this checkpoint
+   *  BEFORE deleting the checkpoint itself.  Each deleted question is
+   *  audited individually.  Defaults to false (deletion is refused when
+   *  active bound questions exist). */
+  deleteBoundQuestions?: boolean;
+}
+
 export async function deleteCheckpoint(
   principal: Principal,
   checkpointId: string,
+  opts: DeleteCheckpointOptions = {},
 ): Promise<void> {
   const cp = await prisma.trainingCheckpoint.findUnique({
     where: { id: checkpointId },
@@ -261,19 +292,52 @@ export async function deleteCheckpoint(
   }
   requirePermission(principal, clubId, "hr:training:write");
 
+  const boundQuestions = await prisma.trainingQuestion.findMany({
+    where: { checkpointId },
+    select: { id: true, prompt: true, active: true },
+  });
+  const activeBound = boundQuestions.filter((q) => q.active);
+  if (activeBound.length > 0 && !opts.deleteBoundQuestions) {
+    throw new ConflictError(
+      `Checkpoint has ${activeBound.length} active question(s) bound to it. ` +
+      `Reassign them to another checkpoint, convert them to final-assessment ` +
+      `questions, or delete them explicitly before removing the checkpoint.`,
+    );
+  }
+
   await prisma.$transaction(async (tx) => {
     await assertPostingAllowed(
       principal, clubId,
       "hr.training.checkpoint.delete", CHECKPOINT_ENTITY, checkpointId, { tx },
     );
+    if (opts.deleteBoundQuestions && boundQuestions.length > 0) {
+      // Cascade-delete every bound question (active + inactive) so no
+      // orphan rows survive. Each deletion is audited individually below.
+      await tx.trainingQuestion.deleteMany({ where: { checkpointId } });
+    }
     await tx.trainingCheckpoint.delete({ where: { id: checkpointId } });
   });
+  if (opts.deleteBoundQuestions && boundQuestions.length > 0) {
+    for (const q of boundQuestions) {
+      await audit(principal, {
+        action: "hr.training.question.delete",
+        entityType: "TrainingQuestion",
+        entityId: q.id,
+        clubId,
+        before: { promptTail: q.prompt.slice(-40), reason: "checkpoint-cascade" },
+      });
+    }
+  }
   await audit(principal, {
     action: "hr.training.checkpoint.delete",
     entityType: CHECKPOINT_ENTITY,
     entityId: checkpointId,
     clubId,
-    before: { atSecond: cp.atSecond, label: cp.label },
+    before: {
+      atSecond: cp.atSecond,
+      label: cp.label,
+      cascadedQuestionCount: opts.deleteBoundQuestions ? boundQuestions.length : 0,
+    },
   });
 }
 
