@@ -87,28 +87,63 @@ export default async function EmployeeCoursePage({
     videoCompleted: false,
   };
 
+  // EP-TRAIN-1 §A (2026-10-29) -- centered max-width column; existing
+  // Spectre design tokens (cream background from the portal shell,
+  // forest-green accents, serif heading, muted stone body text).
+  const requiredStatusLabel = match.version.required ? "Required" : "Optional";
   return (
-    <div className="space-y-8" data-testid="portal-course">
-      <div>
+    <div className="mx-auto max-w-5xl space-y-8" data-testid="portal-course">
+      {/* Breadcrumb */}
+      <nav
+        aria-label="Breadcrumb"
+        className="text-xs tracking-[0.14em] uppercase text-stone-500"
+        data-testid="portal-course-breadcrumb"
+      >
+        <Link
+          href="/employee"
+          className="hover:text-club-green-800"
+        >
+          Home
+        </Link>
+        <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
         <Link
           href="/employee/safety-training"
-          className="text-xs uppercase tracking-[0.16em] text-stone-500 hover:text-stone-800"
+          className="hover:text-club-green-800"
           data-testid="portal-course-back"
         >
-          ← Back to Safety &amp; Training
+          Safety &amp; Training
         </Link>
-      </div>
+        <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
+        <span className="text-stone-800">{view.title}</span>
+      </nav>
 
-      <header>
-        <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
-          {view.category}
-          {match.version.required ? " · Required" : " · Optional"}
-        </p>
-        <h1 className="mt-1 font-serif text-3xl text-club-ink" data-testid="portal-course-title">
+      <header className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span
+            className="inline-flex items-center rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-stone-700"
+            data-testid="portal-course-category"
+          >
+            {view.category}
+          </span>
+          <span
+            className={
+              match.version.required
+                ? "inline-flex items-center rounded-full bg-club-green-800 px-2.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-white"
+                : "inline-flex items-center rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-stone-700"
+            }
+            data-testid="portal-course-required-chip"
+          >
+            {requiredStatusLabel}
+          </span>
+        </div>
+        <h1
+          className="font-serif text-3xl md:text-4xl text-club-ink leading-tight"
+          data-testid="portal-course-title"
+        >
           {view.title}
         </h1>
         {view.description && (
-          <p className="mt-3 text-sm text-stone-700 leading-relaxed max-w-2xl">
+          <p className="text-sm md:text-base text-stone-700 leading-relaxed max-w-3xl">
             {view.description}
           </p>
         )}

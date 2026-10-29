@@ -24,10 +24,10 @@ import { hasPermission } from "@/lib/rbac";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import {
   uploadTrainingVideo,
-  readTrainingVideoBytes,
   TRAINING_VIDEO_ACCEPTED_MIME,
   TRAINING_VIDEO_MAX_BYTES,
 } from "@/lib/hr/training/video";
+import { streamTrainingVideo } from "@/lib/hr/training/video-stream";
 import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
 import { prisma } from "@/lib/prisma";
 import { isAppError, ValidationError } from "@/lib/errors";
@@ -62,26 +62,45 @@ async function callerCanReadVersion(versionId: string): Promise<{ ok: boolean; c
   return { ok: false, clubId: null };
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  // EP-TRAIN-1 §B (2026-10-29) -- streaming + HTTP Range delivery.
+  // Replaces the earlier full-buffer path.  Byte 0 of the response
+  // ships as soon as R2 streams it; the browser can seek, resume,
+  // and Safari can play natively because `Accept-Ranges: bytes`
+  // + `206 Partial Content` are now honoured.
   const versionId = params.id;
   const { ok, clubId } = await callerCanReadVersion(versionId);
   if (!ok || !clubId) return NOT_FOUND();
-  const asset = await readTrainingVideoBytes(clubId, versionId);
-  if (!asset) return NOT_FOUND();
-  return new NextResponse(new Uint8Array(asset.bytes), {
-    status: 200,
-    headers: {
-      "Content-Type": asset.mimeType,
-      "Content-Length": String(asset.bytes.length),
-      "Content-Disposition": "inline",
-      // Private cache so replaced videos propagate within a session.
-      "Cache-Control": "private, max-age=60, must-revalidate",
-      "X-Content-Type-Options": "nosniff",
-      // Range not implemented in this pilot — noted in the route
-      // header comment for future migration.
-      "Accept-Ranges": "none",
-    },
-  });
+
+  const rangeHeader = req.headers.get("range");
+  const result = await streamTrainingVideo({ clubId, versionId, rangeHeader });
+  if (!result) return NOT_FOUND();
+
+  const headers: Record<string, string> = {
+    "Content-Type": result.contentType,
+    "Content-Length": String(result.contentLength),
+    "Content-Disposition": "inline",
+    // Private + short TTL preserves the prior semantics: a replaced
+    // video propagates within a session.  The strong etag below lets
+    // the browser skip a re-download when the body hasn't changed.
+    "Cache-Control": "private, max-age=60, must-revalidate",
+    "X-Content-Type-Options": "nosniff",
+    "Accept-Ranges": "bytes",
+  };
+  if (result.sha256) headers["ETag"] = `"${result.sha256}"`;
+  if (result.contentRange) headers["Content-Range"] = result.contentRange;
+
+  // Prefer the ReadableStream path (R2) so bytes flow without the
+  // Node process buffering the entire body in memory.  The in-memory
+  // adapter fallback returns a Buffer; wrap it so the Response
+  // interface is uniform.
+  if (result.bodyStream) {
+    return new NextResponse(result.bodyStream, { status: result.status, headers });
+  }
+  if (result.bodyBuffer) {
+    return new NextResponse(new Uint8Array(result.bodyBuffer), { status: result.status, headers });
+  }
+  return NOT_FOUND();
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

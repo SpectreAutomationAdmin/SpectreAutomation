@@ -310,19 +310,30 @@ export default function CoursePlayer(props: Props) {
 
   return (
     <div className="space-y-8">
-      {/* Video block */}
+      {/* Video block -- EP-TRAIN-1 §A (2026-10-29):
+         - 16:9 aspect ratio is RESERVED on the wrapper BEFORE the
+           browser has any metadata so there is no 0-height black
+           strip while R2 streams the first bytes.
+         - The player sits inside a `relative` + `aspect-video`
+           container; the inner <video> fills it with `absolute inset-0`.
+           Container background is a muted stone (not pure black) so
+           the "nothing yet rendered" state reads as a neutral poster
+           rather than a dropped frame.
+         - `preload="auto"` is now safe because the proxy streams
+           + supports Range; the browser can grab a few seconds
+           without blocking on the full download. */}
       {hasVideo && (
         <section
           className="rounded-lg border border-stone-200 bg-white overflow-hidden"
           data-testid="portal-course-video-section"
         >
-          <div className="bg-stone-900">
+          <div className="relative w-full aspect-video bg-stone-100">
             <video
               ref={videoRef}
-              className="w-full max-h-[70vh]"
+              className="absolute inset-0 w-full h-full"
               controls
               playsInline
-              preload="metadata"
+              preload="auto"
               src={videoUrl}
               onLoadedMetadata={onLoadedMetadata}
               onTimeUpdate={onTimeUpdate}
