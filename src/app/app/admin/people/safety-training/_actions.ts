@@ -24,7 +24,14 @@ import {
   updateQuestion,
   deleteQuestion,
   reorderQuestions,
+  TRAINING_QUESTION_TYPES,
+  type TrainingQuestionType,
 } from "@/lib/hr/training/questions";
+import {
+  createCheckpoint,
+  updateCheckpoint,
+  deleteCheckpoint,
+} from "@/lib/hr/training/checkpoints";
 
 function withErr(path: string, safeMessage: string): string {
   const sep = path.includes("?") ? "&" : "?";
@@ -201,6 +208,25 @@ export async function startNewDraftAction(courseId: string): Promise<void> {
 // Question authoring (draft-only)
 // ---------------------------------------------------------------------------
 
+function parseQuestionType(raw: string | null | undefined): TrainingQuestionType {
+  if (!raw) return "SINGLE_CHOICE";
+  return (TRAINING_QUESTION_TYPES as readonly string[]).includes(raw)
+    ? (raw as TrainingQuestionType)
+    : "SINGLE_CHOICE";
+}
+
+function parseCorrectIndices(raw: string | null | undefined): Set<number> {
+  if (!raw) return new Set<number>();
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((s) => Number.parseInt(s, 10))
+      .filter((n) => Number.isInteger(n)),
+  );
+}
+
 export async function createQuestionAction(
   courseId: string,
   versionId: string,
@@ -209,14 +235,21 @@ export async function createQuestionAction(
   const principal = await requirePrincipal();
   const prompt = (formData.get("prompt") as string | null)?.trim() ?? "";
   const optionTexts = formData.getAll("optionText").map(String);
+  const questionType = parseQuestionType(formData.get("questionType") as string | null);
+  const checkpointId = (formData.get("checkpointId") as string | null)?.trim() || null;
   const correctIdxRaw = (formData.get("correctIdx") as string | null) ?? "";
+  const correctIdxs = parseCorrectIndices(formData.get("correctIdxs") as string | null);
   const backHref = `/app/admin/people/safety-training/${courseId}/${versionId}`;
+  // SINGLE_CHOICE + TRUE_FALSE use a single radio (correctIdx);
+  // MULTI_ANSWER uses a comma-joined list (correctIdxs).
   const options = optionTexts.map((text, i) => ({
     text: text.trim(),
-    isCorrect: String(i) === correctIdxRaw,
+    isCorrect: questionType === "MULTI_ANSWER"
+      ? correctIdxs.has(i)
+      : String(i) === correctIdxRaw,
   }));
   try {
-    await createQuestion(principal, versionId, { prompt, options });
+    await createQuestion(principal, versionId, { prompt, options, questionType, checkpointId });
     revalidatePath(backHref);
     redirect(backHref);
   } catch (err) {
@@ -237,17 +270,24 @@ export async function updateQuestionAction(
   const prompt = (formData.get("prompt") as string | null)?.trim();
   const optionIds = formData.getAll("optionId").map(String);
   const optionTexts = formData.getAll("optionText").map(String);
+  const questionTypeRaw = formData.get("questionType") as string | null;
+  const questionType = questionTypeRaw ? parseQuestionType(questionTypeRaw) : undefined;
+  const effectiveType: TrainingQuestionType = questionType ?? "SINGLE_CHOICE";
   const correctIdxRaw = (formData.get("correctIdx") as string | null) ?? "";
+  const correctIdxs = parseCorrectIndices(formData.get("correctIdxs") as string | null);
   const backHref = `/app/admin/people/safety-training/${courseId}/${versionId}`;
   const options = optionTexts.map((text, i) => ({
     id: optionIds[i] || undefined,
     text: text.trim(),
-    isCorrect: String(i) === correctIdxRaw,
+    isCorrect: effectiveType === "MULTI_ANSWER"
+      ? correctIdxs.has(i)
+      : String(i) === correctIdxRaw,
   }));
   try {
     await updateQuestion(principal, questionId, {
       prompt: prompt ?? undefined,
       options: options.length ? options : undefined,
+      questionType,
     });
     revalidatePath(backHref);
     redirect(backHref);
@@ -292,5 +332,107 @@ export async function reorderQuestionsAction(
   } catch (err) {
     if (isAppError(err)) return { ok: false, error: err.safeMessage };
     return { ok: false, error: "Reorder failed" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-3 Slice 2: Checkpoint authoring (draft-only)
+// ---------------------------------------------------------------------------
+
+export async function createCheckpointAction(
+  courseId: string,
+  versionId: string,
+  formData: FormData,
+): Promise<{ ok: true; checkpointId: string } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  const atSecondRaw = formData.get("atSecond");
+  const atSecond = Number(atSecondRaw);
+  if (!Number.isFinite(atSecond) || atSecond < 0) {
+    return { ok: false, error: "Checkpoint position must be a non-negative number." };
+  }
+  const label = ((formData.get("label") as string | null) ?? "").trim() || null;
+  const requiredToProceedRaw = formData.get("requiredToProceed");
+  const requiredToProceed = requiredToProceedRaw === "false" ? false : true;
+  const maxRetriesRaw = formData.get("maxRetries");
+  const maxRetries = maxRetriesRaw !== null && maxRetriesRaw !== ""
+    ? Number(maxRetriesRaw)
+    : undefined;
+  try {
+    const result = await createCheckpoint(principal, versionId, {
+      atSecond,
+      label,
+      requiredToProceed,
+      maxRetries,
+    });
+    revalidatePath(`/app/admin/people/safety-training/${courseId}/${versionId}`);
+    return { ok: true, checkpointId: result.checkpointId };
+  } catch (err) {
+    if (isAppError(err)) {
+      return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
+    }
+    throw err;
+  }
+}
+
+export async function updateCheckpointAction(
+  courseId: string,
+  versionId: string,
+  checkpointId: string,
+  formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  const atSecondRaw = formData.get("atSecond");
+  const labelRaw = formData.get("label");
+  const requiredToProceedRaw = formData.get("requiredToProceed");
+  const maxRetriesRaw = formData.get("maxRetries");
+  const patch: Parameters<typeof updateCheckpoint>[2] = {};
+  if (atSecondRaw !== null && atSecondRaw !== "") {
+    const n = Number(atSecondRaw);
+    if (!Number.isFinite(n) || n < 0) {
+      return { ok: false, error: "Checkpoint position must be a non-negative number." };
+    }
+    patch.atSecond = n;
+  }
+  if (labelRaw !== null) {
+    const s = String(labelRaw).trim();
+    patch.label = s.length === 0 ? null : s;
+  }
+  if (requiredToProceedRaw !== null) {
+    patch.requiredToProceed = requiredToProceedRaw !== "false";
+  }
+  if (maxRetriesRaw !== null && maxRetriesRaw !== "") {
+    const n = Number(maxRetriesRaw);
+    if (!Number.isInteger(n) || n < 0) {
+      return { ok: false, error: "Maximum retries must be a non-negative integer." };
+    }
+    patch.maxRetries = n;
+  }
+  try {
+    await updateCheckpoint(principal, checkpointId, patch);
+    revalidatePath(`/app/admin/people/safety-training/${courseId}/${versionId}`);
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) {
+      return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
+    }
+    throw err;
+  }
+}
+
+export async function deleteCheckpointAction(
+  courseId: string,
+  versionId: string,
+  checkpointId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await deleteCheckpoint(principal, checkpointId);
+    revalidatePath(`/app/admin/people/safety-training/${courseId}/${versionId}`);
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) {
+      return { ok: false, error: err.safeMessage };
+    }
+    throw err;
   }
 }

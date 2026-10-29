@@ -227,11 +227,20 @@ async function evaluateAccessTierGate(
   if (opts?.tx) {
     // Transaction-bound read with FOR UPDATE.  Row-level lock held
     // until the caller's tx commits or rolls back.
+    //
+    // EP-TRAIN-3 Slice 2 (2026-10-29): SQLite in the Vitest harness
+    // does NOT support FOR UPDATE.  The dev + CI test URL always
+    // starts with `file:`; Postgres URLs start with `postgres`.  The
+    // lock degrades to a plain SELECT on SQLite -- fine for a
+    // single-threaded test harness where no concurrent writer exists
+    // -- while production Postgres keeps the FOR UPDATE serialization
+    // against suspension writers.
+    const isSqlite = (process.env.DATABASE_URL ?? "").startsWith("file:");
+    const sql = isSqlite
+      ? `SELECT "accessTier", "subscriptionStatus" FROM "ClubSubscription" WHERE "clubId" = $1`
+      : `SELECT "accessTier", "subscriptionStatus" FROM "ClubSubscription" WHERE "clubId" = $1 FOR UPDATE`;
     const rows = (await opts.tx.$queryRawUnsafe(
-      `SELECT "accessTier", "subscriptionStatus"
-         FROM "ClubSubscription"
-         WHERE "clubId" = $1
-         FOR UPDATE`,
+      sql,
       clubId,
     )) as Array<{ accessTier: string | null; subscriptionStatus: string | null }>;
     sub = rows[0] ?? null;

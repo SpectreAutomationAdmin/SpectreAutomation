@@ -22,17 +22,22 @@ import {
   checkPublishReadiness,
   TRAINING_COURSE_CATEGORIES,
 } from "@/lib/hr/training/courses";
+import { listCheckpointsForVersion } from "@/lib/hr/training/checkpoints";
 import {
   updateDraftAction,
   publishDraftAction,
   createQuestionAction,
   updateQuestionAction,
   deleteQuestionAction,
+  createCheckpointAction,
+  updateCheckpointAction,
+  deleteCheckpointAction,
 } from "../../_actions";
 import VideoUploader from "./VideoUploader";
-import QuizEditor from "./QuizEditor";
+import QuizEditor, { type TrainingQuestionType } from "./QuizEditor";
 import ApplicabilityPicker from "./ApplicabilityPicker";
 import PublishPanel from "./PublishPanel";
+import TimelineEditor from "./TimelineEditor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,6 +66,7 @@ export default async function VersionEditorPage({
     },
   });
   if (!version) redirect("/app/admin/people/safety-training");
+  const checkpoints = await listCheckpointsForVersion(version.id);
   const canAuthor = hasPermission(principal, clubId, "hr:training:write");
   const canPublish = hasPermission(principal, clubId, "hr:training:publish");
   const { err } = await searchParams;
@@ -277,32 +283,106 @@ export default async function VersionEditorPage({
         />
       </section>
 
+      {version.videoStorageKey && (
+        <section className="card card-body space-y-4 mt-8" data-testid="training-editor-checkpoints-section">
+          <div className="flex items-baseline justify-between">
+            <h2 className="section-title text-lg">Interactive checkpoints</h2>
+            <span className="text-xs text-stone-500">
+              {checkpoints.length} placed{version.videoDurationSec ? ` · video ${Math.round(version.videoDurationSec)}s` : ""}
+            </span>
+          </div>
+          <p className="text-sm text-stone-600">
+            Pause the video at a moment, add a checkpoint, and attach one or more
+            questions. Required checkpoints block playback until the employee clears
+            them.
+          </p>
+          <TimelineEditor
+            courseId={params.courseId}
+            versionId={version.id}
+            videoUrl={`/api/hr/training/versions/${version.id}/video`}
+            initialDurationSec={version.videoDurationSec}
+            checkpoints={checkpoints}
+            readOnly={readOnly}
+            createAction={createCheckpointAction}
+            updateAction={updateCheckpointAction}
+            deleteAction={deleteCheckpointAction}
+          />
+          {checkpoints.length > 0 && (
+            <div className="space-y-4 pt-2 border-t border-stone-200">
+              {checkpoints.map((cp) => {
+                const cpQuestions = version.questions
+                  .filter((q) => q.checkpointId === cp.id)
+                  .map((q) => ({
+                    id: q.id,
+                    prompt: q.prompt,
+                    active: q.active,
+                    questionType: ((q.questionType as string) || "SINGLE_CHOICE") as TrainingQuestionType,
+                    options: q.options.map((o) => ({ id: o.id, text: o.text, isCorrect: o.isCorrect })),
+                  }));
+                return (
+                  <details key={cp.id} className="rounded-md border border-stone-200 bg-white" data-testid={`training-checkpoint-${cp.id}-questions`}>
+                    <summary className="cursor-pointer px-4 py-3 text-sm font-medium flex items-baseline justify-between gap-3">
+                      <span>
+                        <span className="font-mono text-xs text-stone-500 mr-2">@{cp.atSecond}s</span>
+                        {cp.label ?? <span className="text-stone-500">Unlabelled checkpoint</span>}
+                      </span>
+                      <span className="text-xs text-stone-500">
+                        {cpQuestions.length} question{cpQuestions.length === 1 ? "" : "s"}
+                      </span>
+                    </summary>
+                    <div className="px-4 pb-4">
+                      <QuizEditor
+                        courseId={params.courseId}
+                        versionId={version.id}
+                        checkpointId={cp.id}
+                        questions={cpQuestions}
+                        disabled={readOnly}
+                        categorySuggestions={[...TRAINING_COURSE_CATEGORIES]}
+                        createAction={createQuestionAction}
+                        updateAction={updateQuestionAction}
+                        deleteAction={deleteQuestionAction}
+                        surfaceLabel="checkpoint"
+                      />
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="card card-body space-y-4 mt-8" data-testid="training-editor-quiz-section">
-        <h2 className="section-title text-lg">Knowledge test</h2>
+        <h2 className="section-title text-lg">Final assessment</h2>
         {!version.requiresKnowledgeTest && (
           <p className="text-sm text-stone-600">
             This course does not include a knowledge test. Employees complete the course
-            when the video threshold is met.
+            when the video threshold is met and any required checkpoints are cleared.
           </p>
         )}
         <QuizEditor
           courseId={params.courseId}
           versionId={version.id}
-          questions={version.questions.map((q) => ({
-            id: q.id,
-            prompt: q.prompt,
-            active: q.active,
-            options: q.options.map((o) => ({
-              id: o.id,
-              text: o.text,
-              isCorrect: o.isCorrect,
-            })),
-          }))}
+          checkpointId={null}
+          questions={version.questions
+            .filter((q) => q.checkpointId === null)
+            .map((q) => ({
+              id: q.id,
+              prompt: q.prompt,
+              active: q.active,
+              questionType: ((q.questionType as string) || "SINGLE_CHOICE") as TrainingQuestionType,
+              options: q.options.map((o) => ({
+                id: o.id,
+                text: o.text,
+                isCorrect: o.isCorrect,
+              })),
+            }))}
           disabled={readOnly}
           categorySuggestions={[...TRAINING_COURSE_CATEGORIES]}
           createAction={createQuestionAction}
           updateAction={updateQuestionAction}
           deleteAction={deleteQuestionAction}
+          surfaceLabel="final assessment"
         />
       </section>
 

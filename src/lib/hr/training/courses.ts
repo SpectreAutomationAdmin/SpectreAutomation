@@ -251,6 +251,7 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
       questions: {
         include: { options: true },
       },
+      checkpoints: { orderBy: { atSecond: "asc" } },
       course: { select: { clubId: true } },
     },
   });
@@ -259,21 +260,63 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
   if (version.state !== "DRAFT") reasons.push(`Version is already ${version.state}.`);
   if (!version.title || version.title.trim().length < 3) reasons.push("Course title is required.");
   if (!version.videoStorageKey) reasons.push("Training video is required.");
-  // Note: an explicit-assignment-only course (no All / dept / position)
-  // is legitimate per §16 — the admin simply assigns per-employee.
-  // We do NOT require broadcast applicability at publish time.
+
+  // Validate per-question option integrity by question type. Final-
+  // assessment questions have checkpointId=null; checkpoint questions
+  // are additionally verified below.
+  const activeQs = version.questions.filter((q) => q.active);
+  for (const q of activeQs) {
+    const type = (q.questionType as "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE") ?? "SINGLE_CHOICE";
+    if (q.options.length < 2) {
+      reasons.push(`Question '${q.prompt.slice(0, 40)}...' needs at least 2 answer options.`);
+      continue;
+    }
+    const correct = q.options.filter((o) => o.isCorrect).length;
+    if (type === "SINGLE_CHOICE" && correct !== 1) {
+      reasons.push(`Question '${q.prompt.slice(0, 40)}...' must have exactly one correct answer.`);
+    } else if (type === "MULTI_ANSWER" && (correct < 1 || correct === q.options.length)) {
+      reasons.push(`Question '${q.prompt.slice(0, 40)}...' must have at least one correct answer and at least one incorrect answer.`);
+    } else if (type === "TRUE_FALSE" && (q.options.length !== 2 || correct !== 1)) {
+      reasons.push(`Question '${q.prompt.slice(0, 40)}...' (True/False) must have exactly two options with one correct.`);
+    }
+  }
+
+  // Final assessment -- only required when the course opted into a
+  // knowledge test. Preserves the legacy contract.
   if (version.requiresKnowledgeTest) {
-    const activeQs = version.questions.filter((q) => q.active);
-    if (activeQs.length === 0) reasons.push("Knowledge test requires at least one active question.");
-    for (const q of activeQs) {
-      if (q.options.length < 2) {
-        reasons.push(`Question '${q.prompt.slice(0, 40)}...' needs at least 2 answer options.`);
+    const finalAssessmentQs = activeQs.filter((q) => q.checkpointId === null);
+    if (finalAssessmentQs.length === 0) {
+      reasons.push("Final assessment requires at least one active question.");
+    }
+  }
+
+  // Checkpoints -- additional invariants on top of question-type rules.
+  if (version.checkpoints.length > 0) {
+    const duration = version.videoDurationSec;
+    for (const cp of version.checkpoints) {
+      if (cp.atSecond < 0) {
+        reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' has an invalid position.`);
       }
-      const correctCount = q.options.filter((o) => o.isCorrect).length;
-      if (correctCount !== 1) {
-        reasons.push(`Question '${q.prompt.slice(0, 40)}...' must have exactly one correct answer.`);
+      if (duration !== null && cp.atSecond > duration) {
+        reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' is past the end of the video (${duration}s).`);
+      }
+      const cpQs = activeQs.filter((q) => q.checkpointId === cp.id);
+      if (cpQs.length === 0) {
+        reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' needs at least one active question.`);
       }
     }
+    // 1s minimum spacing across adjacent checkpoints (list is sorted).
+    for (let i = 1; i < version.checkpoints.length; i++) {
+      const prev = version.checkpoints[i - 1];
+      const curr = version.checkpoints[i];
+      if (curr.atSecond - prev.atSecond < 1) {
+        reasons.push(`Checkpoints at ${prev.atSecond}s and ${curr.atSecond}s must be at least 1s apart.`);
+      }
+    }
+    // Note: the schema's ON DELETE SET NULL on TrainingQuestion.checkpointId
+    // means orphan questions cannot exist -- a deleted checkpoint
+    // moves its questions back to the final-assessment bucket (which
+    // the loops above already validate).
   }
   return { ready: reasons.length === 0, reasons };
 }

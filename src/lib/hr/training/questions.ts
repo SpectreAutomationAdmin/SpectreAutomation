@@ -14,6 +14,64 @@ import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 const QUESTION_ENTITY = "TrainingQuestion";
 const OPTION_ENTITY = "TrainingAnswerOption";
 
+// EP-TRAIN-3 Slice 2 (2026-10-29) -- supported question types.
+// SINGLE_CHOICE preserves every existing row's semantics.
+export const TRAINING_QUESTION_TYPES = [
+  "SINGLE_CHOICE",
+  "MULTI_ANSWER",
+  "TRUE_FALSE",
+] as const;
+export type TrainingQuestionType = (typeof TRAINING_QUESTION_TYPES)[number];
+
+function normaliseQuestionType(input: string | undefined | null): TrainingQuestionType {
+  if (input === undefined || input === null || input === "") return "SINGLE_CHOICE";
+  if (!(TRAINING_QUESTION_TYPES as readonly string[]).includes(input)) {
+    throw new ValidationError([{
+      path: "questionType",
+      message: `questionType must be one of ${TRAINING_QUESTION_TYPES.join(", ")}.`,
+    }]);
+  }
+  return input as TrainingQuestionType;
+}
+
+function validateOptionsByType(
+  questionType: TrainingQuestionType,
+  options: Array<{ text: string; isCorrect: boolean }>,
+): void {
+  if (options.length < 2) {
+    throw new ValidationError([{ path: "options", message: "At least 2 answer options are required." }]);
+  }
+  const correctCount = options.filter((o) => o.isCorrect).length;
+  if (questionType === "SINGLE_CHOICE") {
+    if (correctCount !== 1) {
+      throw new ValidationError([{ path: "options", message: "Exactly one option must be marked correct." }]);
+    }
+  } else if (questionType === "MULTI_ANSWER") {
+    if (correctCount < 1) {
+      throw new ValidationError([{ path: "options", message: "At least one option must be marked correct." }]);
+    }
+    if (correctCount === options.length) {
+      throw new ValidationError([{ path: "options", message: "At least one option must be marked incorrect." }]);
+    }
+  } else {
+    // TRUE_FALSE
+    if (options.length !== 2) {
+      throw new ValidationError([{ path: "options", message: "True / False questions must have exactly 2 options." }]);
+    }
+    if (correctCount !== 1) {
+      throw new ValidationError([{ path: "options", message: "Exactly one option must be marked correct." }]);
+    }
+  }
+  for (const [i, o] of options.entries()) {
+    if (!o.text || o.text.trim().length === 0) {
+      throw new ValidationError([{ path: `options[${i}].text`, message: "Option text required." }]);
+    }
+    if (o.text.trim().length > 300) {
+      throw new ValidationError([{ path: `options[${i}].text`, message: "Option text must be at most 300 characters." }]);
+    }
+  }
+}
+
 async function loadDraftVersion(versionId: string) {
   const v = await prisma.trainingCourseVersion.findUnique({
     where: { id: versionId },
@@ -28,6 +86,23 @@ async function loadDraftVersion(versionId: string) {
   return v;
 }
 
+async function assertCheckpointBelongsToVersion(
+  checkpointId: string,
+  versionId: string,
+): Promise<void> {
+  const cp = await prisma.trainingCheckpoint.findUnique({
+    where: { id: checkpointId },
+    select: { courseVersionId: true },
+  });
+  if (!cp) throw new NotFoundError("TrainingCheckpoint", checkpointId);
+  if (cp.courseVersionId !== versionId) {
+    throw new ValidationError([{
+      path: "checkpointId",
+      message: "Checkpoint does not belong to this course version.",
+    }]);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Create question
 // ---------------------------------------------------------------------------
@@ -35,6 +110,12 @@ async function loadDraftVersion(versionId: string) {
 export interface CreateQuestionInput {
   prompt: string;
   options: Array<{ text: string; isCorrect: boolean }>;
+  /** EP-TRAIN-3 Slice 2: SINGLE_CHOICE | MULTI_ANSWER | TRUE_FALSE.
+   *  Omitted = SINGLE_CHOICE (preserves existing caller behaviour). */
+  questionType?: TrainingQuestionType;
+  /** EP-TRAIN-3 Slice 2: optional checkpoint binding. null / omitted =
+   *  final-assessment question (preserves existing caller behaviour). */
+  checkpointId?: string | null;
 }
 
 export async function createQuestion(
@@ -48,23 +129,14 @@ export async function createQuestion(
   if (prompt.length < 3 || prompt.length > 500) {
     throw new ValidationError([{ path: "prompt", message: "Prompt must be 3-500 characters." }]);
   }
-  if (input.options.length < 2) {
-    throw new ValidationError([{ path: "options", message: "At least 2 answer options are required." }]);
-  }
-  const correctCount = input.options.filter((o) => o.isCorrect).length;
-  if (correctCount !== 1) {
-    throw new ValidationError([{ path: "options", message: "Exactly one option must be marked correct." }]);
-  }
-  for (const [i, o] of input.options.entries()) {
-    if (!o.text || o.text.trim().length === 0) {
-      throw new ValidationError([{ path: `options[${i}].text`, message: "Option text required." }]);
-    }
-    if (o.text.trim().length > 300) {
-      throw new ValidationError([{ path: `options[${i}].text`, message: "Option text must be at most 300 characters." }]);
-    }
+  const questionType = normaliseQuestionType(input.questionType);
+  validateOptionsByType(questionType, input.options);
+  const checkpointId = input.checkpointId ?? null;
+  if (checkpointId) {
+    await assertCheckpointBelongsToVersion(checkpointId, versionId);
   }
   const maxOrder = await prisma.trainingQuestion.aggregate({
-    where: { courseVersionId: versionId },
+    where: { courseVersionId: versionId, checkpointId },
     _max: { displayOrder: true },
   });
   const nextOrder = (maxOrder._max.displayOrder ?? -1) + 1;
@@ -76,7 +148,14 @@ export async function createQuestion(
       "hr.training.question.create", QUESTION_ENTITY, versionId, { tx },
     );
     const q = await tx.trainingQuestion.create({
-      data: { courseVersionId: versionId, prompt, displayOrder: nextOrder, active: true },
+      data: {
+        courseVersionId: versionId,
+        prompt,
+        displayOrder: nextOrder,
+        active: true,
+        questionType,
+        checkpointId,
+      },
     });
     for (const [i, o] of input.options.entries()) {
       await tx.trainingAnswerOption.create({
@@ -95,7 +174,13 @@ export async function createQuestion(
     entityType: QUESTION_ENTITY,
     entityId: result.questionId,
     clubId: v.course.clubId,
-    after: { versionId, promptTail: prompt.slice(-40), optionCount: input.options.length },
+    after: {
+      versionId,
+      promptTail: prompt.slice(-40),
+      optionCount: input.options.length,
+      questionType,
+      checkpointId,
+    },
   });
   return result;
 }
@@ -113,6 +198,9 @@ export interface UpdateQuestionInput {
     isCorrect: boolean;
   }>;
   active?: boolean;
+  /** EP-TRAIN-3 Slice 2: change question type (also re-validates options
+   *  against the new type's correct-count rule). */
+  questionType?: TrainingQuestionType;
 }
 
 export async function updateQuestion(
@@ -133,7 +221,7 @@ export async function updateQuestion(
     throw new ConflictError(`Cannot modify a ${q.courseVersion.state} version's questions.`);
   }
   requirePermission(principal, clubId, "hr:training:write");
-  const questionData: { prompt?: string; active?: boolean } = {};
+  const questionData: { prompt?: string; active?: boolean; questionType?: TrainingQuestionType } = {};
   if (input.prompt !== undefined) {
     const p = input.prompt.trim();
     if (p.length < 3 || p.length > 500) {
@@ -142,15 +230,13 @@ export async function updateQuestion(
     questionData.prompt = p;
   }
   if (input.active !== undefined) questionData.active = input.active;
+  const effectiveType = input.questionType !== undefined
+    ? normaliseQuestionType(input.questionType)
+    : (q.questionType as TrainingQuestionType);
+  if (input.questionType !== undefined) questionData.questionType = effectiveType;
 
   if (input.options !== undefined) {
-    if (input.options.length < 2) {
-      throw new ValidationError([{ path: "options", message: "At least 2 answer options are required." }]);
-    }
-    const correctCount = input.options.filter((o) => o.isCorrect).length;
-    if (correctCount !== 1) {
-      throw new ValidationError([{ path: "options", message: "Exactly one option must be marked correct." }]);
-    }
+    validateOptionsByType(effectiveType, input.options);
   }
 
   await prisma.$transaction(async (tx) => {
