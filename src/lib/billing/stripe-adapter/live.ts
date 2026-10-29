@@ -367,6 +367,58 @@ export function createLiveStripeAdapter(config: LiveAdapterConfig): StripeAdapte
       };
     },
 
+    async scheduleSubscriptionCancellation(args: {
+      stripeSubscriptionId: string;
+      cancelAt: Date;
+      idempotencyKey: string;
+    }): Promise<{ stripeSubscriptionId: string; stripeCancelAt: Date; status: string; evidenceSource: "live-stripe" }> {
+      // M4-cancellation (2026-10-28): Stripe-supported controlled
+      // cancellation via subscription.update(cancel_at=<future unix>).
+      // Immediate cancellation is NEVER issued through Spectre.
+      const cancelAtUnix = Math.floor(args.cancelAt.getTime() / 1000);
+      if (cancelAtUnix * 1000 <= Date.now()) {
+        throw new Error("M4-cancellation: cancelAt must be a FUTURE timestamp (immediate cancellation refused)");
+      }
+      const updated = await withStripeRetry(
+        () => stripe.subscriptions.update(
+          args.stripeSubscriptionId,
+          { cancel_at: cancelAtUnix },
+          { idempotencyKey: args.idempotencyKey },
+        ),
+        "subscriptions.update(cancel_at)",
+      );
+      const stripeCancelAt = typeof updated.cancel_at === "number"
+        ? new Date(updated.cancel_at * 1000)
+        : args.cancelAt;
+      return {
+        stripeSubscriptionId: updated.id,
+        stripeCancelAt,
+        status: updated.status,
+        evidenceSource: "live-stripe",
+      };
+    },
+
+    async resumeSubscription(args: {
+      stripeSubscriptionId: string;
+      idempotencyKey: string;
+    }): Promise<{ stripeSubscriptionId: string; status: string; evidenceSource: "live-stripe" }> {
+      // Reversal before effective: clear cancel_at (null).  Stripe
+      // accepts null to un-schedule the cancellation.
+      const updated = await withStripeRetry(
+        () => stripe.subscriptions.update(
+          args.stripeSubscriptionId,
+          { cancel_at: null },
+          { idempotencyKey: args.idempotencyKey },
+        ),
+        "subscriptions.update(cancel_at=null)",
+      );
+      return {
+        stripeSubscriptionId: updated.id,
+        status: updated.status,
+        evidenceSource: "live-stripe",
+      };
+    },
+
     async retrieveBalanceTransaction(id: string): Promise<BalanceTransactionResult> {
       const bt = await withStripeRetry(
         () => stripe.balanceTransactions.retrieve(id),

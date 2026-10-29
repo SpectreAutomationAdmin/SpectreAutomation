@@ -294,19 +294,19 @@ describe("SIGNUP-2 M4-schema :: additive-only + FK targets intact", () => {
   });
 });
 
-describe("SIGNUP-2 M4-schema :: behavior-slice guard (only the authorised slice's service may exist)", () => {
-  // Guard evolves with each authorised slice.  M4-triggering + M4-settlement
-  // + M4-retries + M4-renewal are now authorised (2026-10-28).
-  // Cancellation remains unauthorised.
-  it("only authorised M4 slice files may exist (triggering + settlement + retries + renewal); cancellation forbidden", async () => {
+describe("SIGNUP-2 M4-schema :: behavior-slice guard (all six M4 slices authorised 2026-10-28)", () => {
+  // Guard evolves with each authorised slice.  All six phases of the
+  // M4 lifecycle are now authorised (2026-10-28).
+  it("all authorised M4 slice files may exist (triggering + settlement + retries + renewal + cancellation)", async () => {
     const { readdirSync, existsSync } = await import("node:fs");
     if (!existsSync(join(process.cwd(), "src/lib/billing"))) return;
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
     const permitted = new Set([
-      "signup-2m4-triggering-service.ts", // authorised 2026-10-28
-      "signup-2m4-settlement-service.ts", // authorised 2026-10-28
-      "signup-2m4-retries-service.ts",    // authorised 2026-10-28
-      "signup-2m4-renewal-service.ts",    // authorised 2026-10-28
+      "signup-2m4-triggering-service.ts",   // authorised 2026-10-28
+      "signup-2m4-settlement-service.ts",   // authorised 2026-10-28
+      "signup-2m4-retries-service.ts",      // authorised 2026-10-28
+      "signup-2m4-renewal-service.ts",      // authorised 2026-10-28
+      "signup-2m4-cancellation-service.ts", // authorised 2026-10-28 (Phase 6 of 6)
     ]);
     const forbidden = files.filter((f) =>
       /^signup-2m4-.*-service\.ts$/.test(f) && !permitted.has(f),

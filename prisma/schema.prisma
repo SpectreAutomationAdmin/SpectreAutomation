@@ -350,6 +350,8 @@ model Club {
   billingCycles                    BillingCycle[]
   // SIGNUP-2 M4-schema (2026-10-28) -- durable billing command log back-relation.
   billingCommands                  BillingCommand[]
+  // SIGNUP-2 M4-cancellation (2026-10-28).
+  billingCancellationRequests      BillingCancellationRequest[]
   // Phase 11
   webhookSecretVersions            WebhookSecretVersion[]
   webhookSecretRotations           WebhookSecretRotation[]
@@ -8563,6 +8565,8 @@ model BillingCycle {
   paymentAttempts       BillingInvoicePaymentAttempt[]
   renewalPreflights     BillingRenewalPreflight[]
   exceptionCases        BillingExceptionCase[]
+  // SIGNUP-2 M4-cancellation (2026-10-28).
+  cancellationRequests  BillingCancellationRequest[]
 
   @@unique([clubId, periodLabel])
   @@index([clubId, status])
@@ -16394,5 +16398,62 @@ model BillingExceptionCase {
   @@index([category])
   @@index([requiresOperatorAction, operatorAcknowledgedAt])
   @@index([stripeEventId])
+  @@index([syntheticTestOnly])
+}
+
+// SIGNUP-2 M4-cancellation (2026-10-28) -- controlled subscription
+// cancellation lifecycle (Phase 6 of 6 under the authorised M4
+// sequence).  Durable request + two-operator SoD + reversal
+// tracking; separate from BillingCommand because the command's
+// state machine is for a single Stripe mutation whereas
+// cancellation is a MULTI-STEP lifecycle (REQUESTED -> AUTHORIZED
+// -> SCHEDULED -> EFFECTIVE / REVERSED / REJECTED).  Additive:
+// rollback does NOT drop this table.
+model BillingCancellationRequest {
+  id                       String       @id @default(cuid())
+  clubId                   String
+  club                     Club         @relation(fields: [clubId], references: [id])
+  billingCycleId           String
+  billingCycle             BillingCycle @relation(fields: [billingCycleId], references: [id])
+
+  requestedByUserId        String
+  requestedAt              DateTime     @default(now())
+  requestReason            String
+  requestedEffectiveDate   DateTime?
+
+  authorizedByUserId       String?
+  authorizedAt             DateTime?
+  authorizationNotes       String?
+  approvedEffectiveDate    DateTime?
+
+  rejectedByUserId         String?
+  rejectedAt               DateTime?
+  rejectionReason          String?
+
+  scheduledCommandId       String?      @unique
+  scheduledAt              DateTime?
+
+  stripeSubscriptionId     String?
+  stripeCancelAt           DateTime?
+
+  actualEffectiveAt        DateTime?
+
+  reversedByUserId         String?
+  reversedAt               DateTime?
+  reversalReason           String?
+
+  state                    String       @default("REQUESTED")
+  validationEvidenceJson   String?
+  operatorInboxEntryId     String?
+
+  syntheticTestOnly        Boolean      @default(false)
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  @@index([clubId])
+  @@index([billingCycleId])
+  @@index([state])
+  @@index([stripeSubscriptionId])
+  @@index([actualEffectiveAt])
   @@index([syntheticTestOnly])
 }

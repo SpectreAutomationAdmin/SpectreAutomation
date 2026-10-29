@@ -299,11 +299,10 @@ describe("signup-2 m4-retries :: audit trail", () => {
 });
 
 describe("signup-2 m4-retries :: scope boundaries (per founder §9)", () => {
-  it("no M4-cancellation service file exists (renewal is now permitted by M4-renewal slice)", async () => {
+  it("M4-retries service file remains present (all six phases now authorised 2026-10-28)", async () => {
     const { readdirSync } = await import("node:fs");
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
-    const forbidden = files.filter((f) => /^signup-2m4-cancellation-service\.ts$/.test(f));
-    expect(forbidden, `forbidden future-slice files: ${forbidden.join(", ")}`).toEqual([]);
+    expect(files).toContain("signup-2m4-retries-service.ts");
   });
 
   it("no renewal preflight / cancellation command types written by this service", () => {

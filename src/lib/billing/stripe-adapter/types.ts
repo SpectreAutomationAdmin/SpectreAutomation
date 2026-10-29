@@ -19,6 +19,36 @@ export interface StripeAdapter {
   // re-validation performed immediately before subscription creation
   // and for the setup_intent.* webhook enrichment path.
   retrieveSetupIntent(id: string): Promise<SetupIntentResult>;
+  // SIGNUP-2 M4-cancellation (2026-10-28) -- controlled subscription
+  // cancellation.  cancelAt is ALWAYS in the future -- immediate
+  // cancellation is never issued through Spectre.
+  scheduleSubscriptionCancellation(args: ScheduleSubscriptionCancellationArgs): Promise<SubscriptionCancellationRef>;
+  // SIGNUP-2 M4-cancellation (2026-10-28) -- reversal before effective.
+  resumeSubscription(args: ResumeSubscriptionArgs): Promise<SubscriptionResumeRef>;
+}
+
+export interface ScheduleSubscriptionCancellationArgs {
+  stripeSubscriptionId: string;
+  cancelAt: Date;           // ALWAYS future; never immediate
+  idempotencyKey: string;   // "signup-2m4-sub-cancel:<requestId>:v1"
+}
+
+export interface SubscriptionCancellationRef {
+  stripeSubscriptionId: string;
+  stripeCancelAt: Date;     // what Stripe recorded; may differ from input by Stripe's own quantisation
+  status: string;
+  evidenceSource: "live-stripe" | "mock-stripe";
+}
+
+export interface ResumeSubscriptionArgs {
+  stripeSubscriptionId: string;
+  idempotencyKey: string;   // "signup-2m4-sub-resume:<requestId>:v1"
+}
+
+export interface SubscriptionResumeRef {
+  stripeSubscriptionId: string;
+  status: string;
+  evidenceSource: "live-stripe" | "mock-stripe";
 }
 
 export interface CreateCustomerArgs {

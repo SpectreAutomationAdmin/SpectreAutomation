@@ -104,6 +104,38 @@ export function createMockStripeAdapter(): StripeAdapter {
       };
     },
 
+    async scheduleSubscriptionCancellation(args: {
+      stripeSubscriptionId: string;
+      cancelAt: Date;
+      idempotencyKey: string;
+    }): Promise<{ stripeSubscriptionId: string; stripeCancelAt: Date; status: string; evidenceSource: "mock-stripe" }> {
+      // M4-cancellation mock: records the requested cancel_at timestamp
+      // verbatim.  Does NOT alter subscription status immediately -- the
+      // real-world webhook would deliver customer.subscription.updated
+      // with cancel_at set, and later customer.subscription.deleted at
+      // the effective moment.  Acceptance tests exercise those via the
+      // signed-webhook injection path.
+      return {
+        stripeSubscriptionId: args.stripeSubscriptionId,
+        stripeCancelAt: args.cancelAt,
+        status: "active",
+        evidenceSource: "mock-stripe",
+      };
+    },
+
+    async resumeSubscription(args: {
+      stripeSubscriptionId: string;
+      idempotencyKey: string;
+    }): Promise<{ stripeSubscriptionId: string; status: string; evidenceSource: "mock-stripe" }> {
+      // M4-cancellation mock: un-schedules the cancel_at.  Status
+      // stays "active".
+      return {
+        stripeSubscriptionId: args.stripeSubscriptionId,
+        status: "active",
+        evidenceSource: "mock-stripe",
+      };
+    },
+
     async retrieveBalanceTransaction(id: string): Promise<BalanceTransactionResult> {
       // Mock: always returns "available" with available_on in the
       // immediate past so the activation gate flips in acceptance

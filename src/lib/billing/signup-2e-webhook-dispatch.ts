@@ -783,6 +783,16 @@ async function onM4SettlementEvent(event: StripeEventShape): Promise<void> {
  * stays persisted (durable receipt) + can be replayed when the flag
  * is flipped.  No webhook delivery order assumed. */
 async function onM4RenewalEvent(event: StripeEventShape): Promise<void> {
+  // Both renewal + cancellation reconciliation run on the same
+  // customer.subscription.* events; they operate on INDEPENDENT state
+  // (renewal records a factual Stripe event + raises operator inbox;
+  // cancellation reconciles its own request state).  Running both is
+  // intentional -- the auditable record is clearer when both domains
+  // get a chance to react.  Order: renewal first (records what
+  // happened), cancellation second (reconciles authorized flow).
+  // Neither handler claims exclusive ownership of the event.
+  let renewalDeferred = false;
+  let cancellationDeferred = false;
   try {
     const svc = await import("./signup-2m4-renewal-service");
     switch (event.type) {
@@ -797,9 +807,43 @@ async function onM4RenewalEvent(event: StripeEventShape): Promise<void> {
         stripeEventIdTail: event.id.slice(-8),
         eventType: event.type,
       });
-      throw new SignupM3DeferredEvent(`M4-renewal flag off: ${event.type}`);
+      renewalDeferred = true;
+    } else {
+      throw err;
     }
-    throw err;
+  }
+
+  // M4-cancellation reconciliation (customer.subscription.* only;
+  // mandate.updated is renewal-only).
+  if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
+    try {
+      const svc = await import("./signup-2m4-cancellation-service");
+      if (event.type === "customer.subscription.updated") {
+        await svc.reconcileSubscriptionUpdatedForCancellation(event);
+      } else {
+        await svc.reconcileSubscriptionDeletedForCancellation(event);
+      }
+    } catch (err) {
+      const msg = (err as { message?: string } | undefined)?.message ?? "";
+      if (msg.includes("SIGNUP-2 M4-cancellation workflow is disabled")) {
+        logger.info("stripe.webhook.m4_cancellation.deferred_flag_off", {
+          stripeEventIdTail: event.id.slice(-8),
+          eventType: event.type,
+        });
+        cancellationDeferred = true;
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // If BOTH renewal + cancellation are flag-off (or renewal is off for
+  // mandate.updated), defer the event entirely so processedAt stays
+  // null and it can replay when the flags flip.  If renewal flipped on
+  // but cancellation flag is off, we still processed renewal; defer
+  // only if NEITHER wrote anything meaningful.
+  if (renewalDeferred && (event.type === "mandate.updated" || cancellationDeferred)) {
+    throw new SignupM3DeferredEvent(`M4 flags off for ${event.type}`);
   }
 }
 

@@ -266,13 +266,10 @@ describe("signup-2 m4-settlement :: correlation (correction #8)", () => {
 });
 
 describe("signup-2 m4-settlement :: scope boundaries (per founder M4-settlement authorisation §7)", () => {
-  it("no M4-cancellation service file exists (renewal authorised 2026-10-28)", async () => {
+  it("M4-settlement service file remains present (all six phases now authorised 2026-10-28)", async () => {
     const { readdirSync } = await import("node:fs");
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
-    const forbidden = files.filter((f) =>
-      /^signup-2m4-cancellation-service\.ts$/.test(f),
-    );
-    expect(forbidden, `forbidden future-slice files leaked: ${forbidden.join(", ")}`).toEqual([]);
+    expect(files).toContain("signup-2m4-settlement-service.ts");
   });
 
   it("no renewal preflight or cancellation command types written here", () => {

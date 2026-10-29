@@ -205,7 +205,11 @@ describe("signup-2 m4-renewal :: dispatcher wiring (3 new events)", () => {
   it("dispatcher defers (processedAt=null) when renewal flag is OFF", () => {
     expect(DISPATCH).toMatch(/SIGNUP-2 M4-renewal workflow is disabled/);
     expect(DISPATCH).toMatch(/stripe\.webhook\.m4_renewal\.deferred_flag_off/);
-    expect(DISPATCH).toMatch(/throw new SignupM3DeferredEvent\(`M4-renewal flag off/);
+    // Message text widened in M4-cancellation to also cover the
+    // cancellation-side flag-off defer.  Both the renewal-only path
+    // ("M4-renewal flag off") and the dual-flag-off path ("M4 flags
+    // off for") are now acceptable.
+    expect(DISPATCH).toMatch(/throw new SignupM3DeferredEvent\(`M4(-renewal flag off|\s*flags off for)/);
   });
 
   it("dispatcher imports renewal service dynamically (lazy, flag-aware)", () => {
@@ -284,12 +288,9 @@ describe("signup-2 m4-renewal :: §5 correction #3 -- real-Stripe-settlement ope
  * ============================================================ */
 
 describe("signup-2 m4-renewal :: scope boundaries", () => {
-  it("no M4-cancellation service file exists (cancellation is a separate authorised slice)", () => {
+  it("M4-renewal service file remains present (all six phases now authorised 2026-10-28)", () => {
     const files = readdirSync(join(process.cwd(), "src/lib/billing"));
-    const forbidden = files.filter((f) =>
-      /^signup-2m4-cancellation-service\.ts$/.test(f),
-    );
-    expect(forbidden, `forbidden future-slice files: ${forbidden.join(", ")}`).toEqual([]);
+    expect(files).toContain("signup-2m4-renewal-service.ts");
   });
 
   it("no HTTP routes for renewal / cancellation / accelerated signup-to-activation exist", () => {
