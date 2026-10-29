@@ -637,3 +637,88 @@ export async function drainOneBillingCommand(commandId: string): Promise<Command
     };
   }
 }
+
+/* ============================================================
+ * M4-INT-B §1 (2026-10-29): Operator A -- commercial authorization
+ * ============================================================
+ * The release step (operator B) requires an existing
+ * ClubPaymentAuthorisation row.  Operator A records that record
+ * from the UI by naming the pricing + contract execution.  SoD
+ * check against the release path is enforced by
+ * authoriseAndReleaseFirstBilling (release operator MUST differ
+ * from commercial operator). */
+
+export interface RecordCommercialAuthorisationInput {
+  signupRegistrationId: string;
+  commercialApprovedByUserId: string;
+  commercialApprovalNotes?: string;
+}
+
+export interface RecordCommercialAuthorisationResult {
+  authorisationId: string;
+  noop: boolean;
+}
+
+export async function recordCommercialAuthorisation(
+  args: RecordCommercialAuthorisationInput,
+): Promise<RecordCommercialAuthorisationResult> {
+  assertM4TriggerLiveFlag();
+
+  // Idempotent replay: if an authorization already exists for this
+  // registration, return it (same shape as release-path replay).
+  const existing = await prisma.clubPaymentAuthorisation.findUnique({
+    where: { signupRegistrationId: args.signupRegistrationId },
+    select: { id: true, commercialApprovedByUserId: true },
+  });
+  if (existing) {
+    // §2 SoD does NOT apply within commercial authorization itself
+    // (only one commercial operator).  The SoD guard that matters
+    // sits on the RELEASE side.
+    return { authorisationId: existing.id, noop: true };
+  }
+
+  // Pricing + contract must exist first (recorded earlier in signup).
+  const pricing = await prisma.clubBillingPricing.findUnique({
+    where: { signupRegistrationId: args.signupRegistrationId },
+    select: {
+      id: true, contractExecutionId: true, currency: true, amountMinorUnits: true,
+    },
+  });
+  if (!pricing) {
+    throw new AppError(
+      "SIGNUP_2M4_TRIGGER_PRICING_MISSING",
+      "pricing has not been recorded for this registration",
+      409,
+    );
+  }
+
+  const created = await prisma.clubPaymentAuthorisation.create({
+    data: {
+      signupRegistrationId: args.signupRegistrationId,
+      pricingId: pricing.id,
+      contractExecutionId: pricing.contractExecutionId,
+      commercialApprovedByUserId: args.commercialApprovedByUserId,
+      commercialApprovedAt: new Date(),
+      commercialApprovalNotes: args.commercialApprovalNotes ?? null,
+      authorisedAmountMinorUnits: pricing.amountMinorUnits,
+      authorisedCurrency: pricing.currency,
+    },
+    select: { id: true },
+  });
+
+  await audit(null, {
+    action: "signup.m4.trigger.commercial_authorisation_recorded",
+    entityType: "ClubPaymentAuthorisation",
+    entityId: created.id,
+    clubId: null,
+    meta: {
+      authorisationIdTail: created.id.slice(-6),
+      signupRegistrationIdTail: args.signupRegistrationId.slice(-6),
+      commercialApprovedByUserIdTail: args.commercialApprovedByUserId.slice(-6),
+      amountMinorUnits: pricing.amountMinorUnits.toString(),
+      currency: pricing.currency,
+    },
+  });
+
+  return { authorisationId: created.id, noop: false };
+}

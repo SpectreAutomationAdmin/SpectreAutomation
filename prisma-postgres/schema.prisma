@@ -15829,6 +15829,12 @@ model BillingRenewalPreflight {
   // Follow-up tracking.
   workIntakeId                String?
   operatorInboxEntryId        String?
+  // M4-INT-B §3 (2026-10-29): operator review decision captured
+  // when outcome != READY.
+  operatorReviewedByUserId    String?
+  operatorReviewedAt          DateTime?
+  operatorReviewOutcome       String?
+  operatorReviewNotes         String?
   syntheticTestOnly           Boolean   @default(false)
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt

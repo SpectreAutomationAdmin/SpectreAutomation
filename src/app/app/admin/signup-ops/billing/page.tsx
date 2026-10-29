@@ -165,11 +165,71 @@ export default async function BillingOperatorHubPage() {
         </p>
       </section>
 
+      <section className="mb-8" data-testid="billing-ops-workflows">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500 mb-3">
+          Operator workflows
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Link href="/app/admin/signup-ops/billing/triggering"
+                className="block rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-400"
+                data-testid="link-triggering">
+            <div className="text-sm font-semibold text-neutral-800">Commercial authorization + payment release</div>
+            <div className="text-xs text-neutral-500 mt-1">
+              Operator A records commercial authorization; operator B records payment release (SoD enforced).
+            </div>
+          </Link>
+          <Link href="/app/admin/signup-ops/billing/exceptions"
+                className="block rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-400"
+                data-testid="link-exceptions">
+            <div className="text-sm font-semibold text-neutral-800">Billing exception management</div>
+            <div className="text-xs text-neutral-500 mt-1">
+              Acknowledge, resolve, escalate. {openExceptions} open exception{openExceptions === 1 ? "" : "s"} needing action.
+            </div>
+          </Link>
+          <Link href="/app/admin/signup-ops/billing/renewal-review"
+                className="block rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-400"
+                data-testid="link-renewal-review">
+            <div className="text-sm font-semibold text-neutral-800">Renewal review</div>
+            <div className="text-xs text-neutral-500 mt-1">
+              Review preflights with pricing drift, invalid mandate, or missing evidence.  Routine READY preflights do not appear here.
+            </div>
+          </Link>
+          <Link href="/app/admin/signup-ops/billing/cancellation"
+                className="block rounded-md border border-neutral-200 bg-white p-4 hover:border-neutral-400"
+                data-testid="link-cancellation">
+            <div className="text-sm font-semibold text-neutral-800">Cancellation lifecycle</div>
+            <div className="text-xs text-neutral-500 mt-1">
+              Request → authorize → schedule → effective → cancelled.  SoD on authorize + reverse.  {openCancellations} open request{openCancellations === 1 ? "" : "s"}.
+            </div>
+          </Link>
+        </div>
+      </section>
+
       <section data-testid="billing-ops-links">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500 mb-3">
-          Operator API endpoints
+          Operator API endpoints (direct)
         </h2>
         <ul className="text-sm space-y-1 text-neutral-700">
+          <li>
+            <code className="text-xs font-mono">POST /api/admin/billing/triggering</code>{" "}
+            — {`{ action: "record-commercial-auth" | "release" | "drain" }`}.
+          </li>
+          <li>
+            <code className="text-xs font-mono">GET /api/admin/billing/exceptions</code>
+            {" / "}
+            <code className="text-xs font-mono">POST /api/admin/billing/exceptions</code>{" "}
+            — {`{ action: "acknowledge" | "resolve" | "escalate" }`}.
+          </li>
+          <li>
+            <code className="text-xs font-mono">GET /api/admin/billing/renewal-review</code>
+            {" / "}
+            <code className="text-xs font-mono">POST /api/admin/billing/renewal-review</code>{" "}
+            — {`{ action: "review", outcome: "APPROVED" | "REJECTED" | "RETURN_FOR_CORRECTION" }`}.
+          </li>
+          <li>
+            <code className="text-xs font-mono">GET / POST /api/admin/billing/cancellation</code>{" "}
+            — see cancellation page.
+          </li>
           <li>
             <code className="text-xs font-mono">POST /api/admin/billing/email-adapter-probe</code>{" "}
             — safe (non-collection) delivery probe through Microsoft 365.
@@ -181,15 +241,6 @@ export default async function BillingOperatorHubPage() {
           <li>
             <code className="text-xs font-mono">POST /api/admin/billing/renewal-preflight-probe</code>{" "}
             — invoke the recovery sweep (dry-run when the renewal flag is OFF).
-          </li>
-          <li>
-            <code className="text-xs font-mono">GET  /api/admin/billing/cancellation</code>{" "}
-            — list / read cancellation requests.
-          </li>
-          <li>
-            <code className="text-xs font-mono">POST /api/admin/billing/cancellation</code>{" "}
-            — {`{ action: "request" | "authorize" | "reject" | "schedule" | "reverse" }`}.
-            Two-operator SoD enforced in-service.
           </li>
         </ul>
         <p className="mt-4 text-xs text-neutral-500">
