@@ -87,8 +87,13 @@ Required additions to support interactive checkpoints + final-only
 assessments:
 
 - `TrainingCheckpoint` (NEW model) — per-version anchor at a
-  specific `atSecond` with a required-vs-optional flag + pass /
-  retry policy.
+  specific `atSecond` with:
+  - `requiredToProceed: boolean` (default `true`)
+  - `maxRetries: int` (default `3`, **per-checkpoint configurable** per
+    founder EP-TRAIN-3 approval; `maxRetries = 0` means "one try";
+    unlimited is NOT supported initially)
+  - `label: string?` (manager-authored, employee-visible)
+  - `displayOrder: int` for stable ordering + API lookup
 - `TrainingQuestion.checkpointId` (NEW nullable column) — null for
   "final assessment" questions (preserves backwards compatibility
   with every existing published course), non-null for "appears at
@@ -103,12 +108,42 @@ assessments:
 - `TrainingAttempt.kind` (NEW column with default `"FINAL"`) — one
   of `FINAL` or `CHECKPOINT`; the field is intentionally separate
   from `checkpointId` so a "final" row can never accidentally be
-  queried as a "checkpoint" row.
+  queried as a "checkpoint" row.  **Attempt-level evidence
+  (course version, kind, checkpoint, attempt number, submission
+  timestamp, score, passed) is now retrievable via a single join
+  from `TrainingQuestionResponse` → `TrainingAttempt` for
+  reporting + audit** per the EP-TRAIN-3 Question-Level Evidence
+  requirement.  No new column on `TrainingQuestionResponse` is
+  needed — the chain already carries everything the founder
+  specified (selected answer id, correctness, question id,
+  checkpoint id via attempt, course version via attempt, attempt
+  number, timestamps).
 - `TrainingProgress.checkpointClearedJson` (NEW nullable TEXT) —
   JSON array of cleared checkpoint IDs; a cleared checkpoint lets
   the employee resume past that point without re-doing the
   interrupt.  Server-side guard; never trusted from the client
   except as a hint.
+
+### Completion evidence (founder EP-TRAIN-3 approval)
+
+The existing `TrainingCompletion` model + the chain of
+`TrainingAttempt` + `TrainingQuestionResponse` rows that it links
+through its unique `attemptId` FK already provide every required
+proof element:
+
+| Required | Source |
+|---|---|
+| Employee identity | `TrainingCompletion.employeeId` |
+| Club/tenant | `TrainingCompletion.clubId` |
+| Training course + exact published version | `.courseId` + `.courseVersionId` |
+| Required checkpoint completion | `TrainingAttempt{kind="CHECKPOINT", courseVersionId, employeeId, passed=true}` rows via the version chain (new) |
+| Final assessment result | `TrainingAttempt{kind="FINAL"}` via `.attemptId` (unique FK) |
+| Completion timestamp | `TrainingCompletion.completedAt` |
+| Historical attempt information | Full attempt history via `TrainingAttempt` + per-question responses via `TrainingQuestionResponse` |
+
+**No column added to `TrainingCompletion`.**  Existing legitimate
+completions remain tied to their course version and remain valid
+after Slice 1 lands.
 
 Not required to add:
 

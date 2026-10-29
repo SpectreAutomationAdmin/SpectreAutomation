@@ -12864,6 +12864,8 @@ model TrainingCourseVersion {
   progress    TrainingProgress[]
   attempts    TrainingAttempt[]
   completions TrainingCompletion[]
+  // EP-TRAIN-3 Slice 1 (2026-10-29).
+  checkpoints TrainingCheckpoint[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -12882,11 +12884,19 @@ model TrainingQuestion {
   active          Boolean               @default(true)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
+  // EP-TRAIN-3 Slice 1 (2026-10-29).  Null = final-assessment
+  // question; non-null = bound to a specific TrainingCheckpoint.
+  checkpointId    String?
+  checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
+  // SINGLE_CHOICE (default; preserves existing row semantics),
+  // MULTI_CHOICE, TRUE_FALSE.  Extensible without a schema change.
+  questionType    String                @default("SINGLE_CHOICE")
 
   options   TrainingAnswerOption[]
   responses TrainingQuestionResponse[]
 
   @@index([courseVersionId, displayOrder])
+  @@index([checkpointId])
 }
 
 // Per-question answer choice. Exactly ONE row per question must have
@@ -12906,6 +12916,31 @@ model TrainingAnswerOption {
   responses TrainingQuestionResponse[]
 
   @@index([questionId, displayOrder])
+}
+
+// EP-TRAIN-3 Slice 1 (2026-10-29) -- interactive knowledge-check
+// checkpoints anchored to a specific moment in a TrainingCourseVersion.
+// Immutable once the parent version is PUBLISHED (enforced in the
+// service layer; same discipline that TrainingQuestion already honors).
+// Per-checkpoint `maxRetries` is manager-configurable (default 3; 0
+// means a single try with no retry).
+model TrainingCheckpoint {
+  id                String                @id @default(cuid())
+  courseVersionId   String
+  courseVersion     TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  atSecond          Int
+  label             String?
+  requiredToProceed Boolean               @default(true)
+  maxRetries        Int                   @default(3)
+  displayOrder      Int                   @default(0)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  questions TrainingQuestion[]
+  attempts  TrainingAttempt[]
+
+  @@index([courseVersionId, atSecond])
+  @@index([courseVersionId, displayOrder])
 }
 
 // Explicit per-employee assignment layered on top of the version
@@ -12944,6 +12979,8 @@ model TrainingProgress {
   percentComplete Int                   @default(0)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
+  // EP-TRAIN-3 Slice 1 (2026-10-29) -- cleared checkpoint ids.
+  checkpointClearedJson String?
 
   @@unique([employeeId, courseVersionId])
   @@index([clubId, employeeId])
@@ -12964,6 +13001,11 @@ model TrainingAttempt {
   passed          Boolean               @default(false)
   startedAt       DateTime              @default(now())
   submittedAt     DateTime?
+  // EP-TRAIN-3 Slice 1 (2026-10-29).  Default "FINAL" preserves
+  // every existing row's semantics.
+  kind            String                @default("FINAL")
+  checkpointId    String?
+  checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
 
   responses  TrainingQuestionResponse[]
   completion TrainingCompletion?
@@ -12971,6 +13013,7 @@ model TrainingAttempt {
   @@unique([employeeId, courseVersionId, attemptNumber])
   @@index([clubId, employeeId])
   @@index([courseVersionId, passed])
+  @@index([checkpointId])
 }
 
 // Per-attempt per-question response. Server grades correctness by

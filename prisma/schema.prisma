@@ -13054,6 +13054,8 @@ model TrainingCourseVersion {
   progress    TrainingProgress[]
   attempts    TrainingAttempt[]
   completions TrainingCompletion[]
+  // EP-TRAIN-3 Slice 1 (2026-10-29) -- back-relation to checkpoints.
+  checkpoints TrainingCheckpoint[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -13072,11 +13074,23 @@ model TrainingQuestion {
   active          Boolean               @default(true)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
+  // EP-TRAIN-3 Slice 1 (2026-10-29) -- additive, nullable.
+  // `checkpointId = null` means this question belongs to the final
+  // assessment (preserves every existing row's semantics).  A
+  // non-null value binds the question to a specific TrainingCheckpoint
+  // on the same courseVersion.
+  checkpointId    String?
+  checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
+  // Default "SINGLE_CHOICE" preserves every existing row's semantics
+  // (the current schema de facto only supports SINGLE_CHOICE).  Future
+  // types: MULTI_CHOICE, TRUE_FALSE -- added without a schema change.
+  questionType    String                @default("SINGLE_CHOICE")
 
   options   TrainingAnswerOption[]
   responses TrainingQuestionResponse[]
 
   @@index([courseVersionId, displayOrder])
+  @@index([checkpointId])
 }
 
 // Per-question answer choice. Exactly ONE row per question must have
@@ -13096,6 +13110,31 @@ model TrainingAnswerOption {
   responses TrainingQuestionResponse[]
 
   @@index([questionId, displayOrder])
+}
+
+// EP-TRAIN-3 Slice 1 (2026-10-29) -- interactive knowledge-check
+// checkpoints anchored to a specific moment in a TrainingCourseVersion.
+// Immutable once the parent version is PUBLISHED (enforced in the
+// service layer; same discipline that TrainingQuestion already honors).
+// Per-checkpoint `maxRetries` is manager-configurable (default 3; 0
+// means a single try with no retry).
+model TrainingCheckpoint {
+  id                String                @id @default(cuid())
+  courseVersionId   String
+  courseVersion     TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  atSecond          Int
+  label             String?
+  requiredToProceed Boolean               @default(true)
+  maxRetries        Int                   @default(3)
+  displayOrder      Int                   @default(0)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  questions TrainingQuestion[]
+  attempts  TrainingAttempt[]
+
+  @@index([courseVersionId, atSecond])
+  @@index([courseVersionId, displayOrder])
 }
 
 // Explicit per-employee assignment layered on top of the version
@@ -13134,6 +13173,12 @@ model TrainingProgress {
   percentComplete Int                   @default(0)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
+  // EP-TRAIN-3 Slice 1 (2026-10-29) -- JSON array of cleared
+  // TrainingCheckpoint ids.  Server-side authority; the client may
+  // post a monotonic additions list but the server validates every
+  // id + takes the union with the persisted state.  Null = legacy
+  // row with no checkpoint interactions yet.
+  checkpointClearedJson String?
 
   @@unique([employeeId, courseVersionId])
   @@index([clubId, employeeId])
@@ -13154,6 +13199,13 @@ model TrainingAttempt {
   passed          Boolean               @default(false)
   startedAt       DateTime              @default(now())
   submittedAt     DateTime?
+  // EP-TRAIN-3 Slice 1 (2026-10-29) -- additive, nullable.  Default
+  // `FINAL` preserves every existing row's semantics (every existing
+  // attempt is a final-assessment attempt).  Checkpoint-attempt rows
+  // land only after Slice 3 wires the employee playback state machine.
+  kind            String                @default("FINAL")
+  checkpointId    String?
+  checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
 
   responses  TrainingQuestionResponse[]
   completion TrainingCompletion?
