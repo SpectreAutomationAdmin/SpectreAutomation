@@ -25,8 +25,13 @@ import {
 } from "@/lib/hr/training/employee-read";
 import { getProgress, VIDEO_COMPLETION_THRESHOLD_PERCENT } from "@/lib/hr/training/attempts";
 import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
+import {
+  getEmployeeTrainingRecommendations,
+  isLikelyStagingFixtureText,
+} from "@/lib/hr/training/employee-recommendations";
 import { prisma } from "@/lib/prisma";
 import CoursePlayer from "./CoursePlayer";
+import RecommendationsRail from "./RecommendationsRail";
 import {
   recordVideoProgressAction,
   startAttemptAction,
@@ -60,7 +65,7 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion] = await Promise.all([
+  const [progress, attempts, completion, recommendations] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
     prisma.trainingCompletion.findUnique({
@@ -71,6 +76,13 @@ export default async function EmployeeCoursePage({
         },
       },
       select: { id: true, completedAt: true, score: true },
+    }),
+    // EP-TRAIN-2 §4 (2026-10-29) -- Recommended Training rail.
+    // Tenant-scoped via resolveApplicableCourses + current course excluded.
+    getEmployeeTrainingRecommendations({
+      employeeId: principal.employeeId,
+      excludeVersionId: versionId,
+      limit: 6,
     }),
   ]);
 
@@ -87,38 +99,45 @@ export default async function EmployeeCoursePage({
     videoCompleted: false,
   };
 
-  // EP-TRAIN-1 §A (2026-10-29) -- centered max-width column; existing
-  // Spectre design tokens (cream background from the portal shell,
-  // forest-green accents, serif heading, muted stone body text).
+  // EP-TRAIN-2 §1-§3 (2026-10-29):
+  //   §1: suppress employee-facing description if it originates from
+  //       a staging fixture (e.g. "Founder acceptance walk...").  The
+  //       DB row is NOT modified -- this is RENDER-LAYER only.
+  //   §2: breadcrumb + status pills share one horizontal row (left +
+  //       right, flex-wrap on narrow).
+  //   §3: drop the restrictive max-w-5xl; use the available content
+  //       area with 24-32px horizontal padding; two columns (~70/30).
   const requiredStatusLabel = match.version.required ? "Required" : "Optional";
+  const safeDescription = isLikelyStagingFixtureText(view.description) ? null : view.description;
+  const safeTitle = isLikelyStagingFixtureText(view.title) ? view.category : view.title;
   return (
-    <div className="mx-auto max-w-5xl space-y-8" data-testid="portal-course">
-      {/* Breadcrumb */}
-      <nav
-        aria-label="Breadcrumb"
-        className="text-xs tracking-[0.14em] uppercase text-stone-500"
-        data-testid="portal-course-breadcrumb"
-      >
-        <Link
-          href="/employee"
-          className="hover:text-club-green-800"
+    <div
+      className="w-full px-6 md:px-8 py-6 md:py-8 space-y-6"
+      data-testid="portal-course"
+    >
+      {/* §2 Breadcrumb (left) + status pills (right) on one row.
+         `flex-wrap` lets narrow viewports stack them without overflow. */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <nav
+          aria-label="Breadcrumb"
+          className="text-xs tracking-[0.14em] uppercase text-stone-500 min-w-0"
+          data-testid="portal-course-breadcrumb"
         >
-          Home
-        </Link>
-        <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
-        <Link
-          href="/employee/safety-training"
-          className="hover:text-club-green-800"
-          data-testid="portal-course-back"
-        >
-          Safety &amp; Training
-        </Link>
-        <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
-        <span className="text-stone-800">{view.title}</span>
-      </nav>
-
-      <header className="space-y-3">
-        <div className="flex items-center gap-2 flex-wrap">
+          <Link href="/employee" className="hover:text-club-green-800">
+            Home
+          </Link>
+          <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
+          <Link
+            href="/employee/safety-training"
+            className="hover:text-club-green-800"
+            data-testid="portal-course-back"
+          >
+            Safety &amp; Training
+          </Link>
+          <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
+          <span className="text-stone-800 break-words">{safeTitle}</span>
+        </nav>
+        <div className="flex items-center gap-2 flex-wrap" data-testid="portal-course-chips">
           <span
             className="inline-flex items-center rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-stone-700"
             data-testid="portal-course-category"
@@ -136,27 +155,37 @@ export default async function EmployeeCoursePage({
             {requiredStatusLabel}
           </span>
         </div>
-        <h1
-          className="font-serif text-3xl md:text-4xl text-club-ink leading-tight"
-          data-testid="portal-course-title"
-        >
-          {view.title}
-        </h1>
-        {view.description && (
-          <p className="text-sm md:text-base text-stone-700 leading-relaxed max-w-3xl">
-            {view.description}
-          </p>
-        )}
-      </header>
+      </div>
 
-      {completion ? (
-        <CompletedBanner
-          completedAt={completion.completedAt}
-          score={completion.score}
-        />
-      ) : null}
+      {/* §3 Two-column layout.  Desktop: ~70% / ~30%.  Tablet (lg
+         breakpoint collapses): stacks.  Mobile: single column.
+         `max-w-[1600px]` keeps ultrawide screens readable without
+         returning to a narrow centered column. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px] gap-6 lg:gap-8 max-w-[1600px]">
+        {/* Left column -- training content */}
+        <main className="min-w-0 space-y-6">
+          <header className="space-y-3">
+            <h1
+              className="font-serif text-3xl md:text-4xl text-club-ink leading-tight"
+              data-testid="portal-course-title"
+            >
+              {safeTitle}
+            </h1>
+            {safeDescription && (
+              <p className="text-sm md:text-base text-stone-700 leading-relaxed max-w-3xl">
+                {safeDescription}
+              </p>
+            )}
+          </header>
 
-      <CoursePlayer
+          {completion ? (
+            <CompletedBanner
+              completedAt={completion.completedAt}
+              score={completion.score}
+            />
+          ) : null}
+
+          <CoursePlayer
         versionId={versionId}
         hasVideo={view.version.hasVideo}
         videoDurationSec={view.version.videoDurationSec}
@@ -179,6 +208,12 @@ export default async function EmployeeCoursePage({
         startAttemptAction={startAttemptAction}
         submitAttemptAction={submitAttemptAction}
       />
+        </main>
+        {/* Right column -- Recommended Training rail.  Visually
+           subordinate to the active video; stacks below the main
+           content on tablet and mobile per §5. */}
+        <RecommendationsRail recommendations={recommendations.recommendations} />
+      </div>
     </div>
   );
 }
