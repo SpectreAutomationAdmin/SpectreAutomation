@@ -203,28 +203,46 @@ export function getStatHolidayCalendarCoverage(): { latestCoveredYear: number; t
 export function earliestRetryAt(from: Date, businessDays: number): Date {
   const d = new Date(from.getTime());
   d.setUTCHours(0, 0, 0, 0);
+  // M4-INT §5 (2026-10-29): fail-closed coverage check BEFORE the
+  // calendar is consulted.  If the computed retry date would land in
+  // a year the calendar does not cover, we REFUSE to produce a date
+  // rather than silently emitting a warning + under-delaying a
+  // retry.  Weekends-only skip would quietly miss a stat holiday
+  // Monday, which would collect from the club's bank on a day the
+  // policy guarantees we will not.
+  //
+  // The hard refusal shape is: throw a specific AppError that the
+  // scheduler surfaces to the operator inbox + leaves the retry
+  // UNSCHEDULED until the calendar is extended.  Weekends still
+  // skip during the loop; the floor would still be at least 3
+  // business days.  The refusal is the SAFE outcome.
+  //
+  // §3 "do not change the contracted Price or split the transaction"
+  // has an operational equivalent here: do not under-delay a retry
+  // because the ops calendar is stale.
+  const latestCoveredYear = getStatHolidayCalendarCoverage().latestCoveredYear;
+
   let bdLeft = businessDays;
   while (bdLeft > 0) {
     d.setUTCDate(d.getUTCDate() + 1);
     const dow = d.getUTCDay();
     // 0 = Sunday, 6 = Saturday.
     if (dow === 0 || dow === 6) continue;
+    if (d.getUTCFullYear() > latestCoveredYear) {
+      // Fail-closed: refuse to produce a retry date in an un-
+      // covered year.  Caller (scheduleRetryForFailedAttempt /
+      // drainOneInvoiceRetryCommand) surfaces this as an operator
+      // inbox entry + leaves the attempt in a visible UNCERTAIN
+      // state until the calendar is extended.
+      throw new AppError(
+        "STAT_HOLIDAY_CALENDAR_COVERAGE_EXCEEDED",
+        `retry date would land in ${d.getUTCFullYear()}; CANADIAN_STAT_HOLIDAYS_UTC covers through ${latestCoveredYear}. ` +
+          `Extend the calendar before scheduling retries past the coverage window.`,
+        409,
+      );
+    }
     if (isCanadianStatHoliday(d)) continue;
     bdLeft--;
-  }
-  // §3 durability safeguard: emit an observable warning when the
-  // computed retry date lands in a year the stat-holiday calendar
-  // no longer covers.  Weekends still skip (unconditional), the
-  // 3-business-day floor still applies, and the pre-retry notice
-  // still fires -- but ops needs to extend the calendar before the
-  // next scheduling window.
-  const { latestCoveredYear } = getStatHolidayCalendarCoverage();
-  if (d.getUTCFullYear() > latestCoveredYear) {
-    logger.warn("signup.m4.retries.stat_holiday_calendar.coverage_exceeded", {
-      retryDateYear: d.getUTCFullYear(),
-      latestCoveredYear,
-      detail: "Extend CANADIAN_STAT_HOLIDAYS_UTC before enabling M4-renewal retries beyond the current coverage window.",
-    });
   }
   return d;
 }
