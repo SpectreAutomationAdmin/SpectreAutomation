@@ -247,8 +247,12 @@ test.describe("EP-TRAIN-3 Slice 3A :: full 12-scenario employee walkthrough", ()
     await playUntilCheckpoint(page, 15);
     await answerCheckpoint1(page, true);
     await expect(page.getByTestId("portal-checkpoint-resume").first()).toBeVisible({ timeout: 15_000 });
-    await page.getByTestId("portal-checkpoint-resume").first().click();
-    await page.reload({ waitUntil: "domcontentloaded" });
+    // Explicit wait for the submit's progress-record to be durable
+    // before reloading (progress may lag the client-visible clear flag).
+    await page.waitForTimeout(1_500);
+    // Full navigation (not just reload) + fresh openSliceCourse so the
+    // page re-fetches getPlayerState with the persisted cleared set.
+    await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
     await openSliceCourse(page);
     await waitForVideoPlayable(page);
     // After refresh, seek-cap should allow up to checkpoint 2 (30s), not clamp at 15.
@@ -263,8 +267,9 @@ test.describe("EP-TRAIN-3 Slice 3A :: full 12-scenario employee walkthrough", ()
       const v = videos.find((el) => el.offsetParent !== null);
       return v?.currentTime ?? -1;
     });
-    // Clamp is now at checkpoint 2 (30s), so 25s should be allowed.
-    expect(t, "post-refresh seek to 25s not clamped at 15s").toBeGreaterThanOrEqual(15);
+    // Clamp is now at checkpoint 2 (30s), so a seek to 25s should land AT 25
+    // (not clamped back to 15 as it would be if cp1 were un-cleared).
+    expect(t, "post-refresh seek to 25s not clamped at 15s").toBeGreaterThan(15);
     await page.screenshot({ path: path.join(outDir, "06-refresh-preserves-cleared.png"), fullPage: true });
   });
 
@@ -302,20 +307,29 @@ test.describe("EP-TRAIN-3 Slice 3A :: full 12-scenario employee walkthrough", ()
     await answerCheckpoint2(page, true);
     await expect(page.getByTestId("portal-checkpoint-resume").first()).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("portal-checkpoint-resume").first().click();
-    // Watch to >=90% to satisfy video threshold.  Our video is 41.5s; 90% = 37.4s.
-    await page.evaluate(async () => {
-      const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
-      for (const v of videos) {
+    // Watch to >=90% to satisfy video threshold.  Video is 41.5s; 90% = 37.4s.
+    // Also wait for the progress POST to the server to complete.
+    const [progressResponse] = await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes("/_actions") || r.url().includes("safety-training"),
+        { timeout: 20_000 },
+      ).catch(() => null),
+      page.evaluate(async () => {
+        const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+        const v = videos.find((el) => el.offsetParent !== null);
+        if (!v) return;
         v.muted = true;
         v.currentTime = 40;
         try { await v.play(); } catch { /* ignore */ }
-      }
-      // Give timeupdate a chance to fire + progress to flush.
-      await new Promise((r) => setTimeout(r, 3000));
-    });
-    // Reload to pick up the "Start knowledge test" state after progress saved.
-    await page.reload({ waitUntil: "domcontentloaded" });
-    // Final-assessment "Start knowledge test" should now be enabled.
+      }),
+    ]);
+    void progressResponse;
+    // Give additional time for the pause-flush progress to persist.
+    await page.waitForTimeout(3_000);
+    // Full navigation to pick up the fresh getPlayerState with
+    // finalAssessmentUnlocked=true.
+    await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
+    await openSliceCourse(page);
     const startBtn = page.getByTestId("portal-course-start-attempt").first();
     await expect(startBtn).toBeVisible({ timeout: 30_000 });
     await startBtn.click();
@@ -335,7 +349,22 @@ test.describe("EP-TRAIN-3 Slice 3A :: full 12-scenario employee walkthrough", ()
       const page = await ctx.newPage();
       await loginPortal(page);
       await openSliceCourse(page);
-      await playUntilCheckpoint(page, 15);
+      await waitForVideoPlayable(page);
+      // Nudge every video so both the desktop + mobile shells get past
+      // the trigger. On the active viewport, only the visible one's
+      // overlay will render into layout, which is what the screenshot
+      // captures.
+      await page.evaluate(async () => {
+        const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+        for (const v of videos) {
+          v.muted = true;
+          v.currentTime = 15;
+          try { await v.play(); } catch { /* ignore */ }
+        }
+      });
+      // Wait for the overlay to render in either shell (whichever is
+      // visible will be the one picked by the full-page screenshot).
+      await expect(page.locator('[data-testid="portal-checkpoint-overlay"]:visible').first()).toBeVisible({ timeout: 30_000 });
       await page.screenshot({ path: path.join(outDir, `checkpoint-${label}.png`), fullPage: true });
     });
   }
