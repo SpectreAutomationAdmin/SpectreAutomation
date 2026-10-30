@@ -214,7 +214,20 @@ export default function CoursePlayer(props: Props) {
       if (!opts?.force && seconds - lastReportedSecondsRef.current < REPORT_INTERVAL_SECONDS) {
         return;
       }
-      if (inFlightRef.current) return;
+      // EP-TRAIN-3 Slice 3-final (2026-10-30): force-sends MUST NOT
+      // be dropped when a prior send is still in flight.  The final
+      // onEnded / onPause / pagehide flush depends on force going
+      // through so the server's monotonic max(..., existing) picks up
+      // the latest watch count.  Non-force sends keep the inFlight
+      // guard so the 15s-threshold auto-flush doesn't double-spam.
+      if (inFlightRef.current && !opts?.force) return;
+      if (inFlightRef.current && opts?.force) {
+        // Wait up to 10s for the current flight to resolve, then send.
+        const deadline = Date.now() + 10_000;
+        while (inFlightRef.current && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
       inFlightRef.current = true;
       try {
         const result = await recordProgressAction(versionId, {
