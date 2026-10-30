@@ -959,28 +959,50 @@ function CheckpointPanel({
                 <div className="mt-1 space-y-1.5">
                   {q.options.map((o) => {
                     const selected = multiAnswers[q.id]?.has(o.id) ?? false;
+                    const toggleOption = () => {
+                      setMultiAnswers((prev) => {
+                        const next = { ...prev };
+                        const set = new Set(next[q.id] ?? new Set());
+                        if (set.has(o.id)) set.delete(o.id); else set.add(o.id);
+                        next[q.id] = set;
+                        return next;
+                      });
+                    };
+                    const inputId = `cp-${q.id}-opt-${o.id}`;
                     return (
+                      // EP-TRAIN-3 Slice 3D-verify (2026-10-30): explicit
+                      // onClick on the label + htmlFor binding + input id.
+                      // Native "click label -> toggle input" was observed
+                      // to fail for checkboxes under some browser/CSS
+                      // conditions while working for radios (likely a
+                      // controlled-React + label-span-click interaction).
+                      // Explicit onClick guarantees deterministic toggling
+                      // for all click origins (label, span, or input).
                       <label
                         key={o.id}
+                        htmlFor={inputId}
                         className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
                           selected
                             ? "border-club-green-700 bg-club-green-50"
                             : "border-stone-200 hover:bg-stone-50"
                         }`}
                         data-testid={`portal-checkpoint-option-${o.id}`}
+                        onClick={(e) => {
+                          // Prevent the native label-toggle so we only run
+                          // our explicit handler once (clicking the span or
+                          // the label itself both land here before the
+                          // native input-click fires).
+                          if ((e.target as HTMLElement).tagName !== "INPUT") {
+                            e.preventDefault();
+                            toggleOption();
+                          }
+                        }}
                       >
                         <input
+                          id={inputId}
                           type="checkbox"
                           checked={selected}
-                          onChange={() =>
-                            setMultiAnswers((prev) => {
-                              const next = { ...prev };
-                              const set = new Set(next[q.id] ?? new Set());
-                              if (set.has(o.id)) set.delete(o.id); else set.add(o.id);
-                              next[q.id] = set;
-                              return next;
-                            })
-                          }
+                          onChange={toggleOption}
                           className="accent-club-green-700"
                         />
                         <span className="text-sm text-stone-800">{o.text}</span>
