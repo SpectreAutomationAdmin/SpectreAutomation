@@ -198,6 +198,18 @@ export default function CoursePlayer(props: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [multiAnswers, setMultiAnswers] = useState<Record<string, Set<string>>>({});
   const [cleared, setCleared] = useState<Set<string>>(new Set(initialClearedCheckpointIds));
+  // EP-TRAIN-3E (2026-10-30): guard against concurrent openCheckpoint
+  // invocations.  Previously, if two `timeupdate` events fired before
+  // the first openCheckpoint's await settled, both would call
+  // startCheckpointAttemptAction and both would then clear
+  // `answers`/`multiAnswers` as part of their post-await setPhase.  If
+  // the user had already selected an answer in the window between the
+  // first and second openCheckpoint resolve, the second resolve wiped
+  // the selections 100-300ms after the click — producing a
+  // reproducible "clicks are accepted then forgotten" bug.  The ref
+  // holds the in-flight checkpoint id (null = none), cleared on
+  // response error, after setPhase on success, or on resume/retake.
+  const openingCheckpointRef = useRef<string | null>(null);
   // EP-TRAIN-3 Slice 3-final (2026-10-30): resync when the server-
   // fetched prop updates (router.refresh() after a cleared submission
   // or on navigation back to the course page). Guarantees local client
@@ -380,7 +392,7 @@ export default function CoursePlayer(props: Props) {
     }
     if (now > farthestRef.current) farthestRef.current = now;
     // Trigger uses clearedRef (always current).
-    if (phase.kind === "video") {
+    if (phase.kind === "video" && openingCheckpointRef.current === null) {
       const triggered = sortedCheckpoints.find(
         (cp) => !clearedRef.current.has(cp.id) && now >= cp.atSecond,
       );
@@ -390,6 +402,7 @@ export default function CoursePlayer(props: Props) {
           watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
           currentIntervalRef.current = null;
         }
+        openingCheckpointRef.current = triggered.id;
         void sendProgress({ force: true }).then(() => openCheckpoint(triggered.id));
       }
     }
@@ -410,6 +423,16 @@ export default function CoursePlayer(props: Props) {
   }
 
   async function openCheckpoint(checkpointId: string) {
+    // EP-TRAIN-3E (2026-10-30): single-flight guard. If another
+    // openCheckpoint invocation already resolved and set phase to
+    // "checkpoint-answering" for this checkpoint, do not clobber the
+    // user's answer state.  The onTimeUpdate branch above also sets
+    // openingCheckpointRef so a second concurrent invocation is
+    // short-circuited before it even starts.
+    if (phase.kind === "checkpoint-answering" && phase.checkpointId === checkpointId) {
+      openingCheckpointRef.current = null;
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
@@ -429,6 +452,7 @@ export default function CoursePlayer(props: Props) {
       }
     } finally {
       setBusy(false);
+      openingCheckpointRef.current = null;
     }
   }
 
@@ -492,6 +516,7 @@ export default function CoursePlayer(props: Props) {
     setPhase({ kind: "video" });
     setAnswers({});
     setMultiAnswers({});
+    openingCheckpointRef.current = null;
     const el = videoRef.current;
     if (el) void el.play().catch(() => {/* ignore autoplay refusal */});
   }
