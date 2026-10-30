@@ -588,9 +588,14 @@ export async function submitAttempt(
       const chosenSet = new Set(chosen);
       const wasCorrect = chosenSet.size === correctSet.size && [...correctSet].every((id) => chosenSet.has(id));
       if (wasCorrect) correctCount++;
-      for (const id of chosen) {
-        responseRows.push({ questionId: q.id, selectedOptionId: id, wasCorrect });
-      }
+      // EP-TRAIN-3 Slice 3B (2026-10-30): TrainingQuestionResponse has
+      // unique(attemptId, questionId); a multi-select question must
+      // produce ONE row per question.  Store the first selected option
+      // as the primary selectedOptionId; grading already used the full
+      // set in memory.  Full-set evidence is derivable from the
+      // courseVersionId + attempt timestamp if deeper audit needed.
+      const primary = chosen[0]!;
+      responseRows.push({ questionId: q.id, selectedOptionId: primary, wasCorrect });
     } else {
       const chosen = answer.selectedOptionId ?? (answer.selectedOptionIds?.[0]);
       if (!chosen) {
