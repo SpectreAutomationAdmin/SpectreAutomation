@@ -968,19 +968,18 @@ function CheckpointPanel({
                         return next;
                       });
                     };
-                    const inputId = `cp-${q.id}-opt-${o.id}`;
                     return (
                       // EP-TRAIN-3 Slice 3D-verify (2026-10-30): explicit
-                      // onClick on the label + htmlFor binding + input id.
-                      // Native "click label -> toggle input" was observed
-                      // to fail for checkboxes under some browser/CSS
-                      // conditions while working for radios (likely a
-                      // controlled-React + label-span-click interaction).
-                      // Explicit onClick guarantees deterministic toggling
-                      // for all click origins (label, span, or input).
+                      // onClick on the label to guarantee deterministic
+                      // toggling for all click origins (label, span, or
+                      // input). The native "click label -> toggle input"
+                      // path was observed to be unreliable for checkboxes
+                      // inside this controlled-React overlay in some
+                      // browser/CSS conditions. No htmlFor/id binding —
+                      // combining it with the implicit label wrapper
+                      // doubles the a11y accessible-name resolution.
                       <label
                         key={o.id}
-                        htmlFor={inputId}
                         className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
                           selected
                             ? "border-club-green-700 bg-club-green-50"
@@ -988,10 +987,9 @@ function CheckpointPanel({
                         }`}
                         data-testid={`portal-checkpoint-option-${o.id}`}
                         onClick={(e) => {
-                          // Prevent the native label-toggle so we only run
-                          // our explicit handler once (clicking the span or
-                          // the label itself both land here before the
-                          // native input-click fires).
+                          // Only run our explicit handler for non-INPUT
+                          // click targets. If the user clicks the input
+                          // itself the native onChange fires below.
                           if ((e.target as HTMLElement).tagName !== "INPUT") {
                             e.preventDefault();
                             toggleOption();
@@ -999,7 +997,6 @@ function CheckpointPanel({
                         }}
                       >
                         <input
-                          id={inputId}
                           type="checkbox"
                           checked={selected}
                           onChange={toggleOption}
