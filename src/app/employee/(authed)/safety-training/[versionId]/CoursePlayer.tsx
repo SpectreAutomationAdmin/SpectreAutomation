@@ -134,7 +134,38 @@ type Phase =
     };
 
 const REPORT_INTERVAL_SECONDS = 15;
-const MAX_DT_PER_TICK = 2; // seek jumps > 2s ignored for secondsWatched
+// EP-TRAIN-3 Slice 3D (2026-10-30): seek vs natural-playback detection.
+// A natural timeupdate advance = (playbackRate * tickInterval) + jitter.
+// Anything beyond PLAYBACK_JUMP_GRACE (0.75s * playbackRate) is treated as
+// a seek, which starts a NEW interval but does not accumulate as watched
+// coverage of the gap. Replaces the old scalar MAX_DT_PER_TICK clamp
+// which under-counted at 1.5x+ playback rates.
+const PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE = 0.75;
+
+// Normalise an array of [start, end] intervals: merge overlaps + sort.
+// Used to compute unique watched coverage (rewatch doesn't double-count).
+function mergeIntervals(intervals: Array<[number, number]>): Array<[number, number]> {
+  if (intervals.length === 0) return [];
+  const sorted = intervals.map(([s, e]) => [s, e] as [number, number]).sort((a, b) => a[0] - b[0]);
+  const out: Array<[number, number]> = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const [s, e] = sorted[i];
+    const last = out[out.length - 1];
+    if (s <= last[1]) {
+      if (e > last[1]) last[1] = e;
+    } else {
+      out.push([s, e]);
+    }
+  }
+  return out;
+}
+
+function uniqueCoverageSeconds(intervals: Array<[number, number]>): number {
+  const merged = mergeIntervals(intervals);
+  let sum = 0;
+  for (const [s, e] of merged) sum += Math.max(0, e - s);
+  return sum;
+}
 
 export default function CoursePlayer(props: Props) {
   const {
@@ -173,13 +204,21 @@ export default function CoursePlayer(props: Props) {
   // state matches the server's authoritative cleared set.
   useEffect(() => {
     const incoming = new Set(initialClearedCheckpointIds);
-    setCleared((prev) => {
-      if (prev.size === incoming.size && [...prev].every((id) => incoming.has(id))) return prev;
-      // Union: never shrink client state based on a slower server read.
-      const merged = new Set<string>(prev);
-      for (const id of incoming) merged.add(id);
-      return merged;
-    });
+    let changed = false;
+    for (const id of incoming) {
+      if (!clearedRef.current.has(id)) {
+        clearedRef.current.add(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setCleared((prev) => {
+        const merged = new Set<string>(prev);
+        for (const id of incoming) merged.add(id);
+        return merged;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialClearedCheckpointIds]);
 
   // EP-TRAIN-3 Slice 3 (2026-10-29): sorted checkpoints + next-un-cleared helper.
@@ -194,11 +233,35 @@ export default function CoursePlayer(props: Props) {
 
   // Progress accumulators
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // EP-TRAIN-3 Slice 3D (2026-10-30): interval-based coverage. The
+  // merged union of watched [start,end] pairs represents unique
+  // content coverage; rewatch doesn't double-count. secondsWatchedRef
+  // is derived from the union before each send to the server.
+  const watchedIntervalsRef = useRef<Array<[number, number]>>(
+    initialProgress.secondsWatched > 0 ? [[0, initialProgress.secondsWatched]] : [],
+  );
+  const currentIntervalRef = useRef<[number, number] | null>(null);
   const secondsWatchedRef = useRef(initialProgress.secondsWatched);
   const farthestRef = useRef(initialProgress.farthestSecond);
   const lastTimeRef = useRef(initialProgress.farthestSecond);
   const lastReportedSecondsRef = useRef(initialProgress.secondsWatched);
   const inFlightRef = useRef(false);
+  // EP-TRAIN-3 Slice 3D (2026-10-30): monotonic request sequence.
+  // Each send carries a `seq`; the client discards response-driven
+  // state updates whose seq is older than the current head. Prevents a
+  // slow earlier-fired request from overwriting a newer value.
+  const sendSeqRef = useRef(0);
+  const highestResolvedSeqRef = useRef(0);
+  // EP-TRAIN-3 Slice 3D (2026-10-30): cleared state as useRef (for
+  // closure freshness in onTimeUpdate) PLUS useState (for render).
+  // Any mutation goes through `recordCleared` which keeps both in sync.
+  const clearedRef = useRef<Set<string>>(new Set(initialClearedCheckpointIds));
+  const recordCleared = useCallback((id: string) => {
+    if (!clearedRef.current.has(id)) {
+      clearedRef.current.add(id);
+    }
+    setCleared((prev) => (prev.has(id) ? prev : new Set([...prev, id])));
+  }, []);
 
   const videoUrl = `/api/hr/training/versions/${encodeURIComponent(versionId)}/video`;
 
@@ -209,34 +272,43 @@ export default function CoursePlayer(props: Props) {
   const sendProgress = useCallback(
     async (opts?: { force?: boolean }) => {
       if (!hasVideo) return;
-      const seconds = secondsWatchedRef.current;
+      // EP-TRAIN-3 Slice 3D (2026-10-30): derive secondsWatched from
+      // the merged interval union so rewatch doesn't double-count. The
+      // currentInterval (open playback segment) is folded into the
+      // union snapshot before computing.
+      const intervals: Array<[number, number]> = [...watchedIntervalsRef.current];
+      if (currentIntervalRef.current) {
+        intervals.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+      }
+      const seconds = uniqueCoverageSeconds(intervals);
+      secondsWatchedRef.current = seconds;
       const farthest = farthestRef.current;
       if (!opts?.force && seconds - lastReportedSecondsRef.current < REPORT_INTERVAL_SECONDS) {
         return;
       }
-      // EP-TRAIN-3 Slice 3-final (2026-10-30): force-sends MUST NOT
-      // be dropped when a prior send is still in flight.  The final
-      // onEnded / onPause / pagehide flush depends on force going
-      // through so the server's monotonic max(..., existing) picks up
-      // the latest watch count.  Non-force sends keep the inFlight
-      // guard so the 15s-threshold auto-flush doesn't double-spam.
+      // Non-force sends respect the inFlight guard to avoid spam;
+      // force-sends wait for the current flight to drain then go.
       if (inFlightRef.current && !opts?.force) return;
       if (inFlightRef.current && opts?.force) {
-        // Wait up to 10s for the current flight to resolve, then send.
         const deadline = Date.now() + 10_000;
         while (inFlightRef.current && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 100));
         }
       }
+      const seq = ++sendSeqRef.current;
       inFlightRef.current = true;
       try {
         const result = await recordProgressAction(versionId, {
           secondsWatched: Math.floor(seconds),
           farthestSecond: Math.floor(farthest),
         });
+        // Drop stale responses: another request may have already updated
+        // state to a NEWER value. Only the latest-resolved seq updates UI.
+        if (seq < highestResolvedSeqRef.current) return;
+        highestResolvedSeqRef.current = seq;
         if ("ok" in result) {
           lastReportedSecondsRef.current = seconds;
-          setProgress((p) => ({
+          setProgress(() => ({
             secondsWatched: seconds,
             farthestSecond: farthest,
             percentComplete: result.percentComplete,
@@ -287,34 +359,40 @@ export default function CoursePlayer(props: Props) {
   function onTimeUpdate(e: React.SyntheticEvent<HTMLVideoElement>) {
     const el = e.currentTarget;
     const now = el.currentTime;
+    const rate = el.playbackRate || 1;
     const dt = now - lastTimeRef.current;
     lastTimeRef.current = now;
-    if (dt > 0 && dt <= MAX_DT_PER_TICK) {
-      // Real playback delta — accumulate.
-      secondsWatchedRef.current += dt;
+    // EP-TRAIN-3 Slice 3D (2026-10-30): interval-based coverage.
+    const jumpGrace = PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE * rate;
+    const naturalAdvance = dt > 0 && dt <= jumpGrace;
+    if (!el.paused && naturalAdvance) {
+      if (!currentIntervalRef.current) {
+        currentIntervalRef.current = [now - dt, now];
+      } else {
+        currentIntervalRef.current[1] = now;
+      }
+    } else {
+      if (currentIntervalRef.current) {
+        watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+        currentIntervalRef.current = null;
+      }
+      if (!el.paused) currentIntervalRef.current = [now, now];
     }
     if (now > farthestRef.current) farthestRef.current = now;
-    // EP-TRAIN-3 Slice 3 (2026-10-29) -- checkpoint trigger.
-    // When playback crosses an un-cleared checkpoint position, pause +
-    // open the overlay.  Only fires when the video is PLAYING (not
-    // while scrubbing paused), to avoid repeated triggers on
-    // currentTime changes from seek events.
+    // Trigger uses clearedRef (always current).
     if (phase.kind === "video") {
-      // Fire whenever playback is at or past an uncleared checkpoint
-      // position.  The phase.kind guard above prevents re-firing after
-      // the overlay opens; the server also refuses out-of-order starts.
       const triggered = sortedCheckpoints.find(
-        (cp) => !cleared.has(cp.id) && now >= cp.atSecond,
+        (cp) => !clearedRef.current.has(cp.id) && now >= cp.atSecond,
       );
       if (triggered) {
         if (!el.paused) el.pause();
-        // Flush progress FIRST so the server's farthestSecond gate
-        // matches current playback before we attempt to start the
-        // checkpoint attempt.
+        if (currentIntervalRef.current) {
+          watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+          currentIntervalRef.current = null;
+        }
         void sendProgress({ force: true }).then(() => openCheckpoint(triggered.id));
       }
     }
-    // Debounced network write — bounded to REPORT_INTERVAL_SECONDS.
     void sendProgress();
   }
 
@@ -389,7 +467,7 @@ export default function CoursePlayer(props: Props) {
         // navigate away or refresh. The success overlay is announced
         // only after the server-confirmed state is in hand.
         if (passed) {
-          setCleared((prev) => new Set([...prev, phase.checkpointId]));
+          recordCleared(phase.checkpointId);
           router.refresh();
         }
         setPhase({
@@ -408,19 +486,12 @@ export default function CoursePlayer(props: Props) {
   }
 
   function onResumeAfterCheckpoint() {
-    // EP-TRAIN-3 Slice 3-final (2026-10-30) belt-and-suspenders:
-    // explicitly re-affirm the checkpoint is in local cleared state
-    // before switching back to video playback. Guards against a race
-    // where the earlier async setCleared() hadn't propagated to the
-    // next onTimeUpdate's closure (React 18 batching across awaits
-    // is not guaranteed deterministic). Idempotent.
     if (phase.kind === "checkpoint-result" && phase.passed) {
-      setCleared((prev) => (prev.has(phase.checkpointId) ? prev : new Set([...prev, phase.checkpointId])));
+      recordCleared(phase.checkpointId);
     }
     setPhase({ kind: "video" });
     setAnswers({});
     setMultiAnswers({});
-    // Resume playback from the current position.
     const el = videoRef.current;
     if (el) void el.play().catch(() => {/* ignore autoplay refusal */});
   }
@@ -431,10 +502,18 @@ export default function CoursePlayer(props: Props) {
   }
 
   function onPause() {
+    if (currentIntervalRef.current) {
+      watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+      currentIntervalRef.current = null;
+    }
     void sendProgress({ force: true });
   }
 
   function onEnded() {
+    if (currentIntervalRef.current) {
+      watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+      currentIntervalRef.current = null;
+    }
     void sendProgress({ force: true });
   }
 
