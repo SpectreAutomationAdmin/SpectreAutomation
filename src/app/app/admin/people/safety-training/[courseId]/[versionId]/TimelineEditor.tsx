@@ -384,13 +384,15 @@ export default function TimelineEditor({
           <div className="px-3 py-2 bg-stone-50 border-b border-stone-200 text-[11px] uppercase tracking-[0.18em] text-stone-500">
             All checkpoints
           </div>
-          {/* EP-TRAIN-4A §5 (2026-10-30): wrap the 7-column table in a
-              scoped horizontal-scroll container so it never pushes the
-              page past 390px at mobile.  Table itself keeps a minimum
-              width so columns stay readable; only the inner wrapper
-              scrolls horizontally when necessary. */}
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm" data-testid="training-timeline-list">
+          {/* EP-TRAIN-4A §5 (2026-10-30): the admin shell is a flex
+              container; a `min-w` on the table propagates upward and
+              overflows the viewport at mobile 390.  Drop the fixed
+              min-width so the table collapses to the available width
+              (narrow columns, no horizontal page scroll).  The table
+              is a compact overview — the primary authoring surface
+              is the consolidated yellow editor above. */}
+          <div className="w-full">
+          <table className="w-full text-sm" data-testid="training-timeline-list">
             <thead>
               <tr className="text-left text-xs text-stone-500 border-b border-stone-200">
                 <th className="px-3 py-2 font-normal">#</th>
