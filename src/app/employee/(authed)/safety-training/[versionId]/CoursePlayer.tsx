@@ -408,6 +408,15 @@ export default function CoursePlayer(props: Props) {
   }
 
   function onResumeAfterCheckpoint() {
+    // EP-TRAIN-3 Slice 3-final (2026-10-30) belt-and-suspenders:
+    // explicitly re-affirm the checkpoint is in local cleared state
+    // before switching back to video playback. Guards against a race
+    // where the earlier async setCleared() hadn't propagated to the
+    // next onTimeUpdate's closure (React 18 batching across awaits
+    // is not guaranteed deterministic). Idempotent.
+    if (phase.kind === "checkpoint-result" && phase.passed) {
+      setCleared((prev) => (prev.has(phase.checkpointId) ? prev : new Set([...prev, phase.checkpointId])));
+    }
     setPhase({ kind: "video" });
     setAnswers({});
     setMultiAnswers({});
