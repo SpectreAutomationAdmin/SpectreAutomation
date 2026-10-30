@@ -167,6 +167,20 @@ export default function CoursePlayer(props: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [multiAnswers, setMultiAnswers] = useState<Record<string, Set<string>>>({});
   const [cleared, setCleared] = useState<Set<string>>(new Set(initialClearedCheckpointIds));
+  // EP-TRAIN-3 Slice 3-final (2026-10-30): resync when the server-
+  // fetched prop updates (router.refresh() after a cleared submission
+  // or on navigation back to the course page). Guarantees local client
+  // state matches the server's authoritative cleared set.
+  useEffect(() => {
+    const incoming = new Set(initialClearedCheckpointIds);
+    setCleared((prev) => {
+      if (prev.size === incoming.size && [...prev].every((id) => incoming.has(id))) return prev;
+      // Union: never shrink client state based on a slower server read.
+      const merged = new Set<string>(prev);
+      for (const id of incoming) merged.add(id);
+      return merged;
+    });
+  }, [initialClearedCheckpointIds]);
 
   // EP-TRAIN-3 Slice 3 (2026-10-29): sorted checkpoints + next-un-cleared helper.
   const sortedCheckpoints = useMemo(
@@ -353,6 +367,18 @@ export default function CoursePlayer(props: Props) {
       if ("ok" in result) {
         const passed = !!result.checkpointCleared;
         const attemptsRemaining = result.attemptsRemaining ?? 0;
+        // EP-TRAIN-3 Slice 3-final (2026-10-30) -- server is now the
+        // SINGLE source of truth per founder directive §2. Optimistic
+        // client `cleared` update is kept for immediate UX feedback,
+        // but router.refresh() re-fetches getPlayerState so the
+        // Course page's initialClearedCheckpointIds + player state
+        // match the just-committed server state before the user can
+        // navigate away or refresh. The success overlay is announced
+        // only after the server-confirmed state is in hand.
+        if (passed) {
+          setCleared((prev) => new Set([...prev, phase.checkpointId]));
+          router.refresh();
+        }
         setPhase({
           kind: "checkpoint-result",
           checkpointId: phase.checkpointId,
@@ -360,9 +386,6 @@ export default function CoursePlayer(props: Props) {
           attemptsRemaining,
           exhausted: !passed && attemptsRemaining === 0,
         });
-        if (passed) {
-          setCleared((prev) => new Set([...prev, phase.checkpointId]));
-        }
       } else {
         setError(result.error);
       }
