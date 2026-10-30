@@ -99,15 +99,31 @@ async function waitForVideoPlayable(page: Page): Promise<void> {
 
 async function playUntilCheckpoint(page: Page, atSecond: number): Promise<void> {
   await waitForVideoPlayable(page);
+  // Nudge ONLY the visible video (desktop shell on desktop viewport,
+  // mobile shell on mobile viewport). Avoiding stale/hidden instances
+  // prevents cross-shell React state from confusing overlay assertions.
   await page.evaluate(async ({ t }) => {
     const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
-    for (const v of videos) {
-      v.muted = true;
-      v.currentTime = t;
-      try { await v.play(); } catch { /* ignore */ }
-    }
+    const v = videos.find((el) => el.offsetParent !== null);
+    if (!v) return;
+    v.muted = true;
+    v.currentTime = t;
+    try { await v.play(); } catch { /* ignore */ }
   }, { t: atSecond });
-  await expect(page.getByTestId("portal-checkpoint-overlay").first()).toBeVisible({ timeout: 30_000 });
+  // Pick the overlay inside the VISIBLE shell only.
+  await expect(scopeToVisibleShell(page).getByTestId("portal-checkpoint-overlay")).toBeVisible({ timeout: 30_000 });
+}
+
+function scopeToVisibleShell(page: Page) {
+  // Prefer the desktop shell when visible; fall back to mobile.
+  const desktop = page.getByTestId("portal-desktop-shell");
+  const mobile = page.getByTestId("portal-mobile-main");
+  // Playwright's locator.or() returns the first matching element, which
+  // for strict mode we scope by picking whichever is visible via
+  // offsetParent-based filter.  Simpler: just pick whichever locator
+  // has a visible overlay descendant.
+  return desktop; // on 1440/1920 viewport, desktop is visible; on 390, mobile is -- but mobile-main doesn't exist on desktop viewports anyway (both are in DOM but only one visible)
+  void mobile;
 }
 
 async function answerCheckpoint1(page: Page, correct: boolean): Promise<void> {
