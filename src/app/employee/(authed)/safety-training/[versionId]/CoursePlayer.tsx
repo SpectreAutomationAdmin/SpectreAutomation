@@ -281,7 +281,10 @@ export default function CoursePlayer(props: Props) {
       );
       if (triggered) {
         if (!el.paused) el.pause();
-        void openCheckpoint(triggered.id);
+        // Flush progress FIRST so the server's farthestSecond gate
+        // matches current playback before we attempt to start the
+        // checkpoint attempt.
+        void sendProgress({ force: true }).then(() => openCheckpoint(triggered.id));
       }
     }
     // Debounced network write — bounded to REPORT_INTERVAL_SECONDS.
