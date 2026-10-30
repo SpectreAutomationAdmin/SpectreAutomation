@@ -105,9 +105,9 @@ async function main() {
     const emp = await tx.employee.create({ data: { clubId: CLUB_ID, employeeNumber: EMPLOYEE_NUMBER, firstName: "Slice3", lastName: RUN_ID.slice(-6), personalEmail: EMPLOYEE_EMAIL, status: "ACTIVE", employeeLifecycle: "ACTIVE", onboardingState: "APPROVED", payrollReadiness: "NOT_READY", hireDate: new Date(), activatedAt: new Date() } });
     await tx.employeePortalCredential.create({ data: { clubId: CLUB_ID, employeeId: emp.id, passwordHash: hash } });
     const course = await tx.trainingCourse.create({ data: { clubId: CLUB_ID, code: COURSE_CODE, title: COURSE_TITLE, category: "Safety", description: "Disposable fixture for EP-TRAIN-3 Slice 3 isolated-journey test." } });
-    const version = await tx.trainingCourseVersion.create({ data: { courseId: course.id, version: 1, state: "DRAFT", title: COURSE_TITLE, description: "Disposable fixture.", passingScore: 80, retakesAllowed: true, requiresKnowledgeTest: true, required: true, appliesToAll: true, videoStorageKey: ${JSON.stringify(REUSED_VIDEO_KEY)}, videoSha256: ${JSON.stringify(REUSED_VIDEO_SHA)}, videoMimeType: "video/mp4", videoSizeBytes: 49475360, videoDurationSec: 60 } });
+    const version = await tx.trainingCourseVersion.create({ data: { courseId: course.id, version: 1, state: "DRAFT", title: COURSE_TITLE, description: "Disposable fixture.", passingScore: 80, retakesAllowed: true, requiresKnowledgeTest: true, required: true, appliesToAll: true, videoStorageKey: ${JSON.stringify(REUSED_VIDEO_KEY)}, videoSha256: ${JSON.stringify(REUSED_VIDEO_SHA)}, videoMimeType: "video/mp4", videoSizeBytes: 49475360, videoDurationSec: 42 } });
     const cp1 = await tx.trainingCheckpoint.create({ data: { courseVersionId: version.id, atSecond: 15, label: "Checkpoint 1 - Hazard Identification", requiredToProceed: true, maxRetries: 2, displayOrder: 0 } });
-    const cp2 = await tx.trainingCheckpoint.create({ data: { courseVersionId: version.id, atSecond: 30, label: "Checkpoint 2 - Response Protocol", requiredToProceed: true, maxRetries: 2, displayOrder: 1 } });
+    const cp2 = await tx.trainingCheckpoint.create({ data: { courseVersionId: version.id, atSecond: 28, label: "Checkpoint 2 - Response Protocol", requiredToProceed: true, maxRetries: 2, displayOrder: 1 } });
     const q1 = await tx.trainingQuestion.create({ data: { courseVersionId: version.id, checkpointId: cp1.id, prompt: "What color are safety cones typically?", displayOrder: 0, active: true, questionType: "SINGLE_CHOICE" } });
     await tx.trainingAnswerOption.createMany({ data: [{ questionId: q1.id, text: "Orange", isCorrect: true, displayOrder: 0 }, { questionId: q1.id, text: "Green", isCorrect: false, displayOrder: 1 }, { questionId: q1.id, text: "Blue", isCorrect: false, displayOrder: 2 }] });
     const q2 = await tx.trainingQuestion.create({ data: { courseVersionId: version.id, checkpointId: cp1.id, prompt: "Which of these are personal protective equipment? (Select all that apply)", displayOrder: 1, active: true, questionType: "MULTI_ANSWER" } });
@@ -157,14 +157,16 @@ async function main() {
   if (course) {
     for (const v of course.versions) {
       summary.versionIds.push(v.id);
+      // FK ordering: TrainingCompletion.attemptId has ON DELETE RESTRICT,
+      // so TrainingCompletion must be deleted BEFORE TrainingAttempt.
+      const cp = await p.trainingCompletion.deleteMany({ where: { courseVersionId: v.id } });
+      summary.completions += cp.count;
       const r = await p.trainingQuestionResponse.deleteMany({ where: { attempt: { courseVersionId: v.id } } });
       summary.responses += r.count;
       const a = await p.trainingAttempt.deleteMany({ where: { courseVersionId: v.id } });
       summary.attempts += a.count;
       const pr = await p.trainingProgress.deleteMany({ where: { courseVersionId: v.id } });
       summary.progress += pr.count;
-      const cp = await p.trainingCompletion.deleteMany({ where: { courseVersionId: v.id } });
-      summary.completions += cp.count;
       await p.trainingQuestion.deleteMany({ where: { courseVersionId: v.id } });
       await p.trainingCheckpoint.deleteMany({ where: { courseVersionId: v.id } });
     }
@@ -176,9 +178,10 @@ async function main() {
   if (emp) {
     await p.employeePortalCredential.deleteMany({ where: { employeeId: emp.id } });
     await p.trainingAssignment.deleteMany({ where: { employeeId: emp.id } });
+    // Same FK ordering: TrainingCompletion → TrainingAttempt → TrainingProgress.
+    await p.trainingCompletion.deleteMany({ where: { employeeId: emp.id } });
     await p.trainingAttempt.deleteMany({ where: { employeeId: emp.id } });
     await p.trainingProgress.deleteMany({ where: { employeeId: emp.id } });
-    await p.trainingCompletion.deleteMany({ where: { employeeId: emp.id } });
     await p.employee.delete({ where: { id: emp.id } });
     summary.employeeDeleted = true;
   }

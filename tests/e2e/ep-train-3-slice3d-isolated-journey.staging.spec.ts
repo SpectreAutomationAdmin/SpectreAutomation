@@ -48,9 +48,10 @@ async function loginPortal(page: Page, fixture: IsolatedFixture): Promise<void> 
 
 async function openIsolatedCourse(page: Page, fixture: IsolatedFixture): Promise<void> {
   await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
-  // Match this fixture's unique course title (includes its runId).
+  // Both desktop + mobile shells render identical markup; filter to
+  // the shell visible at the current viewport.
   const link = page
-    .locator('[data-testid^="portal-safety-training-course-"]')
+    .locator('[data-testid^="portal-safety-training-course-"]:visible')
     .filter({ hasText: fixture.courseTitle })
     .first();
   await expect(link).toBeVisible({ timeout: 15_000 });
@@ -240,41 +241,68 @@ test.describe("EP-TRAIN-3 Slice 3D :: three consecutive isolated-fixture journey
         await page.getByTestId("portal-checkpoint-resume").first().click();
 
         // ------- STEP 9: VIDEO COVERAGE TO END (secondsWatched >= 90%) -------
+        // Play the final segment at 1x so timeupdate cadence stays
+        // comfortably under PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE
+        // (0.75s) and every tick extends the interval.
         await page.evaluate(async () => {
           const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
           const v = videos.find((el) => el.offsetParent !== null);
           if (!v) return;
           v.muted = true;
-          v.playbackRate = 2;
+          v.playbackRate = 1;
           try { await v.play(); } catch { /* ignore */ }
         });
         await page.waitForFunction(() => {
           const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
           const v = videos.find((el) => el.offsetParent !== null);
           return !!v && v.ended;
-        }, undefined, { timeout: 90_000 });
-        // Flush progress to server.
-        await page.evaluate(async () => {
-          const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
-          const v = videos.find((el) => el.offsetParent !== null);
-          if (v && !v.paused) v.pause();
-          await new Promise((r) => setTimeout(r, 2500));
-          Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-          document.dispatchEvent(new Event("visibilitychange"));
+        }, undefined, { timeout: 180_000 });
+        // Dispatch pagehide so the useEffect flush fires a force-send
+        // of the complete interval union (onEnded's own force-send
+        // already committed the final interval, this is belt-and-
+        // suspenders for CI-side event-loop stalls).
+        await page.waitForTimeout(1500);
+        await page.evaluate(() => {
           window.dispatchEvent(new Event("pagehide"));
         });
-        await page.waitForTimeout(5_000);
+        // Poll the course-page's `Watch progress` badge for %>=90 —
+        // this reads the SERVER's canonical percentComplete after the
+        // final flush.  The badge "Watch progress N%" renders as two
+        // sibling elements; we scope to the shared parent and parse.
+        await expect
+          .poll(
+            async () => {
+              const pct = await page.evaluate(() => {
+                const nodes = Array.from(document.querySelectorAll("*"));
+                for (const n of nodes) {
+                  const t = n.textContent ?? "";
+                  const m = t.match(/Watch progress[^0-9]*(\d+)\s*%/);
+                  if (m) return parseInt(m[1], 10);
+                }
+                return 0;
+              });
+              return pct;
+            },
+            { timeout: 45_000, intervals: [500, 1000, 2000] },
+          )
+          .toBeGreaterThanOrEqual(90);
 
         // ------- STEP 10: FINAL ASSESSMENT UNLOCKED (after refresh) -------
+        // Scope all subsequent locators to the active shell for this
+        // viewport.  Both shells render identical markup; the hidden
+        // one would otherwise be matched by `.first()`.
         await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
         await openIsolatedCourse(page, fixture);
-        const startBtn = page.getByTestId("portal-course-start-attempt").first();
+        const shellSel = vp.width < 768 ? '[data-testid="portal-mobile-shell"]' : '[data-testid="portal-desktop-shell"]';
+        const shell = page.locator(shellSel);
+        await expect(shell).toBeVisible({ timeout: 10_000 });
+        const startBtn = shell.getByTestId("portal-course-start-attempt").first();
         await expect(startBtn).toBeVisible({ timeout: 30_000 });
         await page.screenshot({ path: path.join(outDir, `${vp.label}-${runId}-06-final-unlocked.png`), fullPage: true });
 
         // ------- STEP 11: FAIL FINAL ASSESSMENT -------
         await startBtn.click();
-        const final1 = page.getByTestId("portal-course-quiz-answering").first();
+        const final1 = shell.getByTestId("portal-course-quiz-answering").first();
         await expect(final1).toBeVisible();
         const dn = final1.getByRole("radio", { name: "Doing nothing", exact: true });
         const fF = final1.getByRole("radio", { name: "False", exact: true });
@@ -282,18 +310,18 @@ test.describe("EP-TRAIN-3 Slice 3D :: three consecutive isolated-fixture journey
         await expect(dn).toBeChecked();
         await fF.click();
         await expect(fF).toBeChecked();
-        await page.getByTestId("portal-course-submit-attempt").first().click();
-        await expect(page.getByTestId("portal-course-quiz-failed").first()).toBeVisible({ timeout: 15_000 });
+        await shell.getByTestId("portal-course-submit-attempt").first().click();
+        await expect(shell.getByTestId("portal-course-quiz-failed").first()).toBeVisible({ timeout: 15_000 });
         await page.screenshot({ path: path.join(outDir, `${vp.label}-${runId}-07-final-failed.png`), fullPage: true });
 
         // ------- STEP 12: RETAKE PERMITTED -------
-        await page.getByTestId("portal-course-quiz-retake").first().click();
-        const startBtn2 = page.getByTestId("portal-course-start-attempt").first();
+        await shell.getByTestId("portal-course-quiz-retake").first().click();
+        const startBtn2 = shell.getByTestId("portal-course-start-attempt").first();
         await expect(startBtn2).toBeVisible({ timeout: 10_000 });
 
         // ------- STEP 13: SUCCESSFUL FINAL ASSESSMENT -------
         await startBtn2.click();
-        const final2 = page.getByTestId("portal-course-quiz-answering").first();
+        const final2 = shell.getByTestId("portal-course-quiz-answering").first();
         await expect(final2).toBeVisible();
         const ra = final2.getByRole("radio", { name: "Risk assessment", exact: true });
         const tT = final2.getByRole("radio", { name: "True", exact: true });
@@ -301,8 +329,16 @@ test.describe("EP-TRAIN-3 Slice 3D :: three consecutive isolated-fixture journey
         await expect(ra).toBeChecked();
         await tT.click();
         await expect(tT).toBeChecked();
-        await page.getByTestId("portal-course-submit-attempt").first().click();
-        await expect(page.getByTestId("portal-course-quiz-passed").first()).toBeVisible({ timeout: 15_000 });
+        await shell.getByTestId("portal-course-submit-attempt").first().click();
+        // After a passing submission, router.refresh() re-fetches the
+        // page with `completion !== null`, which conditionally
+        // unmounts the quiz section (and its `portal-course-quiz-passed`
+        // div) and renders `portal-course-completed-banner` above.
+        // Either confirmation means the pass took: check both and
+        // require at least one to be visible.
+        await expect(
+          shell.locator('[data-testid="portal-course-quiz-passed"], [data-testid="portal-course-completed-banner"]').first(),
+        ).toBeVisible({ timeout: 15_000 });
         await page.screenshot({ path: path.join(outDir, `${vp.label}-${runId}-08-final-passed.png`), fullPage: true });
 
         // ------- STEP 14: TRAININGCOMPLETION CREATED (server-side) -------
@@ -314,7 +350,8 @@ test.describe("EP-TRAIN-3 Slice 3D :: three consecutive isolated-fixture journey
         // ------- STEP 15: REFRESH CONFIRMS DURABLE COMPLETION -------
         await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
         await openIsolatedCourse(page, fixture);
-        await expect(page.getByTestId("portal-course-completed-banner").first()).toBeVisible({ timeout: 15_000 });
+        const shell2 = page.locator(shellSel);
+        await expect(shell2.getByTestId("portal-course-completed-banner").first()).toBeVisible({ timeout: 15_000 });
         await page.screenshot({ path: path.join(outDir, `${vp.label}-${runId}-09-completion-persists.png`), fullPage: true });
 
         // Record console errors if any (non-fatal).
