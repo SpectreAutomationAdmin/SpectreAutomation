@@ -13,6 +13,23 @@ import { prisma } from "../../prisma";
 import { NotFoundError } from "../../errors";
 import type { EmployeePortalPrincipal } from "../../employee-portal-session";
 
+export interface EmployeeQuestionView {
+  id: string;
+  prompt: string;
+  questionType: "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE";
+  // Options WITHOUT any isCorrect flag.
+  options: Array<{ id: string; text: string; displayOrder: number }>;
+}
+
+export interface EmployeeCheckpointView {
+  id: string;
+  atSecond: number;
+  label: string | null;
+  requiredToProceed: boolean;
+  maxRetries: number;
+  questions: EmployeeQuestionView[];
+}
+
 export interface EmployeeCourseView {
   courseId: string;
   code: string;
@@ -28,12 +45,11 @@ export interface EmployeeCourseView {
     hasVideo: boolean;
     videoDurationSec: number | null;
   };
-  questions: Array<{
-    id: string;
-    prompt: string;
-    // Options WITHOUT any isCorrect flag.
-    options: Array<{ id: string; text: string; displayOrder: number }>;
-  }>;
+  // Final-assessment questions (checkpointId=null).  Kept here as
+  // `questions` for backwards compatibility; callers that need the
+  // checkpoint-bound ones read `checkpoints[].questions`.
+  questions: EmployeeQuestionView[];
+  checkpoints: EmployeeCheckpointView[];
 }
 
 /**
@@ -66,15 +82,46 @@ export async function getEmployeeCourseView(
         select: {
           id: true,
           prompt: true,
+          questionType: true,
+          checkpointId: true,
           options: {
             orderBy: { displayOrder: "asc" },
             select: { id: true, text: true, displayOrder: true },
           },
         },
       },
+      checkpoints: {
+        orderBy: { atSecond: "asc" },
+        select: { id: true, atSecond: true, label: true, requiredToProceed: true, maxRetries: true },
+      },
     },
   });
   if (!v) throw new NotFoundError("TrainingCourseVersion", courseVersionId);
+  const finalQuestions: EmployeeQuestionView[] = [];
+  const questionsByCheckpoint = new Map<string, EmployeeQuestionView[]>();
+  for (const q of v.questions) {
+    const projected: EmployeeQuestionView = {
+      id: q.id,
+      prompt: q.prompt,
+      questionType: ((q.questionType as EmployeeQuestionView["questionType"]) ?? "SINGLE_CHOICE"),
+      options: q.options,
+    };
+    if (q.checkpointId === null) {
+      finalQuestions.push(projected);
+    } else {
+      const list = questionsByCheckpoint.get(q.checkpointId) ?? [];
+      list.push(projected);
+      questionsByCheckpoint.set(q.checkpointId, list);
+    }
+  }
+  const checkpoints: EmployeeCheckpointView[] = v.checkpoints.map((cp) => ({
+    id: cp.id,
+    atSecond: cp.atSecond,
+    label: cp.label,
+    requiredToProceed: cp.requiredToProceed,
+    maxRetries: cp.maxRetries,
+    questions: questionsByCheckpoint.get(cp.id) ?? [],
+  }));
   return {
     courseId: v.course.id,
     code: v.course.code,
@@ -90,7 +137,8 @@ export async function getEmployeeCourseView(
       hasVideo: !!v.videoStorageKey,
       videoDurationSec: v.videoDurationSec,
     },
-    questions: v.questions,
+    questions: finalQuestions,
+    checkpoints,
   };
 }
 

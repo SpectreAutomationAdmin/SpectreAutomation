@@ -24,6 +24,7 @@ import {
   recordVideoProgress,
   startAttempt,
   submitAttempt,
+  startCheckpointAttempt,
 } from "@/lib/hr/training/attempts";
 import { isAppError, ValidationError } from "@/lib/errors";
 
@@ -100,22 +101,29 @@ export async function startAttemptAction(
 
 export async function submitAttemptAction(
   attemptId: string,
-  answers: Array<{ questionId: string; selectedOptionId: string }>,
+  answers: Array<{
+    questionId: string;
+    selectedOptionId?: string;
+    selectedOptionIds?: string[];
+  }>,
 ): Promise<
-  | { ok: true; score: number; passed: boolean; completionId: string | null }
+  | { ok: true; score: number; passed: boolean; completionId: string | null; checkpointCleared?: boolean; attemptsRemaining?: number }
   | ActionErr
 > {
   try {
     const actor = await requirePortal();
-    // Coerce shape (defense against a doctored payload): keep only the
-    // two fields the service needs, drop anything the browser tried to
-    // slip in (score, wasCorrect, passed).
+    // Coerce shape (defense against a doctored payload): drop anything
+    // the browser tried to slip in (score, wasCorrect, passed, etc.).
     const clean = Array.isArray(answers)
       ? answers
-          .filter((a) =>
-            a && typeof a.questionId === "string" && typeof a.selectedOptionId === "string",
-          )
-          .map((a) => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId }))
+          .filter((a) => a && typeof a.questionId === "string")
+          .map((a) => ({
+            questionId: a.questionId,
+            selectedOptionId: typeof a.selectedOptionId === "string" ? a.selectedOptionId : undefined,
+            selectedOptionIds: Array.isArray(a.selectedOptionIds)
+              ? a.selectedOptionIds.filter((x): x is string => typeof x === "string")
+              : undefined,
+          }))
       : [];
     const result = await submitAttempt(actor, { attemptId, answers: clean });
     revalidatePath("/employee/safety-training");
@@ -124,7 +132,26 @@ export async function submitAttemptAction(
       score: result.score,
       passed: result.passed,
       completionId: result.completionId,
+      checkpointCleared: result.checkpointCleared,
+      attemptsRemaining: result.attemptsRemaining,
     };
+  } catch (e) {
+    return toErr(e);
+  }
+}
+
+// EP-TRAIN-3 Slice 3 (2026-10-29): checkpoint attempt lifecycle
+export async function startCheckpointAttemptAction(
+  courseVersionId: string,
+  checkpointId: string,
+): Promise<
+  | { ok: true; attemptId: string; attemptNumber: number; attemptsRemaining: number; maxRetries: number }
+  | ActionErr
+> {
+  try {
+    const actor = await requirePortal();
+    const result = await startCheckpointAttempt(actor, { courseVersionId, checkpointId });
+    return { ok: true, ...result };
   } catch (e) {
     return toErr(e);
   }

@@ -25,6 +25,7 @@ import {
 } from "@/lib/hr/training/employee-read";
 import { getProgress, VIDEO_COMPLETION_THRESHOLD_PERCENT } from "@/lib/hr/training/attempts";
 import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
+import { getPlayerState } from "@/lib/hr/training/attempts";
 import {
   getEmployeeTrainingRecommendations,
   isLikelyStagingFixtureText,
@@ -36,6 +37,7 @@ import {
   recordVideoProgressAction,
   startAttemptAction,
   submitAttemptAction,
+  startCheckpointAttemptAction,
 } from "../_actions";
 
 export const runtime = "nodejs";
@@ -65,7 +67,7 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion, recommendations] = await Promise.all([
+  const [progress, attempts, completion, recommendations, playerState] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
     prisma.trainingCompletion.findUnique({
@@ -77,14 +79,14 @@ export default async function EmployeeCoursePage({
       },
       select: { id: true, completedAt: true, score: true },
     }),
-    // EP-TRAIN-2 §4 (2026-10-29) -- Recommended Training rail.
-    // Tenant-scoped via resolveApplicableCourses + current course excluded.
     getEmployeeTrainingRecommendations({
       employeeId: principal.employeeId,
       excludeVersionId: versionId,
       limit: 6,
     }),
+    getPlayerState(principal, versionId),
   ]);
+  const initialClearedCheckpointIds = playerState.checkpoints.filter((c) => c.cleared).map((c) => c.id);
 
   const submittedAttempts = attempts.filter((a) => a.submittedAt !== null);
   const canRetake =
@@ -195,6 +197,8 @@ export default async function EmployeeCoursePage({
         thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
         initialProgress={initialProgress}
         questions={view.questions}
+        checkpoints={view.checkpoints}
+        initialClearedCheckpointIds={initialClearedCheckpointIds}
         alreadyCompleted={completion !== null}
         canRetake={canRetake}
         blockingSubmittedAttempt={hasBlockingSubmittedAttempt}
@@ -207,6 +211,7 @@ export default async function EmployeeCoursePage({
         recordProgressAction={recordVideoProgressAction}
         startAttemptAction={startAttemptAction}
         submitAttemptAction={submitAttemptAction}
+        startCheckpointAttemptAction={startCheckpointAttemptAction}
       />
         </main>
         {/* Right column -- Recommended Training rail.  Visually

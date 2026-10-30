@@ -38,10 +38,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+export type QuestionType = "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE";
+
 type Question = {
   id: string;
   prompt: string;
+  questionType: QuestionType;
   options: Array<{ id: string; text: string; displayOrder: number }>;
+};
+
+type Checkpoint = {
+  id: string;
+  atSecond: number;
+  label: string | null;
+  requiredToProceed: boolean;
+  maxRetries: number;
+  questions: Question[];
 };
 
 type ProgressRow = {
@@ -61,6 +73,8 @@ interface Props {
   thresholdPercent: number;
   initialProgress: ProgressRow;
   questions: Question[];
+  checkpoints: Checkpoint[];
+  initialClearedCheckpointIds: string[];
   alreadyCompleted: boolean;
   canRetake: boolean;
   blockingSubmittedAttempt: boolean;
@@ -85,9 +99,16 @@ interface Props {
   >;
   submitAttemptAction: (
     attemptId: string,
-    answers: Array<{ questionId: string; selectedOptionId: string }>,
+    answers: Array<{ questionId: string; selectedOptionId?: string; selectedOptionIds?: string[] }>,
   ) => Promise<
-    | { ok: true; score: number; passed: boolean; completionId: string | null }
+    | { ok: true; score: number; passed: boolean; completionId: string | null; checkpointCleared?: boolean; attemptsRemaining?: number }
+    | { error: string }
+  >;
+  startCheckpointAttemptAction: (
+    courseVersionId: string,
+    checkpointId: string,
+  ) => Promise<
+    | { ok: true; attemptId: string; attemptNumber: number; attemptsRemaining: number; maxRetries: number }
     | { error: string }
   >;
 }
@@ -96,10 +117,20 @@ type Phase =
   | { kind: "video" }
   | { kind: "quiz-answering"; attemptId: string; attemptNumber: number }
   | { kind: "grading" }
+  | { kind: "quiz-result"; score: number; passed: boolean }
   | {
-      kind: "quiz-result";
-      score: number;
+      kind: "checkpoint-answering";
+      checkpointId: string;
+      attemptId: string;
+      attemptNumber: number;
+      attemptsRemaining: number;
+    }
+  | {
+      kind: "checkpoint-result";
+      checkpointId: string;
       passed: boolean;
+      attemptsRemaining: number;
+      exhausted: boolean;
     };
 
 const REPORT_INTERVAL_SECONDS = 15;
@@ -115,6 +146,8 @@ export default function CoursePlayer(props: Props) {
     thresholdPercent,
     initialProgress,
     questions,
+    checkpoints,
+    initialClearedCheckpointIds,
     alreadyCompleted,
     canRetake,
     blockingSubmittedAttempt,
@@ -122,6 +155,7 @@ export default function CoursePlayer(props: Props) {
     recordProgressAction,
     startAttemptAction,
     submitAttemptAction,
+    startCheckpointAttemptAction,
   } = props;
 
   const router = useRouter();
@@ -131,6 +165,18 @@ export default function CoursePlayer(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [multiAnswers, setMultiAnswers] = useState<Record<string, Set<string>>>({});
+  const [cleared, setCleared] = useState<Set<string>>(new Set(initialClearedCheckpointIds));
+
+  // EP-TRAIN-3 Slice 3 (2026-10-29): sorted checkpoints + next-un-cleared helper.
+  const sortedCheckpoints = useMemo(
+    () => [...checkpoints].sort((a, b) => a.atSecond - b.atSecond),
+    [checkpoints],
+  );
+  const firstUnclearedRequiredAtSecond = useMemo(() => {
+    const next = sortedCheckpoints.find((cp) => cp.requiredToProceed && !cleared.has(cp.id));
+    return next ? next.atSecond : Number.POSITIVE_INFINITY;
+  }, [sortedCheckpoints, cleared]);
 
   // Progress accumulators
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -221,8 +267,116 @@ export default function CoursePlayer(props: Props) {
       secondsWatchedRef.current += dt;
     }
     if (now > farthestRef.current) farthestRef.current = now;
+    // EP-TRAIN-3 Slice 3 (2026-10-29) -- checkpoint trigger.
+    // When playback crosses an un-cleared checkpoint position, pause +
+    // open the overlay.  Only fires when the video is PLAYING (not
+    // while scrubbing paused), to avoid repeated triggers on
+    // currentTime changes from seek events.
+    if (phase.kind === "video" && !el.paused) {
+      const triggered = sortedCheckpoints.find(
+        (cp) => !cleared.has(cp.id) && now >= cp.atSecond && now <= cp.atSecond + 1.5,
+      );
+      if (triggered) {
+        el.pause();
+        void openCheckpoint(triggered.id);
+      }
+    }
     // Debounced network write — bounded to REPORT_INTERVAL_SECONDS.
     void sendProgress();
+  }
+
+  // EP-TRAIN-3 Slice 3 (2026-10-29): seek-forward prevention.
+  // Clamp currentTime to the first un-cleared required checkpoint;
+  // the server also enforces this via recordVideoProgress capping.
+  function onSeeking(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const el = e.currentTarget;
+    if (
+      Number.isFinite(firstUnclearedRequiredAtSecond) &&
+      el.currentTime > firstUnclearedRequiredAtSecond
+    ) {
+      el.currentTime = firstUnclearedRequiredAtSecond;
+    }
+  }
+
+  async function openCheckpoint(checkpointId: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await startCheckpointAttemptAction(versionId, checkpointId);
+      if ("ok" in result) {
+        setPhase({
+          kind: "checkpoint-answering",
+          checkpointId,
+          attemptId: result.attemptId,
+          attemptNumber: result.attemptNumber,
+          attemptsRemaining: result.attemptsRemaining,
+        });
+        setAnswers({});
+        setMultiAnswers({});
+      } else {
+        setError(result.error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSubmitCheckpoint() {
+    if (phase.kind !== "checkpoint-answering") return;
+    const cp = sortedCheckpoints.find((c) => c.id === phase.checkpointId);
+    if (!cp) return;
+    const payload = cp.questions.map((q) => {
+      if (q.questionType === "MULTI_ANSWER") {
+        return { questionId: q.id, selectedOptionIds: Array.from(multiAnswers[q.id] ?? new Set()) };
+      }
+      return { questionId: q.id, selectedOptionId: answers[q.id] };
+    });
+    const unanswered = cp.questions.some((q) =>
+      q.questionType === "MULTI_ANSWER"
+        ? (multiAnswers[q.id]?.size ?? 0) === 0
+        : !answers[q.id],
+    );
+    if (unanswered) {
+      setError("Please answer every question before submitting.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await submitAttemptAction(phase.attemptId, payload);
+      if ("ok" in result) {
+        const passed = !!result.checkpointCleared;
+        const attemptsRemaining = result.attemptsRemaining ?? 0;
+        setPhase({
+          kind: "checkpoint-result",
+          checkpointId: phase.checkpointId,
+          passed,
+          attemptsRemaining,
+          exhausted: !passed && attemptsRemaining === 0,
+        });
+        if (passed) {
+          setCleared((prev) => new Set([...prev, phase.checkpointId]));
+        }
+      } else {
+        setError(result.error);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function onResumeAfterCheckpoint() {
+    setPhase({ kind: "video" });
+    setAnswers({});
+    setMultiAnswers({});
+    // Resume playback from the current position.
+    const el = videoRef.current;
+    if (el) void el.play().catch(() => {/* ignore autoplay refusal */});
+  }
+
+  function onRetryCheckpoint() {
+    if (phase.kind !== "checkpoint-result") return;
+    void openCheckpoint(phase.checkpointId);
   }
 
   function onPause() {
@@ -337,12 +491,38 @@ export default function CoursePlayer(props: Props) {
               src={videoUrl}
               onLoadedMetadata={onLoadedMetadata}
               onTimeUpdate={onTimeUpdate}
+              onSeeking={onSeeking}
               onPause={onPause}
               onEnded={onEnded}
               data-testid="portal-course-video"
             >
               Your browser does not support the video tag.
             </video>
+            {/* EP-TRAIN-3 Slice 3 (2026-10-29): checkpoint overlay
+                dims the video + presents the question UI inline when
+                a checkpoint has been triggered or the result is being
+                shown. */}
+            {(phase.kind === "checkpoint-answering" || phase.kind === "checkpoint-result") && (
+              <div
+                className="absolute inset-0 flex items-center justify-center bg-stone-900/85 p-4 overflow-y-auto"
+                data-testid="portal-checkpoint-overlay"
+              >
+                <div className="max-w-2xl w-full bg-white rounded-lg shadow-xl p-6 space-y-4 my-auto">
+                  <CheckpointPanel
+                    phase={phase}
+                    checkpoints={sortedCheckpoints}
+                    answers={answers}
+                    multiAnswers={multiAnswers}
+                    busy={busy}
+                    setAnswers={setAnswers}
+                    setMultiAnswers={setMultiAnswers}
+                    onSubmit={onSubmitCheckpoint}
+                    onResume={onResumeAfterCheckpoint}
+                    onRetry={onRetryCheckpoint}
+                  />
+                </div>
+              </div>
+            )}
           </div>
           <div className="px-5 py-3 border-t border-stone-200 flex items-center justify-between gap-4">
             <div className="flex-1 min-w-0">
@@ -595,4 +775,176 @@ export default function CoursePlayer(props: Props) {
       )}
     </div>
   );
+}
+
+function CheckpointPanel({
+  phase,
+  checkpoints,
+  answers,
+  multiAnswers,
+  busy,
+  setAnswers,
+  setMultiAnswers,
+  onSubmit,
+  onResume,
+  onRetry,
+}: {
+  phase: Phase;
+  checkpoints: Checkpoint[];
+  answers: Record<string, string>;
+  multiAnswers: Record<string, Set<string>>;
+  busy: boolean;
+  setAnswers: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setMultiAnswers: React.Dispatch<React.SetStateAction<Record<string, Set<string>>>>;
+  onSubmit: () => void;
+  onResume: () => void;
+  onRetry: () => void;
+}) {
+  if (phase.kind === "checkpoint-answering") {
+    const cp = checkpoints.find((c) => c.id === phase.checkpointId);
+    if (!cp) return null;
+    return (
+      <div className="space-y-4" data-testid="portal-checkpoint-answering">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="font-serif text-xl text-club-ink">
+            Knowledge check{cp.label ? ` — ${cp.label}` : ""}
+          </h3>
+          <span className="text-[11px] uppercase tracking-[0.14em] text-stone-500" data-testid="portal-checkpoint-attempts-remaining">
+            {phase.attemptsRemaining} attempt{phase.attemptsRemaining === 1 ? "" : "s"} remaining
+          </span>
+        </div>
+        <p className="text-xs text-stone-500">
+          Answer every question to continue. Playback resumes once this checkpoint is cleared.
+        </p>
+        <div className="space-y-5">
+          {cp.questions.map((q, i) => (
+            <fieldset key={q.id} className="space-y-2" data-testid={`portal-checkpoint-question-${q.id}`}>
+              <legend className="text-sm text-club-ink">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-stone-500 mr-2">
+                  Question {i + 1}
+                </span>
+                {q.prompt}
+              </legend>
+              {q.questionType === "MULTI_ANSWER" ? (
+                <div className="mt-1 space-y-1.5">
+                  {q.options.map((o) => {
+                    const selected = multiAnswers[q.id]?.has(o.id) ?? false;
+                    return (
+                      <label
+                        key={o.id}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
+                          selected
+                            ? "border-club-green-700 bg-club-green-50"
+                            : "border-stone-200 hover:bg-stone-50"
+                        }`}
+                        data-testid={`portal-checkpoint-option-${o.id}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() =>
+                            setMultiAnswers((prev) => {
+                              const next = { ...prev };
+                              const set = new Set(next[q.id] ?? new Set());
+                              if (set.has(o.id)) set.delete(o.id); else set.add(o.id);
+                              next[q.id] = set;
+                              return next;
+                            })
+                          }
+                          className="accent-club-green-700"
+                        />
+                        <span className="text-sm text-stone-800">{o.text}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-1 space-y-1.5">
+                  {q.options.map((o) => (
+                    <label
+                      key={o.id}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
+                        answers[q.id] === o.id
+                          ? "border-club-green-700 bg-club-green-50"
+                          : "border-stone-200 hover:bg-stone-50"
+                      }`}
+                      data-testid={`portal-checkpoint-option-${o.id}`}
+                    >
+                      <input
+                        type="radio"
+                        name={`cp-${q.id}`}
+                        value={o.id}
+                        checked={answers[q.id] === o.id}
+                        onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: o.id }))}
+                        className="accent-club-green-700"
+                      />
+                      <span className="text-sm text-stone-800">{o.text}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+          ))}
+        </div>
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onSubmit}
+            disabled={busy}
+            data-testid="portal-checkpoint-submit"
+          >
+            {busy ? "Checking…" : "Submit"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (phase.kind === "checkpoint-result") {
+    return (
+      <div className="space-y-4" data-testid="portal-checkpoint-result">
+        {phase.passed ? (
+          <>
+            <h3 className="font-serif text-xl text-emerald-900">Checkpoint cleared</h3>
+            <p className="text-sm text-stone-700">Great. Playback resumes from where you paused.</p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onResume}
+                data-testid="portal-checkpoint-resume"
+              >
+                Resume video
+              </button>
+            </div>
+          </>
+        ) : phase.exhausted ? (
+          <>
+            <h3 className="font-serif text-xl text-amber-900">No retries remaining</h3>
+            <p className="text-sm text-stone-700">
+              Please contact your manager. They can reset this checkpoint.
+            </p>
+          </>
+        ) : (
+          <>
+            <h3 className="font-serif text-xl text-amber-900">Not quite</h3>
+            <p className="text-sm text-stone-700">
+              Review the segment and try again. You have {phase.attemptsRemaining} attempt{phase.attemptsRemaining === 1 ? "" : "s"} left.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={onRetry}
+                data-testid="portal-checkpoint-retry"
+              >
+                Try again
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+  return null;
 }
