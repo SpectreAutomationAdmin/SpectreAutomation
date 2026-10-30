@@ -19,6 +19,7 @@ import {
   retireCourse,
   startNewDraft,
 } from "@/lib/hr/training/courses";
+import { remediateVideoFastStart } from "@/lib/hr/training/video";
 import {
   createQuestion,
   updateQuestion,
@@ -415,6 +416,28 @@ export async function updateCheckpointAction(
     if (isAppError(err)) {
       return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
     }
+    throw err;
+  }
+}
+
+// EP-TRAIN-3 Slice 3B (2026-10-30): legacy video fast-start remediation
+export async function optimizeVideoAction(
+  courseId: string,
+  versionId: string,
+): Promise<{ ok: true; state: string; previousSizeBytes: number; newSizeBytes: number | null; note: string } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    const result = await remediateVideoFastStart(principal, versionId);
+    revalidatePath(`/app/admin/people/safety-training/${courseId}/${versionId}`);
+    return {
+      ok: true,
+      state: result.state,
+      previousSizeBytes: result.previousSizeBytes,
+      newSizeBytes: result.newSizeBytes,
+      note: result.note,
+    };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
     throw err;
   }
 }

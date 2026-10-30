@@ -67,7 +67,12 @@ WORKDIR /app
 # env vars the PDF route consumes.
 RUN apk add --no-cache \
       libc6-compat openssl curl \
-      chromium nss freetype harfbuzz ca-certificates ttf-freefont
+      chromium nss freetype harfbuzz ca-certificates ttf-freefont \
+      ffmpeg
+# EP-TRAIN-3 Slice 3B (2026-10-30) -- ffmpeg bundled for MP4 fast-start
+# remuxing on video upload + legacy-video remediation.  Alpine's ffmpeg
+# package is ~10 MB and supports -movflags +faststart via -c copy (no
+# re-encode).
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV NODE_ENV=production

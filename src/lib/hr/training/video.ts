@@ -13,6 +13,7 @@ import { requirePermission, type Principal } from "../../rbac";
 import { withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { resolveDocumentStorage } from "../../documents/storage";
+import { remuxToFastStart } from "./video-remux";
 
 const VERSION_ENTITY = "TrainingCourseVersion";
 
@@ -73,13 +74,19 @@ export async function uploadTrainingVideo(
     }
   }
 
-  const sha256 = createHash("sha256").update(buf).digest("hex");
+  // EP-TRAIN-3 Slice 3B (2026-10-30) -- fast-start remux BEFORE
+  // storage so the browser can begin decode after a single Range
+  // request instead of downloading the full file to find moov.
+  // Falls back to the original bytes on ffmpeg absence / failure.
+  const remux = await remuxToFastStart(buf, mimeType);
+  const bytesToStore = remux.bytes;
+  const sha256 = createHash("sha256").update(bytesToStore).digest("hex");
   const storageKey = `clubs/${clubId}/training/${version.course.id}/${version.version}/${sha256}`;
   const storage = await resolveDocumentStorage({ clubId });
   // External storage write happens OUTSIDE the posting-guard tx — holding a
   // FOR UPDATE lock across a network upload would stall every other write
   // for the duration of the transfer.
-  await storage.put({ storageKey, body: buf, mimeType });
+  await storage.put({ storageKey, body: bytesToStore, mimeType });
 
   // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
   await withPostingGuard(
@@ -91,7 +98,7 @@ export async function uploadTrainingVideo(
       data: {
         videoStorageKey: storageKey,
         videoMimeType: mimeType,
-        videoSizeBytes: buf.length,
+        videoSizeBytes: bytesToStore.length,
         videoSha256: sha256,
         videoDurationSec: input.durationSec ?? null,
       },
@@ -103,9 +110,132 @@ export async function uploadTrainingVideo(
     entityType: VERSION_ENTITY,
     entityId: versionId,
     clubId,
-    after: { sha256, sizeBytes: buf.length, mimeType, durationSec: input.durationSec ?? null },
+    after: {
+      sha256,
+      sizeBytes: bytesToStore.length,
+      mimeType,
+      durationSec: input.durationSec ?? null,
+      faststart: remux.state,
+      faststartNote: remux.note,
+    },
   });
-  return { storageKey, sizeBytes: buf.length, sha256 };
+  return { storageKey, sizeBytes: bytesToStore.length, sha256 };
+}
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-3 Slice 3B: legacy-video remediation
+// ---------------------------------------------------------------------------
+
+/** Re-fast-starts an EXISTING TrainingCourseVersion's video. Preserves
+ *  the original storage object until the remuxed object is verified +
+ *  the DB row updated. Idempotent: if the current object is already
+ *  fast-start, returns {ok:true, state:"already-fast-start"}. Audited.
+ *  Permission: hr:training:write on the version's clubId. */
+export async function remediateVideoFastStart(
+  principal: Principal,
+  versionId: string,
+): Promise<{
+  ok: boolean;
+  state: string;
+  previousStorageKey: string;
+  newStorageKey: string | null;
+  previousSizeBytes: number;
+  newSizeBytes: number | null;
+  previousSha256: string | null;
+  newSha256: string | null;
+  note: string;
+}> {
+  const version = await prisma.trainingCourseVersion.findUnique({
+    where: { id: versionId },
+    include: { course: { select: { id: true, clubId: true } } },
+  });
+  if (!version) throw new NotFoundError(VERSION_ENTITY, versionId);
+  const clubId = version.course.clubId;
+  requirePermission(principal, clubId, "hr:training:write");
+  if (!version.videoStorageKey || !version.videoMimeType) {
+    throw new ConflictError("Version has no video attached.");
+  }
+
+  const storage = await resolveDocumentStorage({ clubId });
+  const original = await storage.get({ storageKey: version.videoStorageKey });
+  if (!original) throw new NotFoundError("TrainingVideoBytes", version.videoStorageKey);
+  const originalBuf = Buffer.isBuffer(original) ? original : Buffer.from(original);
+
+  const remux = await remuxToFastStart(originalBuf, version.videoMimeType);
+  if (remux.state === "already-fast-start") {
+    await audit(principal, {
+      action: "hr.training.video.optimize",
+      entityType: VERSION_ENTITY,
+      entityId: versionId,
+      clubId,
+      after: { state: "already-fast-start", storageKey: version.videoStorageKey },
+    });
+    return {
+      ok: true,
+      state: "already-fast-start",
+      previousStorageKey: version.videoStorageKey,
+      newStorageKey: version.videoStorageKey,
+      previousSizeBytes: originalBuf.length,
+      newSizeBytes: originalBuf.length,
+      previousSha256: version.videoSha256,
+      newSha256: version.videoSha256,
+      note: remux.note,
+    };
+  }
+  if (remux.state !== "remuxed") {
+    throw new ConflictError(`Could not remux video: ${remux.note}`);
+  }
+
+  const newSha256 = createHash("sha256").update(remux.bytes).digest("hex");
+  const newStorageKey = `clubs/${clubId}/training/${version.course.id}/${version.version}/${newSha256}`;
+  // Write the remuxed object under a new key (original key untouched
+  // until the DB row updates). This preserves the invariant that
+  // storageKey + sha256 are tied; the previous object survives
+  // for rollback.
+  await storage.put({ storageKey: newStorageKey, body: remux.bytes, mimeType: version.videoMimeType });
+
+  await withPostingGuard(
+    principal,
+    clubId,
+    "hr.training.video.optimize",
+    async (tx) => tx.trainingCourseVersion.update({
+      where: { id: versionId },
+      data: {
+        videoStorageKey: newStorageKey,
+        videoSizeBytes: remux.bytes.length,
+        videoSha256: newSha256,
+      },
+    }),
+    { entityType: VERSION_ENTITY, entityId: versionId },
+  );
+  await audit(principal, {
+    action: "hr.training.video.optimize",
+    entityType: VERSION_ENTITY,
+    entityId: versionId,
+    clubId,
+    before: {
+      storageKey: version.videoStorageKey,
+      sizeBytes: originalBuf.length,
+      sha256: version.videoSha256,
+    },
+    after: {
+      storageKey: newStorageKey,
+      sizeBytes: remux.bytes.length,
+      sha256: newSha256,
+      faststartNote: remux.note,
+    },
+  });
+  return {
+    ok: true,
+    state: "remuxed",
+    previousStorageKey: version.videoStorageKey,
+    newStorageKey,
+    previousSizeBytes: originalBuf.length,
+    newSizeBytes: remux.bytes.length,
+    previousSha256: version.videoSha256,
+    newSha256,
+    note: remux.note,
+  };
 }
 
 /** Read video bytes for streaming. Tenant-scoped by clubId. Called
