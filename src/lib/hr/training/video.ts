@@ -74,11 +74,25 @@ export async function uploadTrainingVideo(
     }
   }
 
-  // EP-TRAIN-3 Slice 3B (2026-10-30) -- fast-start remux BEFORE
+  // EP-TRAIN-3 Slice 3B/3C (2026-10-30) -- fast-start remux BEFORE
   // storage so the browser can begin decode after a single Range
   // request instead of downloading the full file to find moov.
-  // Falls back to the original bytes on ffmpeg absence / failure.
+  //
+  // Slice 3C fail-closed: if the file IS an MP4 that needs
+  // remuxing AND ffmpeg is unavailable OR the remux failed, REFUSE
+  // the upload rather than silently accepting a non-fast-start video.
+  // Non-MP4 videos (WebM, QuickTime containers that don't carry a
+  // moov) + already-fast-start MP4s + successfully-remuxed MP4s are
+  // all accepted. The manager's work is preserved client-side -- the
+  // browser retains the <File> object until they navigate away, so
+  // they can retry.
   const remux = await remuxToFastStart(buf, mimeType);
+  if (remux.state === "ffmpeg-missing" || remux.state === "remux-failed") {
+    throw new ConflictError(
+      `Video optimization failed (${remux.state}). ${remux.note}. ` +
+      `Please contact support if this persists; the file has NOT been saved.`,
+    );
+  }
   const bytesToStore = remux.bytes;
   const sha256 = createHash("sha256").update(bytesToStore).digest("hex");
   const storageKey = `clubs/${clubId}/training/${version.course.id}/${version.version}/${sha256}`;

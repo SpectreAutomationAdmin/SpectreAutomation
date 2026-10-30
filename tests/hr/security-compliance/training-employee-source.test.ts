@@ -138,12 +138,19 @@ describe("HR-2C B3 · employee-portal training source-contract", () => {
   });
 
   it("server actions strip untrusted fields from the submitted answer payload (defence in depth)", () => {
-    // Verify the shape-coercion step exists — the map body keeps only
-    // questionId + selectedOptionId, dropping any other fields the
-    // browser might have tried to slip in.
+    // EP-TRAIN-3 Slice 3 (2026-10-29) extended the shape to accept
+    // selectedOptionIds (array) alongside selectedOptionId (string) to
+    // support MULTI_ANSWER questions. The coercion still drops every
+    // other field (score, wasCorrect, passed, etc.) — only the three
+    // whitelisted keys survive.
     expect(actionsRaw).toMatch(
-      /questionId:\s*a\.questionId\s*,\s*selectedOptionId:\s*a\.selectedOptionId/,
+      /questionId:\s*a\.questionId\s*,\s*selectedOptionId:\s*typeof\s+a\.selectedOptionId\s*===\s*"string"/,
     );
+    expect(actionsRaw).toMatch(
+      /selectedOptionIds:\s*Array\.isArray\(\s*a\.selectedOptionIds\s*\)/,
+    );
+    // Negative pin: client-trusted fields are NEVER plumbed through.
+    expect(actionsRaw).not.toMatch(/\ba\.score\b|\ba\.passed\b|\ba\.wasCorrect\b/);
   });
 
   it("Home training reminder is derived from the canonical resolver, non-gating (§17)", () => {

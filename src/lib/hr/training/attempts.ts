@@ -566,7 +566,12 @@ export async function submitAttempt(
   const submittedMap = new Map(input.answers.map((a) => [a.questionId, a]));
 
   let correctCount = 0;
-  const responseRows: Array<{ questionId: string; selectedOptionId: string; wasCorrect: boolean }> = [];
+  const responseRows: Array<{
+    questionId: string;
+    selectedOptionId: string;
+    selectedOptionIdsJson: string | null;
+    wasCorrect: boolean;
+  }> = [];
   for (const q of relevantQuestions) {
     const answer = submittedMap.get(q.id);
     if (!answer) {
@@ -588,14 +593,20 @@ export async function submitAttempt(
       const chosenSet = new Set(chosen);
       const wasCorrect = chosenSet.size === correctSet.size && [...correctSet].every((id) => chosenSet.has(id));
       if (wasCorrect) correctCount++;
-      // EP-TRAIN-3 Slice 3B (2026-10-30): TrainingQuestionResponse has
-      // unique(attemptId, questionId); a multi-select question must
-      // produce ONE row per question.  Store the first selected option
-      // as the primary selectedOptionId; grading already used the full
-      // set in memory.  Full-set evidence is derivable from the
-      // courseVersionId + attempt timestamp if deeper audit needed.
-      const primary = chosen[0]!;
-      responseRows.push({ questionId: q.id, selectedOptionId: primary, wasCorrect });
+      // EP-TRAIN-3 Slice 3C (2026-10-30): single durable row per
+      // (attempt, question) per the unique constraint, BUT the full
+      // selected-option set is preserved in selectedOptionIdsJson so
+      // audit + employee-facing evidence can reconstruct every choice.
+      // selectedOptionId still carries the FIRST chosen option for
+      // backward-compatible display in legacy consumers.
+      const sortedChosen = [...chosen].sort();
+      const primary = sortedChosen[0]!;
+      responseRows.push({
+        questionId: q.id,
+        selectedOptionId: primary,
+        selectedOptionIdsJson: JSON.stringify(sortedChosen),
+        wasCorrect,
+      });
     } else {
       const chosen = answer.selectedOptionId ?? (answer.selectedOptionIds?.[0]);
       if (!chosen) {
@@ -607,7 +618,12 @@ export async function submitAttempt(
       const option = q.options.find((o) => o.id === chosen)!;
       const wasCorrect = option.isCorrect;
       if (wasCorrect) correctCount++;
-      responseRows.push({ questionId: q.id, selectedOptionId: chosen, wasCorrect });
+      responseRows.push({
+        questionId: q.id,
+        selectedOptionId: chosen,
+        selectedOptionIdsJson: null, // SINGLE_CHOICE / TRUE_FALSE -> null (legacy single-row)
+        wasCorrect,
+      });
     }
   }
   for (const [qId] of submittedMap) {
@@ -636,6 +652,7 @@ export async function submitAttempt(
           attemptId: attempt.id,
           questionId: r.questionId,
           selectedOptionId: r.selectedOptionId,
+          selectedOptionIdsJson: r.selectedOptionIdsJson,
           wasCorrect: r.wasCorrect,
         },
       });

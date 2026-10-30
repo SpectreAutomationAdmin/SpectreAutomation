@@ -13224,8 +13224,16 @@ model TrainingQuestionResponse {
   attempt          TrainingAttempt      @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   questionId       String
   question         TrainingQuestion     @relation(fields: [questionId], references: [id])
+  // Primary selected option. For SINGLE_CHOICE + TRUE_FALSE this IS
+  // the full answer; for MULTI_ANSWER it is the FIRST chosen option
+  // and `selectedOptionIdsJson` carries the complete set.
   selectedOptionId String
   selectedOption   TrainingAnswerOption @relation(fields: [selectedOptionId], references: [id])
+  // EP-TRAIN-3 Slice 3C (2026-10-30) -- additive, nullable. For
+  // MULTI_ANSWER questions, this is a JSON array of every optionId
+  // the employee selected (incl. the one echoed in selectedOptionId).
+  // NULL on legacy rows + on non-MULTI_ANSWER questions.
+  selectedOptionIdsJson String?
   wasCorrect       Boolean              @default(false)
   createdAt        DateTime             @default(now())
 

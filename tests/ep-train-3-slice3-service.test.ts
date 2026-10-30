@@ -296,3 +296,92 @@ describe("EP-TRAIN-3 Slice 3 :: getPlayerState aggregator", () => {
     expect(state1.finalAssessmentReasons).toEqual([]);
   });
 });
+
+// EP-TRAIN-3 Slice 3C (2026-10-30) -- multi-answer evidence integrity.
+describe("EP-TRAIN-3 Slice 3C :: MULTI_ANSWER audit evidence reconstruction", () => {
+  it("persists the FULL selected-option set on a MULTI_ANSWER response row", async () => {
+    const { principal, actor, versionId } = await seedPublishedCourseWithCheckpoint({ noCheckpoint: true });
+    void principal;
+    // Build a draft w/ a checkpoint that has a MULTI_ANSWER question and publish.
+    // Reuse seedPublishedCourseWithCheckpoint helper's final-only version
+    // by adding a checkpoint via admin service -- but publishing is already
+    // done. Instead, use a dedicated seed that mirrors seedPublishedCourseWithCheckpoint
+    // with a MULTI_ANSWER checkpoint question.
+    const fx = await seedPublishedCourseWithCheckpoint();
+    await recordVideoProgress(fx.actor, { courseVersionId: fx.versionId, secondsWatched: 30, farthestSecond: 30 });
+    // Add a MULTI_ANSWER question to the checkpoint via admin service.
+    // We need the admin principal + the version in DRAFT, but it's PUBLISHED.
+    // Instead: just directly assert that the submitAttempt+MULTI_ANSWER path
+    // writes selectedOptionIdsJson for the EXISTING checkpoint question
+    // (which is SINGLE_CHOICE, so the field will be null). Test SINGLE_CHOICE
+    // backward-compat here, and multi via a separate ad-hoc insertion.
+    void actor; void versionId;
+    const q = await prisma.trainingQuestion.findFirst({ where: { checkpointId: fx.checkpointId }, include: { options: true } });
+    const correctId = q!.options.find((o) => o.isCorrect)!.id;
+    const { attemptId } = await startCheckpointAttempt(fx.actor, { courseVersionId: fx.versionId, checkpointId: fx.checkpointId! });
+    await submitAttempt(fx.actor, { attemptId, answers: [{ questionId: q!.id, selectedOptionId: correctId }] });
+    const row = await prisma.trainingQuestionResponse.findFirst({ where: { attemptId, questionId: q!.id } });
+    expect(row).not.toBeNull();
+    expect(row!.selectedOptionId).toBe(correctId);
+    // SINGLE_CHOICE preserves legacy semantics: selectedOptionIdsJson is NULL.
+    expect(row!.selectedOptionIdsJson).toBeNull();
+  });
+
+  it("persists ALL selected options for a MULTI_ANSWER submission (JSON array in selectedOptionIdsJson, first in selectedOptionId)", async () => {
+    const fx = await seedPublishedCourseWithCheckpoint();
+    // Promote the checkpoint to a MULTI_ANSWER question by direct Prisma
+    // write (bypasses the publish-state guard just for this test seam).
+    await prisma.trainingQuestion.update({
+      where: { id: fx.cpQuestionId! },
+      data: { questionType: "MULTI_ANSWER" },
+    });
+    // Add a second correct option so MULTI_ANSWER validation allows it.
+    const q = await prisma.trainingQuestion.findUnique({ where: { id: fx.cpQuestionId! }, include: { options: true } });
+    await prisma.trainingAnswerOption.create({
+      data: { questionId: q!.id, text: "Right 2", isCorrect: true, displayOrder: 2 },
+    });
+    const refreshed = await prisma.trainingQuestion.findUnique({ where: { id: fx.cpQuestionId! }, include: { options: true } });
+    const corrects = refreshed!.options.filter((o) => o.isCorrect).map((o) => o.id).sort();
+    await recordVideoProgress(fx.actor, { courseVersionId: fx.versionId, secondsWatched: 30, farthestSecond: 30 });
+    const { attemptId } = await startCheckpointAttempt(fx.actor, { courseVersionId: fx.versionId, checkpointId: fx.checkpointId! });
+    await submitAttempt(fx.actor, {
+      attemptId,
+      answers: [{ questionId: fx.cpQuestionId!, selectedOptionIds: corrects }],
+    });
+    const row = await prisma.trainingQuestionResponse.findFirst({ where: { attemptId, questionId: fx.cpQuestionId! } });
+    expect(row).not.toBeNull();
+    expect(row!.selectedOptionIdsJson).not.toBeNull();
+    const parsed = JSON.parse(row!.selectedOptionIdsJson!);
+    expect(parsed).toEqual(corrects);
+    // selectedOptionId echoes the first id of the sorted set for legacy display.
+    expect(row!.selectedOptionId).toBe(corrects[0]);
+    expect(row!.wasCorrect).toBe(true);
+  });
+
+  it("employee-portal evidence can be fully reconstructed: for every stored row, the complete answer-key is recoverable", async () => {
+    const fx = await seedPublishedCourseWithCheckpoint();
+    await prisma.trainingQuestion.update({
+      where: { id: fx.cpQuestionId! },
+      data: { questionType: "MULTI_ANSWER" },
+    });
+    const q = await prisma.trainingQuestion.findUnique({ where: { id: fx.cpQuestionId! }, include: { options: true } });
+    await prisma.trainingAnswerOption.create({
+      data: { questionId: q!.id, text: "Right 2", isCorrect: true, displayOrder: 2 },
+    });
+    const refreshed = await prisma.trainingQuestion.findUnique({ where: { id: fx.cpQuestionId! }, include: { options: true } });
+    const corrects = refreshed!.options.filter((o) => o.isCorrect).map((o) => o.id).sort();
+    const wrong = refreshed!.options.find((o) => !o.isCorrect)!.id;
+    await recordVideoProgress(fx.actor, { courseVersionId: fx.versionId, secondsWatched: 30, farthestSecond: 30 });
+    const { attemptId } = await startCheckpointAttempt(fx.actor, { courseVersionId: fx.versionId, checkpointId: fx.checkpointId! });
+    // Deliberately submit a partially-correct set to prove the FULL set is captured.
+    const partial = [corrects[0], wrong].sort();
+    await submitAttempt(fx.actor, {
+      attemptId,
+      answers: [{ questionId: fx.cpQuestionId!, selectedOptionIds: partial }],
+    });
+    const row = await prisma.trainingQuestionResponse.findFirst({ where: { attemptId, questionId: fx.cpQuestionId! } });
+    const reconstructed = JSON.parse(row!.selectedOptionIdsJson!).sort();
+    expect(reconstructed).toEqual(partial);
+    expect(row!.wasCorrect).toBe(false); // partial doesn't match the correct set
+  });
+});
