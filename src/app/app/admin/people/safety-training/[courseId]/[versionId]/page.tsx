@@ -283,7 +283,29 @@ export default async function VersionEditorPage({
         />
       </section>
 
-      {version.videoStorageKey && (
+      {version.videoStorageKey && (() => {
+        // EP-TRAIN-4A §2: build the per-checkpoint question map once so
+        // TimelineEditor can render each checkpoint's questions inside
+        // the consolidated yellow editor.
+        const questionsByCheckpointId: Record<string, Array<{
+          id: string;
+          prompt: string;
+          active: boolean;
+          questionType: TrainingQuestionType;
+          options: Array<{ id: string; text: string; isCorrect: boolean }>;
+        }>> = {};
+        for (const q of version.questions) {
+          if (!q.checkpointId) continue;
+          const row = {
+            id: q.id,
+            prompt: q.prompt,
+            active: q.active,
+            questionType: ((q.questionType as string) || "SINGLE_CHOICE") as TrainingQuestionType,
+            options: q.options.map((o) => ({ id: o.id, text: o.text, isCorrect: o.isCorrect })),
+          };
+          (questionsByCheckpointId[q.checkpointId] ??= []).push(row);
+        }
+        return (
         <section className="card card-body space-y-4 mt-8" data-testid="training-editor-checkpoints-section">
           <div className="flex items-baseline justify-between">
             <h2 className="section-title text-lg">Interactive checkpoints</h2>
@@ -296,61 +318,29 @@ export default async function VersionEditorPage({
             questions. Required checkpoints block playback until the employee clears
             them.
           </p>
+          {/* EP-TRAIN-4A §2 (2026-10-30): per-checkpoint questions live
+              inside the TimelineEditor's consolidated yellow editor.
+              The previous duplicate <details> list below "All
+              checkpoints" has been removed. */}
           <TimelineEditor
             courseId={params.courseId}
             versionId={version.id}
             videoUrl={`/api/hr/training/versions/${version.id}/video`}
             initialDurationSec={version.videoDurationSec}
             checkpoints={checkpoints}
+            questionsByCheckpointId={questionsByCheckpointId}
+            categorySuggestions={[...TRAINING_COURSE_CATEGORIES]}
             readOnly={readOnly}
             createAction={createCheckpointAction}
             updateAction={updateCheckpointAction}
             deleteAction={deleteCheckpointAction}
+            createQuestionAction={createQuestionAction}
+            updateQuestionAction={updateQuestionAction}
+            deleteQuestionAction={deleteQuestionAction}
           />
-          {checkpoints.length > 0 && (
-            <div className="space-y-4 pt-2 border-t border-stone-200">
-              {checkpoints.map((cp) => {
-                const cpQuestions = version.questions
-                  .filter((q) => q.checkpointId === cp.id)
-                  .map((q) => ({
-                    id: q.id,
-                    prompt: q.prompt,
-                    active: q.active,
-                    questionType: ((q.questionType as string) || "SINGLE_CHOICE") as TrainingQuestionType,
-                    options: q.options.map((o) => ({ id: o.id, text: o.text, isCorrect: o.isCorrect })),
-                  }));
-                return (
-                  <details key={cp.id} className="rounded-md border border-stone-200 bg-white" data-testid={`training-checkpoint-${cp.id}-questions`}>
-                    <summary className="cursor-pointer px-4 py-3 text-sm font-medium flex items-baseline justify-between gap-3">
-                      <span>
-                        <span className="font-mono text-xs text-stone-500 mr-2">@{cp.atSecond}s</span>
-                        {cp.label ?? <span className="text-stone-500">Unlabelled checkpoint</span>}
-                      </span>
-                      <span className="text-xs text-stone-500">
-                        {cpQuestions.length} question{cpQuestions.length === 1 ? "" : "s"}
-                      </span>
-                    </summary>
-                    <div className="px-4 pb-4">
-                      <QuizEditor
-                        courseId={params.courseId}
-                        versionId={version.id}
-                        checkpointId={cp.id}
-                        questions={cpQuestions}
-                        disabled={readOnly}
-                        categorySuggestions={[...TRAINING_COURSE_CATEGORIES]}
-                        createAction={createQuestionAction}
-                        updateAction={updateQuestionAction}
-                        deleteAction={deleteQuestionAction}
-                        surfaceLabel="checkpoint"
-                      />
-                    </div>
-                  </details>
-                );
-              })}
-            </div>
-          )}
         </section>
-      )}
+        );
+      })()}
 
       <section className="card card-body space-y-4 mt-8" data-testid="training-editor-quiz-section">
         <h2 className="section-title text-lg">Final assessment</h2>

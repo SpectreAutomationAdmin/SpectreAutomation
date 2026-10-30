@@ -1,28 +1,25 @@
 "use client";
 
 // EP-TRAIN-3 Slice 2 (2026-10-29) -- interactive video timeline editor.
+// EP-TRAIN-4A §2 + §3 (2026-10-30) -- consolidated per-checkpoint editor
+// (settings + questions in one yellow surface) and collision-free Add
+// checkpoint timestamp selection.
 //
 // The authoring experience that lets a manager:
 //   - play / pause / scrub the training video
-//   - mark the current playhead moment as a knowledge checkpoint
+//   - add a knowledge checkpoint at the current playhead (with
+//     automatic conflict resolution against the 1-second minimum
+//     separation server-side rule)
 //   - see every checkpoint along the timeline as a vertical marker
-//   - click a marker to edit its label / required / retries / position
+//   - click a marker to open its consolidated editor (label / timestamp
+//     / required / retries / question editor)
 //   - delete a marker (with a confirm dialog)
 //
 // Fully disabled when `readOnly` is set (published / retired versions).
-//
-// Design notes:
-//   - The video source is the existing streaming endpoint; the <video>
-//     tag preloads metadata so the duration is known immediately for
-//     marker positioning.
-//   - Timestamps are rounded to whole seconds (matches the server-side
-//     1s minimum spacing invariant).
-//   - All mutations round-trip through server actions; local optimistic
-//     state is NOT used so the authoring UI always reflects persisted
-//     reality.
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import QuizEditor, { type TrainingQuestionType, type QuizQuestion } from "./QuizEditor";
 
 export interface CheckpointSummary {
   id: string;
@@ -34,12 +31,21 @@ export interface CheckpointSummary {
   questionCount: number;
 }
 
+// EP-TRAIN-4A §3: must match CHECKPOINT_MIN_SPACING_SECONDS in
+// src/lib/hr/training/checkpoints.ts.  Client-side collision resolver
+// uses the same invariant so an add-click never surfaces a
+// spacing-validation error from the server.
+const MIN_SPACING_SECONDS = 1;
+
 interface Props {
   courseId: string;
   versionId: string;
   videoUrl: string;
   initialDurationSec: number | null;
   checkpoints: CheckpointSummary[];
+  /** EP-TRAIN-4A §2: per-checkpoint question map, keyed by checkpoint id. */
+  questionsByCheckpointId: Record<string, QuizQuestion[]>;
+  categorySuggestions: string[];
   readOnly?: boolean;
   createAction: (
     courseId: string,
@@ -58,6 +64,9 @@ interface Props {
     checkpointId: string,
     opts?: { deleteBoundQuestions?: boolean },
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  createQuestionAction: (courseId: string, versionId: string, formData: FormData) => Promise<void>;
+  updateQuestionAction: (courseId: string, versionId: string, questionId: string, formData: FormData) => Promise<void>;
+  deleteQuestionAction: (courseId: string, versionId: string, questionId: string) => Promise<void>;
 }
 
 function formatSeconds(total: number): string {
@@ -67,16 +76,74 @@ function formatSeconds(total: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/**
+ * EP-TRAIN-4A §3 — collision-free timestamp picker.
+ *
+ * Finds the nearest valid second-integer timestamp given:
+ *   - the preferred position (rounded playhead)
+ *   - the sorted list of occupied timestamps
+ *   - the min-1s separation rule
+ *   - the video duration (upper bound)
+ *
+ * Algorithm (deterministic):
+ *   1. Preferred position = `clamp(round(playhead), 0, floor(duration))`.
+ *   2. If the preferred position is valid, return it.
+ *   3. Otherwise, scan forward from `preferred + 1` up to `floor(duration)`;
+ *      return the first valid position.
+ *   4. If still none, scan backward from `preferred - 1` down to 0;
+ *      return the first valid position.
+ *   5. If no valid position exists anywhere in [0, floor(duration)],
+ *      return null.
+ *
+ * A position is valid iff it is in [0, floor(duration)] AND is at least
+ * `MIN_SPACING_SECONDS` away from every occupied timestamp.
+ *
+ * Exported for unit testing.
+ */
+export function findNextCheckpointPosition(
+  playheadSeconds: number,
+  occupiedSeconds: number[],
+  durationSec: number | null,
+): number | null {
+  const upperBound = durationSec && durationSec > 0 ? Math.floor(durationSec) : null;
+  const occupiedSet = new Set<number>();
+  for (const s of occupiedSeconds) if (Number.isFinite(s)) occupiedSet.add(Math.round(s));
+  const isValid = (t: number): boolean => {
+    if (t < 0) return false;
+    if (upperBound !== null && t > upperBound) return false;
+    for (const s of occupiedSet) {
+      if (Math.abs(s - t) < MIN_SPACING_SECONDS) return false;
+    }
+    return true;
+  };
+  const rawPreferred = Number.isFinite(playheadSeconds) ? Math.round(playheadSeconds) : 0;
+  const preferred = Math.max(0, upperBound === null ? rawPreferred : Math.min(rawPreferred, upperBound));
+  if (isValid(preferred)) return preferred;
+  const maxScan = upperBound !== null ? upperBound : preferred + occupiedSet.size + MIN_SPACING_SECONDS;
+  for (let t = preferred + 1; t <= maxScan; t++) {
+    if (isValid(t)) return t;
+  }
+  for (let t = preferred - 1; t >= 0; t--) {
+    if (isValid(t)) return t;
+  }
+  return null;
+}
+
 export default function TimelineEditor({
   courseId,
   versionId,
   videoUrl,
   initialDurationSec,
   checkpoints,
+  questionsByCheckpointId,
+  categorySuggestions,
   readOnly,
   createAction,
   updateAction,
   deleteAction,
+  createQuestionAction,
+  updateQuestionAction,
+  deleteQuestionAction,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -112,9 +179,23 @@ export default function TimelineEditor({
   async function handleAddCheckpoint() {
     if (readOnly || pending) return;
     clearError();
-    const atSecond = Math.round(videoRef.current?.currentTime ?? 0);
+    // EP-TRAIN-4A §3 (2026-10-30): compute a collision-free timestamp
+    // before calling the server so the "+ Add checkpoint" action never
+    // surfaces a spacing-validation error.
+    const occupied = sortedCheckpoints.map((c) => c.atSecond);
+    const target = findNextCheckpointPosition(
+      videoRef.current?.currentTime ?? 0,
+      occupied,
+      duration > 0 ? duration : null,
+    );
+    if (target === null) {
+      setError(
+        "The timeline has no available position for a new checkpoint. Lengthen the video or remove a checkpoint first.",
+      );
+      return;
+    }
     const fd = new FormData();
-    fd.set("atSecond", String(atSecond));
+    fd.set("atSecond", String(target));
     fd.set("label", "");
     fd.set("requiredToProceed", "true");
     startTransition(async () => {
@@ -281,13 +362,20 @@ export default function TimelineEditor({
       {editingCheckpoint && (
         <CheckpointEditorPanel
           key={editingCheckpoint.id}
+          courseId={courseId}
+          versionId={versionId}
           checkpoint={editingCheckpoint}
+          questions={questionsByCheckpointId[editingCheckpoint.id] ?? []}
+          categorySuggestions={categorySuggestions}
           duration={duration}
           disabled={!!readOnly || pending}
           onJumpTo={handleJumpTo}
           onUpdate={(patch) => handleUpdate(editingCheckpoint.id, patch)}
           onDelete={() => handleDelete(editingCheckpoint.id)}
           onClose={() => setEditingId(null)}
+          createQuestionAction={createQuestionAction}
+          updateQuestionAction={updateQuestionAction}
+          deleteQuestionAction={deleteQuestionAction}
         />
       )}
 
@@ -343,15 +431,26 @@ export default function TimelineEditor({
 }
 
 function CheckpointEditorPanel({
+  courseId,
+  versionId,
   checkpoint,
+  questions,
+  categorySuggestions,
   duration,
   disabled,
   onJumpTo,
   onUpdate,
   onDelete,
   onClose,
+  createQuestionAction,
+  updateQuestionAction,
+  deleteQuestionAction,
 }: {
+  courseId: string;
+  versionId: string;
   checkpoint: CheckpointSummary;
+  questions: QuizQuestion[];
+  categorySuggestions: string[];
   duration: number;
   disabled: boolean;
   onJumpTo: (seconds: number) => void;
@@ -363,6 +462,9 @@ function CheckpointEditorPanel({
   }>) => void;
   onDelete: () => void;
   onClose: () => void;
+  createQuestionAction: (courseId: string, versionId: string, formData: FormData) => Promise<void>;
+  updateQuestionAction: (courseId: string, versionId: string, questionId: string, formData: FormData) => Promise<void>;
+  deleteQuestionAction: (courseId: string, versionId: string, questionId: string) => Promise<void>;
 }) {
   const [label, setLabel] = useState(checkpoint.label ?? "");
   const [atSecond, setAtSecond] = useState(checkpoint.atSecond);
@@ -391,7 +493,7 @@ function CheckpointEditorPanel({
 
   return (
     <div
-      className="rounded-md border-2 border-amber-300 bg-amber-50/60 p-4 space-y-3"
+      className="rounded-md border-2 border-amber-300 bg-amber-50/60 p-4 space-y-5"
       data-testid={`training-timeline-editor-${checkpoint.id}`}
     >
       <div className="flex items-baseline justify-between gap-3">
@@ -508,6 +610,30 @@ function CheckpointEditorPanel({
           Save changes
         </button>
       </div>
+
+      {/* EP-TRAIN-4A §2 (2026-10-30): questions attached to this
+          checkpoint are now authored INSIDE the same yellow surface
+          as the settings.  The duplicate per-checkpoint questions
+          section below "All checkpoints" has been removed. */}
+      <div className="pt-4 border-t border-amber-300/70">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-amber-800 mb-3" data-testid={`training-timeline-editor-${checkpoint.id}-questions-heading`}>
+          Checkpoint questions ({questions.length})
+        </div>
+        <QuizEditor
+          courseId={courseId}
+          versionId={versionId}
+          checkpointId={checkpoint.id}
+          questions={questions}
+          disabled={disabled}
+          categorySuggestions={categorySuggestions}
+          createAction={createQuestionAction}
+          updateAction={updateQuestionAction}
+          deleteAction={deleteQuestionAction}
+          surfaceLabel="checkpoint"
+        />
+      </div>
     </div>
   );
 }
+
+export type { TrainingQuestionType, QuizQuestion };
