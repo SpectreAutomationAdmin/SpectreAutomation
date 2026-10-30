@@ -54,14 +54,20 @@ run().catch((e) => { console.error("ERR", e); process.exit(1); });
 `;
 
 function resetState() {
+  const flyctl = "C:/Users/cturcato/.fly/bin/flyctl.exe";
+  const b64 = Buffer.from(RESET_SCRIPT).toString("base64");
   try {
-    const flyctl = "C:/Users/cturcato/.fly/bin/flyctl.exe";
-    const b64 = Buffer.from(RESET_SCRIPT).toString("base64");
-    execSync(
+    const out = execSync(
       `"${flyctl}" ssh console --app spectre-staging -C "/bin/sh -c 'echo ${b64} | base64 -d > /tmp/r.mjs && cd /app && node /tmp/r.mjs && rm /tmp/r.mjs'"`,
-      { stdio: "ignore", timeout: 60_000 },
+      { encoding: "utf8", timeout: 120_000 },
     );
-  } catch (e) { /* non-fatal */ }
+    // eslint-disable-next-line no-console
+    console.log("[resetState]", (out || "").trim().slice(-200));
+  } catch (e: any) {
+    // eslint-disable-next-line no-console
+    console.log("[resetState] FAILED:", e.message?.slice(0, 300) ?? String(e).slice(0, 300));
+    throw e;  // fail loudly - stale state causes downstream flakes
+  }
 }
 
 async function loginPortal(page: Page): Promise<void> {
@@ -147,27 +153,39 @@ async function playNaturallyUntilCheckpoint(page: Page, playbackRate = 2): Promi
 async function answerCheckpoint1(page: Page, correct: boolean): Promise<void> {
   const panel = page.getByTestId("portal-checkpoint-answering").first();
   await expect(panel).toBeVisible();
+  await expect
+    .poll(async () => panel.locator('input:checked').count(), { timeout: 5000 })
+    .toBe(0);
+  // Click the native input directly (not the label span). Playwright
+  // .check() dispatches a click to the input element itself, which:
+  //   (a) fires the input's native onChange — React setState via
+  //       the input's own `onChange={toggleOption}` prop; AND
+  //   (b) bubbles up to the parent <label> where my onClick handler
+  //       sees e.target.tagName === "INPUT" and no-ops.
+  // So state updates once, via the input's own onChange.
   if (correct) {
-    await panel.getByText("Orange", { exact: true }).first().click();
-    await panel.getByText("Hard hat", { exact: true }).first().click();
-    await panel.getByText("Safety goggles", { exact: true }).first().click();
-    await panel.getByText("True", { exact: true }).first().click();
+    await panel.getByRole("radio", { name: "Orange", exact: true }).check();
+    await panel.getByRole("checkbox", { name: "Hard hat", exact: true }).check();
+    await panel.getByRole("checkbox", { name: "Safety goggles", exact: true }).check();
+    await panel.getByRole("radio", { name: "True", exact: true }).check();
   } else {
-    await panel.getByText("Green", { exact: true }).first().click();
-    await panel.getByText("Business suit", { exact: true }).first().click();
-    await panel.getByText("False", { exact: true }).first().click();
+    await panel.getByRole("radio", { name: "Green", exact: true }).check();
+    await panel.getByRole("checkbox", { name: "Business suit", exact: true }).check();
+    await panel.getByRole("radio", { name: "False", exact: true }).check();
   }
+  const expectedChecked = correct ? 4 : 3;
+  await expect
+    .poll(async () => await panel.locator('input:checked').count(), { timeout: 10_000 })
+    .toBe(expectedChecked);
   await page.getByTestId("portal-checkpoint-submit").first().click();
 }
 
 async function answerCheckpoint2(page: Page, correct: boolean): Promise<void> {
   const panel = page.getByTestId("portal-checkpoint-answering").first();
   await expect(panel).toBeVisible();
-  if (correct) {
-    await panel.getByText("Your supervisor immediately", { exact: true }).first().click();
-  } else {
-    await panel.getByText("Nobody", { exact: true }).first().click();
-  }
+  const name = correct ? "Your supervisor immediately" : "Nobody";
+  await panel.getByText(name, { exact: true }).first().click();
+  await expect(panel.getByRole("radio", { name, exact: true })).toBeChecked();
   await page.getByTestId("portal-checkpoint-submit").first().click();
 }
 
