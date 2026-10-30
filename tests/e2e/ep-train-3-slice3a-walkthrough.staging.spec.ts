@@ -78,11 +78,27 @@ async function loginPortal(page: Page): Promise<void> {
 
 async function openSliceCourse(page: Page): Promise<void> {
   await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
-  const link = page.locator('a:has-text("Slice 3 Interactive Playback")').first();
-  await expect(link).toBeVisible();
+  // Match the canonical course-card testid pattern + visible filter.
+  // Both desktop + mobile shells render identical markup; `:visible`
+  // picks the active shell's instance per the current viewport.
+  const link = page
+    .locator('[data-testid^="portal-safety-training-course-"]')
+    .filter({ hasText: "Slice 3 Interactive Playback" })
+    .locator('visible=true')
+    .first();
+  // Fallback: if `:visible` CSS selector isn't supported in this
+  // Playwright version, grab the first matching card + rely on it
+  // being the visible one. The desktop shell is always first in DOM.
+  const final = (await link.count()) > 0
+    ? link
+    : page
+        .locator('[data-testid^="portal-safety-training-course-"]')
+        .filter({ hasText: "Slice 3 Interactive Playback" })
+        .first();
+  await expect(final).toBeVisible({ timeout: 15_000 });
   await Promise.all([
     page.waitForURL(/\/employee\/safety-training\/[^/]+/, { timeout: 15_000 }),
-    link.click(),
+    final.click(),
   ]);
 }
 
@@ -99,9 +115,7 @@ async function waitForVideoPlayable(page: Page): Promise<void> {
 
 async function playUntilCheckpoint(page: Page, atSecond: number): Promise<void> {
   await waitForVideoPlayable(page);
-  // Nudge ONLY the visible video (desktop shell on desktop viewport,
-  // mobile shell on mobile viewport). Avoiding stale/hidden instances
-  // prevents cross-shell React state from confusing overlay assertions.
+  // Nudge ONLY the visible video.
   await page.evaluate(async ({ t }) => {
     const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
     const v = videos.find((el) => el.offsetParent !== null);
@@ -110,20 +124,24 @@ async function playUntilCheckpoint(page: Page, atSecond: number): Promise<void> 
     v.currentTime = t;
     try { await v.play(); } catch { /* ignore */ }
   }, { t: atSecond });
-  // Pick the overlay inside the VISIBLE shell only.
-  await expect(scopeToVisibleShell(page).getByTestId("portal-checkpoint-overlay")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-testid="portal-checkpoint-overlay"]:visible').first()).toBeVisible({ timeout: 30_000 });
 }
 
-function scopeToVisibleShell(page: Page) {
-  // Prefer the desktop shell when visible; fall back to mobile.
-  const desktop = page.getByTestId("portal-desktop-shell");
-  const mobile = page.getByTestId("portal-mobile-main");
-  // Playwright's locator.or() returns the first matching element, which
-  // for strict mode we scope by picking whichever is visible via
-  // offsetParent-based filter.  Simpler: just pick whichever locator
-  // has a visible overlay descendant.
-  return desktop; // on 1440/1920 viewport, desktop is visible; on 390, mobile is -- but mobile-main doesn't exist on desktop viewports anyway (both are in DOM but only one visible)
-  void mobile;
+/** Play the video naturally (no seek) at the given rate from its
+ *  current position, waiting until a checkpoint overlay opens. Used by
+ *  §10-14 which needs real secondsWatched accumulation to satisfy the
+ *  90% threshold. */
+async function playNaturallyUntilCheckpoint(page: Page, playbackRate = 2): Promise<void> {
+  await waitForVideoPlayable(page);
+  await page.evaluate(async ({ rate }) => {
+    const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+    const v = videos.find((el) => el.offsetParent !== null);
+    if (!v) return;
+    v.muted = true;
+    v.playbackRate = rate;
+    try { await v.play(); } catch { /* ignore */ }
+  }, { rate: playbackRate });
+  await expect(page.locator('[data-testid="portal-checkpoint-overlay"]:visible').first()).toBeVisible({ timeout: 60_000 });
 }
 
 async function answerCheckpoint1(page: Page, correct: boolean): Promise<void> {
@@ -294,77 +312,117 @@ test.describe("EP-TRAIN-3 Slice 3A :: full 12-scenario employee walkthrough", ()
     await page.screenshot({ path: path.join(outDir, "07-retry-exhausted.png"), fullPage: true });
   });
 
-  test("§10-12: full happy path -> both checkpoints -> final assessment -> completion", async ({ browser }) => {
+  test("§10-14: full journey -> both checkpoints -> watch to 90% -> final assessment fail/retake/pass -> completion persists on refresh", async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await ctx.newPage();
     await loginPortal(page);
     await openSliceCourse(page);
-    await playUntilCheckpoint(page, 15);
+    // Natural playback from 0 at 2x. Checkpoint 1 fires around 15s
+    // (~7.5s wall-clock), secondsWatched accumulates ~15s via the
+    // client's MAX_DT_PER_TICK=2 guarded timeupdate.
+    await playNaturallyUntilCheckpoint(page, 2);
     await answerCheckpoint1(page, true);
     await expect(page.getByTestId("portal-checkpoint-resume").first()).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("portal-checkpoint-resume").first().click();
-    await playUntilCheckpoint(page, 30);
+    // Natural continue to cp2 at 30s. Another ~7.5s wall-clock + 15s
+    // watch accumulation. Total secondsWatched ~30s.
+    await playNaturallyUntilCheckpoint(page, 2);
     await answerCheckpoint2(page, true);
     await expect(page.getByTestId("portal-checkpoint-resume").first()).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("portal-checkpoint-resume").first().click();
-    // Watch to >=90% to satisfy video threshold.  Video is 41.5s; 90% = 37.4s.
-    // Also wait for the progress POST to the server to complete.
-    const [progressResponse] = await Promise.all([
-      page.waitForResponse(
-        (r) => r.url().includes("/_actions") || r.url().includes("safety-training"),
-        { timeout: 20_000 },
-      ).catch(() => null),
-      page.evaluate(async () => {
-        const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
-        const v = videos.find((el) => el.offsetParent !== null);
-        if (!v) return;
-        v.muted = true;
-        v.currentTime = 40;
-        try { await v.play(); } catch { /* ignore */ }
-      }),
-    ]);
-    void progressResponse;
-    // Give additional time for the pause-flush progress to persist.
-    await page.waitForTimeout(3_000);
-    // Full navigation to pick up the fresh getPlayerState with
-    // finalAssessmentUnlocked=true.
+    // Final segment: play from 30 to end naturally. Accumulates
+    // another ~11s of watch time (41 total = 100%). Video ends ->
+    // onEnded force-flushes progress POST.
+    await page.evaluate(async () => {
+      const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+      const v = videos.find((el) => el.offsetParent !== null);
+      if (!v) return;
+      v.muted = true;
+      v.playbackRate = 2;
+      try { await v.play(); } catch { /* ignore */ }
+    });
+    await page.waitForFunction(() => {
+      const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+      const v = videos.find((el) => el.offsetParent !== null);
+      return !!v && v.ended;
+    }, undefined, { timeout: 60_000 });
+    // Flush pattern: pause -> wait for in-flight guard to clear ->
+    // pagehide dispatch -> wait for final POST. sendProgress has an
+    // inFlightRef that drops concurrent sends; we have to wait for
+    // the current flight to resolve + trigger a fresh force-send.
+    await page.evaluate(async () => {
+      const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+      const v = videos.find((el) => el.offsetParent !== null);
+      if (v && !v.paused) v.pause();
+      await new Promise((r) => setTimeout(r, 2500));
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await page.waitForTimeout(5_000);
+    // Full navigation picks up fresh getPlayerState w/ unlocked final.
     await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
     await openSliceCourse(page);
     const startBtn = page.getByTestId("portal-course-start-attempt").first();
     await expect(startBtn).toBeVisible({ timeout: 30_000 });
+    // --- §11 FAIL the final assessment first ---
     await startBtn.click();
-    // Answer final assessment correctly.
-    const final = page.getByTestId("portal-course-quiz-answering").first();
-    await expect(final).toBeVisible();
-    await final.getByText("Risk assessment", { exact: true }).first().click();
-    await final.getByText("True", { exact: true }).first().click();
+    const final1 = page.getByTestId("portal-course-quiz-answering").first();
+    await expect(final1).toBeVisible();
+    await final1.getByText("Doing nothing", { exact: true }).first().click();
+    await final1.getByText("False", { exact: true }).first().click();
+    await page.getByTestId("portal-course-submit-attempt").first().click();
+    await expect(page.getByTestId("portal-course-quiz-failed").first()).toBeVisible({ timeout: 15_000 });
+    await page.screenshot({ path: path.join(outDir, "08-final-failed.png"), fullPage: true });
+    // --- §12 Retake + PASS ---
+    await page.getByTestId("portal-course-quiz-retake").first().click();
+    const startBtn2 = page.getByTestId("portal-course-start-attempt").first();
+    await expect(startBtn2).toBeVisible({ timeout: 10_000 });
+    await startBtn2.click();
+    const final2 = page.getByTestId("portal-course-quiz-answering").first();
+    await expect(final2).toBeVisible();
+    await final2.getByText("Risk assessment", { exact: true }).first().click();
+    await final2.getByText("True", { exact: true }).first().click();
     await page.getByTestId("portal-course-submit-attempt").first().click();
     await expect(page.getByTestId("portal-course-quiz-passed").first()).toBeVisible({ timeout: 15_000 });
-    await page.screenshot({ path: path.join(outDir, "08-final-assessment-passed.png"), fullPage: true });
+    await page.screenshot({ path: path.join(outDir, "09-final-passed.png"), fullPage: true });
+    // --- §14 Completion persists on refresh ---
+    await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
+    await openSliceCourse(page);
+    await expect(page.getByTestId("portal-course-completed-banner").first()).toBeVisible({ timeout: 15_000 });
+    await page.screenshot({ path: path.join(outDir, "10-completion-persists.png"), fullPage: true });
   });
 
-  for (const [label, w, h] of [["desktop-1440", 1440, 900], ["desktop-1920", 1920, 1080], ["mobile-390", 390, 844]] as const) {
+  for (const [label, w, h, shellTestId] of [
+    ["desktop-1440", 1440, 900, "portal-desktop-shell"],
+    ["desktop-1920", 1920, 1080, "portal-desktop-shell"],
+    ["mobile-390", 390, 844, "portal-mobile-shell"],
+  ] as const) {
     test(`checkpoint overlay screenshot ${label}`, async ({ browser }) => {
       const ctx = await browser.newContext({ viewport: { width: w, height: h } });
       const page = await ctx.newPage();
       await loginPortal(page);
       await openSliceCourse(page);
-      await waitForVideoPlayable(page);
-      // Nudge every video so both the desktop + mobile shells get past
-      // the trigger. On the active viewport, only the visible one's
-      // overlay will render into layout, which is what the screenshot
-      // captures.
-      await page.evaluate(async () => {
-        const videos = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
-        for (const v of videos) {
-          v.muted = true;
-          v.currentTime = 15;
-          try { await v.play(); } catch { /* ignore */ }
-        }
-      });
-      // Wait for the overlay to render in either shell (whichever is
-      // visible will be the one picked by the full-page screenshot).
-      await expect(page.locator('[data-testid="portal-checkpoint-overlay"]:visible').first()).toBeVisible({ timeout: 30_000 });
+      // EP-TRAIN-3 Slice 3-final (2026-10-30): scope every selector to
+      // the ACTIVE shell for this viewport.  Both shells render in the
+      // DOM; the inactive one has display:none via Tailwind.  Scoping
+      // ensures we drive the visible shell's player instance only.
+      const shell = page.getByTestId(shellTestId);
+      await expect(shell).toBeVisible();
+      await page.waitForFunction(({ shellId }) => {
+        const scope = document.querySelector(`[data-testid="${shellId}"]`);
+        const v = scope?.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
+        return !!v && v.readyState >= 1 && Number.isFinite(v.duration);
+      }, { shellId: shellTestId }, { timeout: 30_000 });
+      await page.evaluate(async ({ shellId }) => {
+        const scope = document.querySelector(`[data-testid="${shellId}"]`);
+        const v = scope?.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
+        if (!v) return;
+        v.muted = true;
+        v.currentTime = 15;
+        try { await v.play(); } catch { /* ignore */ }
+      }, { shellId: shellTestId });
+      await expect(shell.getByTestId("portal-checkpoint-overlay")).toBeVisible({ timeout: 30_000 });
       await page.screenshot({ path: path.join(outDir, `checkpoint-${label}.png`), fullPage: true });
     });
   }
