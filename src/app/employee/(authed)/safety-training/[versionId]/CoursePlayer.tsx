@@ -272,12 +272,15 @@ export default function CoursePlayer(props: Props) {
     // open the overlay.  Only fires when the video is PLAYING (not
     // while scrubbing paused), to avoid repeated triggers on
     // currentTime changes from seek events.
-    if (phase.kind === "video" && !el.paused) {
+    if (phase.kind === "video") {
+      // Fire whenever playback is at or past an uncleared checkpoint
+      // position.  The phase.kind guard above prevents re-firing after
+      // the overlay opens; the server also refuses out-of-order starts.
       const triggered = sortedCheckpoints.find(
-        (cp) => !cleared.has(cp.id) && now >= cp.atSecond && now <= cp.atSecond + 1.5,
+        (cp) => !cleared.has(cp.id) && now >= cp.atSecond,
       );
       if (triggered) {
-        el.pause();
+        if (!el.paused) el.pause();
         void openCheckpoint(triggered.id);
       }
     }
