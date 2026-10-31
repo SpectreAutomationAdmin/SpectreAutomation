@@ -627,6 +627,8 @@ export default function CoursePlayer(props: Props) {
         watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
       }
     }
+    // eslint-disable-next-line no-console
+    console.log("[ep4b1-onEnded]", JSON.stringify({ intervals: watchedIntervalsRef.current, lastTimeRef: lastTimeRef.current }));
     void sendProgress({ force: true });
     // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
     // in-player final assessment overlay rather than making them scroll
