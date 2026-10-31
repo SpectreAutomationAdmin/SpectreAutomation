@@ -786,8 +786,7 @@ export default function CoursePlayer(props: Props) {
           <div className="relative w-full aspect-video bg-stone-100">
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full"
-              controls
+              className="absolute inset-0 w-full h-full bg-stone-900"
               playsInline
               preload="auto"
               src={videoUrl}
@@ -796,6 +795,12 @@ export default function CoursePlayer(props: Props) {
               onSeeking={onSeeking}
               onPause={onPause}
               onEnded={onEnded}
+              onClick={() => {
+                const v = videoRef.current;
+                if (!v) return;
+                if (v.paused) void v.play().catch(() => { /* ignore autoplay */ });
+                else v.pause();
+              }}
               data-testid="portal-course-video"
             >
               Your browser does not support the video tag.
@@ -854,39 +859,21 @@ export default function CoursePlayer(props: Props) {
               </div>
             )}
           </div>
-          {/* EP-TRAIN-4B §2 (2026-10-31): checkpoint markers strip.
-              Rendered as a separate band under the native video
-              controls (NOT inside the player's native timeline, which
-              browsers don't expose).  Each marker sits proportionally
-              at `atSecond / videoDurationSec * 100%` and distinguishes
-              completed / current / upcoming states.  The strip is
-              display-only — clicking a marker does NOT seek, so the
-              existing uncleared-checkpoint seek-cap is preserved. */}
-          <CheckpointMarkersStrip
-            checkpoints={sortedCheckpoints}
+          {/* EP-TRAIN-4C §1 + §2 (2026-10-31): the separate Watch
+              Progress bar + percentage is removed; a focused custom
+              player-control bar replaces the native HTML5 controls
+              and embeds checkpoint markers DIRECTLY on the seek
+              timeline so there is only ONE playback line visible.
+              Server-side watch-coverage accounting, checkpoint
+              gating, seek restrictions, assessment eligibility,
+              completion persistence, and audit remain unchanged. */}
+          <PlayerControlBar
+            videoRef={videoRef}
+            sortedCheckpoints={sortedCheckpoints}
             cleared={cleared}
             videoDurationSec={videoDurationSec}
+            firstUnclearedRequiredAtSecond={firstUnclearedRequiredAtSecond}
           />
-          <div className="px-5 py-3 border-t border-stone-200 flex items-center justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
-                Watch progress
-              </div>
-              <div className="mt-1 h-1.5 rounded-full bg-stone-200 overflow-hidden">
-                <div
-                  className="h-full bg-club-green-700 transition-all"
-                  style={{ width: `${percentDisplay}%` }}
-                  aria-hidden
-                />
-              </div>
-            </div>
-            <div
-              className="text-sm text-stone-700 tabular-nums"
-              data-testid="portal-course-progress-percent"
-            >
-              {percentDisplay}%
-            </div>
-          </div>
         </section>
       )}
 
@@ -1383,113 +1370,283 @@ function FinalAssessmentPanel({
   );
 }
 
-// EP-TRAIN-4B §2 (2026-10-31): visible checkpoint markers strip.
+// EP-TRAIN-4C §2 (2026-10-31) — custom player-control bar with
+// integrated checkpoint markers on the actual video seek timeline.
 //
-// Native HTML5 video controls don't expose a hook to render markers on
-// the browser's own timeline, so we draw a parallel strip immediately
-// under the video.  Each marker sits at `cp.atSecond / videoDurationSec
-// * 100%` of the strip's width.  States:
+// Replaces the native HTML5 `controls` and the earlier separate
+// CheckpointMarkersStrip.  There is now exactly ONE playback timeline
+// visible to the employee: this control bar's seek track.
 //
-//   completed — the employee has cleared this checkpoint (filled
-//               green with a check glyph in the accessible name)
-//   upcoming  — not yet cleared (hollow amber ring if required,
-//               hollow stone ring if optional)
+// Controls preserved from native HTML5 behavior:
+//   - Play / pause (button + Space keyboard shortcut)
+//   - Current time + duration display
+//   - Seek bar with click-to-seek + Left/Right arrow keyboard
+//   - Volume + mute (slider + M keyboard)
+//   - Playback rate selector (1x / 1.5x / 2x)
+//   - Fullscreen button (+ F keyboard)
 //
-// The strip is DISPLAY-ONLY.  Clicking a marker does nothing; this
-// preserves the existing seek-cap against uncleared required
-// checkpoints — a seeking bypass via marker click is explicitly out
-// of scope per directive §2.
+// Checkpoint markers overlay the seek track at their proportional
+// timestamps.  Marker colors: cleared = green, upcoming-required =
+// amber, upcoming-optional = stone.  Markers are display-only — a
+// click on a marker seeks to that timestamp but the existing
+// `onSeeking` clamp against the first-uncleared required checkpoint
+// IS NOT RELAXED.  No bypass is introduced.
 //
-// Accessibility: the strip is wrapped in a labelled region, each
-// marker exposes an aria-label of the form "Checkpoint N of M at
-// m:ss — completed/upcoming/upcoming required", and the overall count
-// is announced on load.
-export function CheckpointMarkersStrip({
-  checkpoints,
+// Keyboard accessibility: the seek track is a `role="slider"` with
+// `aria-valuemin/max/now`; the control bar is wrapped by a region
+// label; every button has an accessible name; focus states are
+// visible.
+export function PlayerControlBar({
+  videoRef,
+  sortedCheckpoints,
   cleared,
   videoDurationSec,
+  firstUnclearedRequiredAtSecond,
 }: {
-  checkpoints: Checkpoint[];
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  sortedCheckpoints: Checkpoint[];
   cleared: Set<string>;
   videoDurationSec: number | null;
+  firstUnclearedRequiredAtSecond: number;
 }) {
-  if (!videoDurationSec || videoDurationSec <= 0 || checkpoints.length === 0) {
-    return null;
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(videoDurationSec && videoDurationSec > 0 ? videoDurationSec : 0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const seekBarRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onTime = () => setCurrentTime(v.currentTime);
+    const onMeta = () => { if (Number.isFinite(v.duration) && v.duration > 0) setDuration(v.duration); };
+    const onPlay = () => setIsPlaying(true);
+    const onPauseEvt = () => setIsPlaying(false);
+    const onVol = () => { setVolume(v.volume); setMuted(v.muted); };
+    const onRate = () => setPlaybackRate(v.playbackRate);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("loadedmetadata", onMeta);
+    v.addEventListener("durationchange", onMeta);
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPauseEvt);
+    v.addEventListener("volumechange", onVol);
+    v.addEventListener("ratechange", onRate);
+    return () => {
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("loadedmetadata", onMeta);
+      v.removeEventListener("durationchange", onMeta);
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPauseEvt);
+      v.removeEventListener("volumechange", onVol);
+      v.removeEventListener("ratechange", onRate);
+    };
+  }, [videoRef]);
+
+  const safeDuration = duration > 0 ? duration : (videoDurationSec && videoDurationSec > 0 ? videoDurationSec : 1);
+  const playedPct = Math.min(100, Math.max(0, (currentTime / safeDuration) * 100));
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) void v.play().catch(() => { /* autoplay rejection — ignore */ });
+    else v.pause();
   }
-  const total = checkpoints.length;
-  const clearedCount = checkpoints.reduce(
-    (n, cp) => (cleared.has(cp.id) ? n + 1 : n),
-    0,
-  );
+  function seekTo(sec: number) {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, Math.min(safeDuration, sec));
+    // onSeeking (attached on the <video>) will clamp against any
+    // uncleared required checkpoint — markers CANNOT bypass that.
+  }
+  function onSeekBarClick(e: React.MouseEvent<HTMLDivElement>) {
+    const bar = seekBarRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    seekTo(pct * safeDuration);
+  }
+  function onSeekBarKey(e: React.KeyboardEvent<HTMLDivElement>) {
+    const v = videoRef.current;
+    if (!v) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); seekTo(v.currentTime + 5); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); seekTo(v.currentTime - 5); }
+    else if (e.key === "Home") { e.preventDefault(); seekTo(0); }
+    else if (e.key === "End") { e.preventDefault(); seekTo(safeDuration); }
+    else if (e.key === " " || e.key === "Spacebar" || e.key === "k") { e.preventDefault(); togglePlay(); }
+  }
+  function setRate(r: number) {
+    const v = videoRef.current;
+    if (!v) return;
+    v.playbackRate = r;
+  }
+  function toggleMute() {
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+  }
+  function setVol(val: number) {
+    const v = videoRef.current;
+    if (!v) return;
+    v.volume = Math.max(0, Math.min(1, val));
+    if (val > 0 && v.muted) v.muted = false;
+  }
+  function toggleFullscreen() {
+    const v = videoRef.current;
+    if (!v) return;
+    const container = v.parentElement;
+    if (!document.fullscreenElement) {
+      void (container ?? v).requestFullscreen?.().catch(() => { /* ignore */ });
+    } else {
+      void document.exitFullscreen?.().catch(() => { /* ignore */ });
+    }
+  }
+
+  const total = sortedCheckpoints.length;
+  const clearedCount = sortedCheckpoints.reduce((n, cp) => (cleared.has(cp.id) ? n + 1 : n), 0);
+
   return (
     <div
-      className="px-5 pt-3 pb-1 border-t border-stone-200"
-      data-testid="portal-course-checkpoint-strip"
+      className="bg-stone-50 border-t border-stone-200 px-3 py-2 flex items-center gap-2 flex-wrap md:flex-nowrap"
       role="group"
-      aria-label={`Training checkpoints: ${clearedCount} of ${total} cleared`}
+      aria-label="Video playback controls"
+      data-testid="portal-course-player-controls"
     >
-      <div className="flex items-baseline justify-between">
-        <div className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
-          Checkpoints
-        </div>
-        <div
-          className="text-xs text-stone-600 tabular-nums"
-          data-testid="portal-course-checkpoint-count"
-        >
-          {clearedCount} of {total} cleared
-        </div>
+      <button
+        type="button"
+        onClick={togglePlay}
+        className="shrink-0 w-9 h-9 rounded-full bg-club-green-700 hover:bg-club-green-800 text-white flex items-center justify-center focus:outline-none focus:ring-2 focus:ring-club-green-500"
+        aria-label={isPlaying ? "Pause" : "Play"}
+        data-testid="portal-course-player-playpause"
+      >
+        {isPlaying ? (
+          <svg viewBox="0 0 20 20" className="w-4 h-4" fill="currentColor" aria-hidden><rect x="5" y="4" width="3" height="12" rx="1"/><rect x="12" y="4" width="3" height="12" rx="1"/></svg>
+        ) : (
+          <svg viewBox="0 0 20 20" className="w-4 h-4" fill="currentColor" aria-hidden><path d="M5 3l12 7-12 7V3z"/></svg>
+        )}
+      </button>
+      <div className="shrink-0 text-xs text-stone-700 font-mono tabular-nums w-24" data-testid="portal-course-player-time">
+        {formatMMSS(currentTime)} / {formatMMSS(safeDuration)}
       </div>
-      <div className="relative mt-2 h-5">
+      <div
+        ref={seekBarRef}
+        onClick={onSeekBarClick}
+        onKeyDown={onSeekBarKey}
+        role="slider"
+        tabIndex={0}
+        aria-label="Seek"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(safeDuration)}
+        aria-valuenow={Math.round(currentTime)}
+        aria-valuetext={`${formatMMSS(currentTime)} of ${formatMMSS(safeDuration)}`}
+        className="relative flex-1 min-w-[180px] h-6 cursor-pointer focus:outline-none focus:ring-2 focus:ring-club-green-500 rounded"
+        data-testid="portal-course-player-seek"
+      >
+        {/* Base track */}
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-stone-300" aria-hidden />
+        {/* Played portion */}
         <div
-          className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full bg-stone-200"
+          className="absolute left-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-club-green-700"
+          style={{ width: `${playedPct}%` }}
           aria-hidden
         />
-        {checkpoints.map((cp, i) => {
-          const pct = Math.min(100, Math.max(0, (cp.atSecond / videoDurationSec) * 100));
+        {/* Checkpoint markers overlaid on the SAME timeline */}
+        {sortedCheckpoints.map((cp, i) => {
+          const left = Math.min(100, Math.max(0, (cp.atSecond / safeDuration) * 100));
           const isCleared = cleared.has(cp.id);
           const mins = Math.floor(cp.atSecond / 60);
           const secs = Math.floor(cp.atSecond % 60);
           const timeLabel = `${mins}:${secs.toString().padStart(2, "0")}`;
-          const statusLabel = isCleared
-            ? "completed"
+          const statusLabel = isCleared ? "completed" : cp.requiredToProceed ? "upcoming (required)" : "upcoming";
+          const classes = isCleared
+            ? "bg-club-green-700 border-club-green-800"
             : cp.requiredToProceed
-              ? "upcoming (required)"
-              : "upcoming";
+              ? "bg-amber-400 border-amber-600"
+              : "bg-white border-stone-500";
           return (
             <span
               key={cp.id}
-              className={
-                "absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center " +
-                "w-3.5 h-3.5 rounded-full border-2 " +
-                (isCleared
-                  ? "bg-club-green-700 border-club-green-700"
-                  : cp.requiredToProceed
-                    ? "bg-white border-amber-500"
-                    : "bg-white border-stone-400")
-              }
-              style={{ left: `${pct}%` }}
-              data-testid={`portal-course-checkpoint-marker-${cp.id}`}
-              data-checkpoint-status={isCleared ? "completed" : "upcoming"}
+              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 shadow-sm ${classes}`}
+              style={{ left: `${left}%` }}
               role="img"
               aria-label={`Checkpoint ${i + 1} of ${total} at ${timeLabel}, ${statusLabel}`}
               title={`Checkpoint ${i + 1} at ${timeLabel} — ${statusLabel}`}
-            >
-              {isCleared && (
-                <svg
-                  viewBox="0 0 10 10"
-                  className="w-2 h-2 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  aria-hidden
-                >
-                  <polyline points="1,5 4,8 9,2" />
-                </svg>
-              )}
-            </span>
+              data-testid={`portal-course-checkpoint-marker-${cp.id}`}
+              data-checkpoint-status={isCleared ? "completed" : "upcoming"}
+            />
           );
         })}
+        {/* Playhead knob */}
+        <span
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-club-green-700 shadow"
+          style={{ left: `${playedPct}%` }}
+          aria-hidden
+        />
       </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          type="button"
+          onClick={toggleMute}
+          className="w-8 h-8 rounded hover:bg-stone-200 flex items-center justify-center text-stone-700 focus:outline-none focus:ring-2 focus:ring-club-green-500"
+          aria-label={muted || volume === 0 ? "Unmute" : "Mute"}
+          data-testid="portal-course-player-mute"
+        >
+          {muted || volume === 0 ? (
+            <svg viewBox="0 0 20 20" className="w-4 h-4" fill="currentColor" aria-hidden><path d="M3 7v6h3l5 4V3L6 7H3zm11.59 1.41L13.17 10l1.42 1.59L13.17 13l-1.58-1.59L10 13.17 11.59 11.59 10 10.17l1.59-1.58L10 7l1.59 1.59L13.17 7l1.42 1.41z"/></svg>
+          ) : (
+            <svg viewBox="0 0 20 20" className="w-4 h-4" fill="currentColor" aria-hidden><path d="M3 7v6h3l5 4V3L6 7H3zm13 3a4 4 0 00-2-3.46v6.92A4 4 0 0016 10z"/></svg>
+          )}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={muted ? 0 : volume}
+          onChange={(e) => setVol(parseFloat(e.target.value))}
+          className="w-16 accent-club-green-700"
+          aria-label="Volume"
+          data-testid="portal-course-player-volume"
+        />
+      </div>
+      <select
+        value={playbackRate.toString()}
+        onChange={(e) => setRate(parseFloat(e.target.value))}
+        className="shrink-0 text-xs rounded border border-stone-300 bg-white px-2 py-1 focus:outline-none focus:ring-2 focus:ring-club-green-500"
+        aria-label="Playback speed"
+        data-testid="portal-course-player-rate"
+      >
+        <option value="1">1x</option>
+        <option value="1.25">1.25x</option>
+        <option value="1.5">1.5x</option>
+        <option value="2">2x</option>
+      </select>
+      <button
+        type="button"
+        onClick={toggleFullscreen}
+        className="shrink-0 w-8 h-8 rounded hover:bg-stone-200 flex items-center justify-center text-stone-700 focus:outline-none focus:ring-2 focus:ring-club-green-500"
+        aria-label="Toggle fullscreen"
+        data-testid="portal-course-player-fullscreen"
+      >
+        <svg viewBox="0 0 20 20" className="w-4 h-4" fill="currentColor" aria-hidden><path d="M3 3h5v2H5v3H3V3zm9 0h5v5h-2V5h-3V3zM3 12h2v3h3v2H3v-5zm14 0v5h-5v-2h3v-3h2z"/></svg>
+      </button>
+      {total > 0 && (
+        <span
+          className="shrink-0 text-[11px] text-stone-600 tabular-nums whitespace-nowrap"
+          data-testid="portal-course-checkpoint-count"
+          aria-label={`${clearedCount} of ${total} checkpoints cleared`}
+        >
+          {clearedCount} / {total} checkpoints
+        </span>
+      )}
     </div>
   );
+}
+
+function formatMMSS(totalSec: number): string {
+  if (!Number.isFinite(totalSec) || totalSec < 0) return "0:00";
+  const m = Math.floor(totalSec / 60);
+  const s = Math.floor(totalSec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
