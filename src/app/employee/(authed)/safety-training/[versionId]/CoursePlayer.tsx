@@ -328,10 +328,15 @@ export default function CoursePlayer(props: Props) {
       const seq = ++sendSeqRef.current;
       inFlightRef.current = true;
       try {
+        // EP-TRAIN-4B §4 diagnostic (2026-10-31)
+        // eslint-disable-next-line no-console
+        console.log("[ep4b-sendProgress-POST]", JSON.stringify({ seq, force: opts?.force ?? false, secondsWatched: Math.floor(seconds), farthestSecond: Math.floor(farthest) }));
         const result = await recordProgressAction(versionId, {
           secondsWatched: Math.floor(seconds),
           farthestSecond: Math.floor(farthest),
         });
+        // eslint-disable-next-line no-console
+        console.log("[ep4b-sendProgress-RESP]", JSON.stringify({ seq, result: "ok" in result ? { ok: true, percentComplete: result.percentComplete } : { ok: false } }));
         // Drop stale responses: another request may have already updated
         // state to a NEWER value. Only the latest-resolved seq updates UI.
         if (seq < highestResolvedSeqRef.current) return;
