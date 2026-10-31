@@ -16,6 +16,9 @@
 
 import { describe, it, expect } from "vitest";
 
+// Mirrors INTERVAL_MERGE_TOLERANCE_SECONDS in CoursePlayer.tsx.
+const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.5;
+
 function mergeIntervals(intervals: Array<[number, number]>): Array<[number, number]> {
   if (intervals.length === 0) return [];
   const sorted = intervals.map(([s, e]) => [s, e] as [number, number]).sort((a, b) => a[0] - b[0]);
@@ -23,7 +26,7 @@ function mergeIntervals(intervals: Array<[number, number]>): Array<[number, numb
   for (let i = 1; i < sorted.length; i++) {
     const [s, e] = sorted[i];
     const last = out[out.length - 1];
-    if (s <= last[1]) {
+    if (s <= last[1] + INTERVAL_MERGE_TOLERANCE_SECONDS) {
       if (e > last[1]) last[1] = e;
     } else {
       out.push([s, e]);
@@ -135,11 +138,9 @@ describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
       [28.511, 41.352], // onPause's commit; falls short of the real duration
     ];
     const authoritative = 42;
-    // OLD (broken) behaviour would push a new tail starting at 41.517:
-    const oldBroken: Array<[number, number]> = [...committed, [41.517, authoritative]];
-    expect(uniqueCoverageSeconds(oldBroken)).toBeLessThan(authoritative);
-    expect(Math.floor(uniqueCoverageSeconds(oldBroken))).toBe(41);
-    // NEW behaviour closes the gap in place:
+    // NEW behaviour closes the gap in place (the merge tolerance
+    // ALSO folds the 165ms gap between the pause-committed interval
+    // and any new tail — belt-and-suspenders).
     const finalised = finaliseOnEnded(committed, null, authoritative, 41.517);
     expect(uniqueCoverageSeconds(finalised)).toBe(42);
     expect(Math.floor(uniqueCoverageSeconds(finalised))).toBe(42);
@@ -153,6 +154,34 @@ describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
     const finalised = finaliseOnEnded(committed, null, 42, 41.5);
     expect(uniqueCoverageSeconds(finalised)).toBe(22); // 10 + 12
     expect(Math.round((22 / 42) * 100)).toBe(52); // not 100
+  });
+
+  it("tick-jitter sub-millisecond gaps are closed by the 0.5s merge tolerance (staging trace reproduction)", () => {
+    // Exact intervals captured from staging on 2026-10-31 showing
+    // sub-millisecond gaps between successive timeupdate commits:
+    //   [15.030706, 15.031616] gap = 910µs
+    //   [28.26021, 28.260256]  gap = 46µs
+    // Prior to the tolerance fix these forced the merge to produce
+    // 3 segments summing to 41.999044 — flooring to 41 → 97%.  With
+    // the tolerance, all three fold into one interval ending at 42.
+    const committed: Array<[number, number]> = [
+      [0, 15.030706],
+      [15.031616, 28.26021],
+      [28.260256, 42],
+    ];
+    const seconds = uniqueCoverageSeconds(committed);
+    expect(seconds).toBe(42);
+    expect(Math.floor(seconds)).toBe(42);
+    expect(Math.round((Math.floor(seconds) / 42) * 100)).toBe(100);
+  });
+
+  it("real seek gaps > 0.5s are PRESERVED (tolerance does not inflate coverage)", () => {
+    // User watched [0, 10] then seeked ahead 2s to [12, 20].  Gap
+    // between the two intervals is 2s > tolerance (0.5s), so the
+    // merge preserves it.
+    const committed: Array<[number, number]> = [[0, 10], [12, 20]];
+    const seconds = uniqueCoverageSeconds(committed);
+    expect(seconds).toBe(18); // 10 + 8, NOT 20
   });
 
   it("empty-committed-intervals edge case still gets a tail segment", () => {

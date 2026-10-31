@@ -148,6 +148,18 @@ const REPORT_INTERVAL_SECONDS = 15;
 // which under-counted at 1.5x+ playback rates.
 const PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE = 0.75;
 
+// EP-TRAIN-4B §4 (2026-10-31) — tick-jitter merge tolerance.
+//
+// `onTimeUpdate` records `currentTime` snapshots at each `timeupdate`
+// event; successive snapshots that bracket a pause / resume / seek-cap
+// transition can disagree by sub-millisecond values (e.g. 28.260210 →
+// 28.260256).  Those gaps are measurement jitter from the browser's
+// own `currentTime` precision — NOT real skipped-content gaps.  When
+// merging intervals, close any gap smaller than this tolerance so
+// unique coverage reflects what the user actually watched; a real
+// seek jump produces gaps > 0.5s and still forms a separate interval.
+const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.5;
+
 // Normalise an array of [start, end] intervals: merge overlaps + sort.
 // Used to compute unique watched coverage (rewatch doesn't double-count).
 function mergeIntervals(intervals: Array<[number, number]>): Array<[number, number]> {
@@ -157,7 +169,7 @@ function mergeIntervals(intervals: Array<[number, number]>): Array<[number, numb
   for (let i = 1; i < sorted.length; i++) {
     const [s, e] = sorted[i];
     const last = out[out.length - 1];
-    if (s <= last[1]) {
+    if (s <= last[1] + INTERVAL_MERGE_TOLERANCE_SECONDS) {
       if (e > last[1]) last[1] = e;
     } else {
       out.push([s, e]);
@@ -328,14 +340,10 @@ export default function CoursePlayer(props: Props) {
       const seq = ++sendSeqRef.current;
       inFlightRef.current = true;
       try {
-        // eslint-disable-next-line no-console
-        console.log("[ep4b-POST]", JSON.stringify({ seq, secondsWatched: Math.floor(seconds), secondsRaw: seconds, intervals }));
         const result = await recordProgressAction(versionId, {
           secondsWatched: Math.floor(seconds),
           farthestSecond: Math.floor(farthest),
         });
-        // eslint-disable-next-line no-console
-        console.log("[ep4b-RESP]", JSON.stringify({ seq, result: "ok" in result ? { ok: true, pct: result.percentComplete } : { err: true } }));
         // Drop stale responses: another request may have already updated
         // state to a NEWER value. Only the latest-resolved seq updates UI.
         if (seq < highestResolvedSeqRef.current) return;
