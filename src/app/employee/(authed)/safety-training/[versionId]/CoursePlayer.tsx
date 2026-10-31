@@ -330,7 +330,7 @@ export default function CoursePlayer(props: Props) {
       try {
         // EP-TRAIN-4B §4 diagnostic (2026-10-31)
         // eslint-disable-next-line no-console
-        console.log("[ep4b-sendProgress-POST]", JSON.stringify({ seq, force: opts?.force ?? false, secondsWatched: Math.floor(seconds), farthestSecond: Math.floor(farthest) }));
+        console.log("[ep4b-sendProgress-POST]", JSON.stringify({ seq, force: opts?.force ?? false, secondsWatched: Math.floor(seconds), farthestSecond: Math.floor(farthest), secondsRaw: seconds, snapshotIntervals: intervals, liveIntervals: watchedIntervalsRef.current }));
         const result = await recordProgressAction(versionId, {
           secondsWatched: Math.floor(seconds),
           farthestSecond: Math.floor(farthest),
