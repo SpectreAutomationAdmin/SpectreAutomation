@@ -328,15 +328,10 @@ export default function CoursePlayer(props: Props) {
       const seq = ++sendSeqRef.current;
       inFlightRef.current = true;
       try {
-        // EP-TRAIN-4B §4 diagnostic (2026-10-31)
-        // eslint-disable-next-line no-console
-        console.log("[ep4b-sendProgress-POST]", JSON.stringify({ seq, force: opts?.force ?? false, secondsWatched: Math.floor(seconds), farthestSecond: Math.floor(farthest), secondsRaw: seconds, snapshotIntervals: intervals, liveIntervals: watchedIntervalsRef.current }));
         const result = await recordProgressAction(versionId, {
           secondsWatched: Math.floor(seconds),
           farthestSecond: Math.floor(farthest),
         });
-        // eslint-disable-next-line no-console
-        console.log("[ep4b-sendProgress-RESP]", JSON.stringify({ seq, result: "ok" in result ? { ok: true, percentComplete: result.percentComplete } : { ok: false } }));
         // Drop stale responses: another request may have already updated
         // state to a NEWER value. Only the latest-resolved seq updates UI.
         if (seq < highestResolvedSeqRef.current) return;
@@ -587,34 +582,38 @@ export default function CoursePlayer(props: Props) {
     const authoritativeEnd = videoDurationSec && videoDurationSec > 0
       ? videoDurationSec
       : mediaDuration;
-    const openInterval = currentIntervalRef.current ? [currentIntervalRef.current[0], currentIntervalRef.current[1]] : null;
     if (currentIntervalRef.current) {
+      // Common path: video played through to end without a pause
+      // event just before.  The open interval already spans the
+      // final segment; extend its end to the authoritative duration.
       const [start, lastSeen] = currentIntervalRef.current;
       const end = authoritativeEnd !== null ? Math.max(lastSeen, authoritativeEnd) : lastSeen;
       watchedIntervalsRef.current.push([start, end]);
       currentIntervalRef.current = null;
+    } else if (authoritativeEnd !== null && watchedIntervalsRef.current.length > 0) {
+      // onPause ran JUST before onEnded (HTML spec: a video playing
+      // to end dispatches `pause` then `ended`).  onPause already
+      // committed the open interval as [start, lastSeen] where
+      // `lastSeen` is the final `timeupdate` currentTime — typically
+      // 0.1-0.5s short of the real duration.  Pushing a NEW tail
+      // interval `[lastKnown, authoritativeEnd]` would leave a gap
+      // between the committed interval's end and the tail's start,
+      // because `lastTimeRef` is updated by a later `timeupdate`
+      // that fires AFTER pause's commit.  Instead, extend the
+      // right-most committed interval's end to `authoritativeEnd`
+      // directly, closing the sub-second gap.
+      const last = watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1];
+      if (last[1] < authoritativeEnd) {
+        last[1] = authoritativeEnd;
+      }
     } else if (authoritativeEnd !== null) {
-      // Edge case: no open interval (e.g. video paused briefly then
-      // transitioned to ended via play-to-end from a pause-exit).
-      // Still credit the final segment [lastTime, duration].
+      // Edge-of-edge case: no committed intervals yet (e.g. a short
+      // video that `ended` before the first `timeupdate` tick).
       const lastKnown = lastTimeRef.current;
       if (lastKnown >= 0 && lastKnown < authoritativeEnd) {
         watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
       }
     }
-    // EP-TRAIN-4B §4 diagnostic (2026-10-31) — one-shot log so the
-    // Playwright probe can confirm `videoDurationSec` propagated AND
-    // the final interval was extended before sendProgress fires.
-    // Non-sensitive; strip in a follow-up once staging confirms.
-    // eslint-disable-next-line no-console
-    console.log("[ep4b-onEnded]", JSON.stringify({
-      videoDurationSec,
-      mediaDuration,
-      authoritativeEnd,
-      openInterval,
-      watchedIntervalsCount: watchedIntervalsRef.current.length,
-      lastInterval: watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1] ?? null,
-    }));
     void sendProgress({ force: true });
     // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
     // in-player final assessment overlay rather than making them scroll

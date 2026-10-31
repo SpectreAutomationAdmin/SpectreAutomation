@@ -39,20 +39,36 @@ function uniqueCoverageSeconds(intervals: Array<[number, number]>): number {
 }
 
 /**
- * Simulate the new onEnded post-condition: the final open interval
- * is extended to the authoritative video duration before commit.
+ * Simulate the new onEnded post-condition.
+ *
+ * Three branches mirror the production code:
+ *   A. open interval present → push [start, max(lastSeen, duration)]
+ *   B. open interval absent  → extend the LAST committed interval's
+ *      end to the authoritative duration (closes the sub-second gap
+ *      produced by the pause-then-ended sequence)
+ *   C. no intervals at all   → push [lastKnown, duration]
  */
 function finaliseOnEnded(
   committed: Array<[number, number]>,
   openInterval: [number, number] | null,
   authoritativeDurationSec: number,
+  lastKnown: number = 0,
 ): Array<[number, number]> {
+  const copy = committed.map(([s, e]) => [s, e] as [number, number]);
   if (openInterval) {
     const [start, lastSeen] = openInterval;
     const end = Math.max(lastSeen, authoritativeDurationSec);
-    return [...committed, [start, end]];
+    return [...copy, [start, end]];
   }
-  return committed;
+  if (copy.length > 0) {
+    const last = copy[copy.length - 1];
+    if (last[1] < authoritativeDurationSec) last[1] = authoritativeDurationSec;
+    return copy;
+  }
+  if (lastKnown < authoritativeDurationSec) {
+    return [[lastKnown, authoritativeDurationSec]];
+  }
+  return copy;
 }
 
 describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
@@ -104,19 +120,44 @@ describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
     expect(Math.min(authoritative, Math.floor(seconds))).toBe(42);
   });
 
-  it("empty-open-interval edge case (video paused briefly then ended) commits lastSeen → duration via the else branch", () => {
-    // The onEnded else-branch (when no open interval exists)
-    // reconstructs a tail interval from lastSeen to authoritative.
-    const committed: Array<[number, number]> = [[0, 40]];
-    const openInterval: [number, number] | null = null;
+  it("onPause-then-onEnded edge case (sub-second gap at the end) is closed by extending the last committed interval", () => {
+    // Reproduces the exact staging trace that caused the 97% defect:
+    //   onPause committed [28.511, 41.352]
+    //   onEnded fired with currentIntervalRef=null (nullified by onPause)
+    //   lastTimeRef updated by a final `timeupdate` to 41.517 (AFTER
+    //     pause's commit) — a NEW tail [41.517, 42] would leave a
+    //     gap at [41.352, 41.517].
+    // Fix: extend the LAST committed interval's end to the
+    // authoritative duration — closes the gap directly.
+    const committed: Array<[number, number]> = [
+      [0, 15.267],
+      [15.267, 28.511],
+      [28.511, 41.352], // onPause's commit; falls short of the real duration
+    ];
     const authoritative = 42;
-    const lastSeen = 40;
-    // Simulate the explicit else-branch patch.
-    const extendedCommitted =
-      openInterval === null && lastSeen < authoritative
-        ? [...committed, [lastSeen, authoritative] as [number, number]]
-        : committed;
-    expect(uniqueCoverageSeconds(extendedCommitted)).toBe(42);
+    // OLD (broken) behaviour would push a new tail starting at 41.517:
+    const oldBroken: Array<[number, number]> = [...committed, [41.517, authoritative]];
+    expect(uniqueCoverageSeconds(oldBroken)).toBeLessThan(authoritative);
+    expect(Math.floor(uniqueCoverageSeconds(oldBroken))).toBe(41);
+    // NEW behaviour closes the gap in place:
+    const finalised = finaliseOnEnded(committed, null, authoritative, 41.517);
+    expect(uniqueCoverageSeconds(finalised)).toBe(42);
+    expect(Math.floor(uniqueCoverageSeconds(finalised))).toBe(42);
+  });
+
+  it("else-branch extension only touches the right-most interval (never fabricates coverage in middle gaps)", () => {
+    // User watched [0, 10] + [30, 41.352] (seeked past 10-30 after
+    // clearing all required checkpoints).  onEnded extends the LAST
+    // interval's end to 42 only; the middle gap stays.
+    const committed: Array<[number, number]> = [[0, 10], [30, 41.352]];
+    const finalised = finaliseOnEnded(committed, null, 42, 41.5);
+    expect(uniqueCoverageSeconds(finalised)).toBe(22); // 10 + 12
+    expect(Math.round((22 / 42) * 100)).toBe(52); // not 100
+  });
+
+  it("empty-committed-intervals edge case still gets a tail segment", () => {
+    const finalised = finaliseOnEnded([], null, 42, 40);
+    expect(uniqueCoverageSeconds(finalised)).toBe(2);
   });
 
   it("legitimate 98% result is NOT cosmetically rounded to 100%", () => {
