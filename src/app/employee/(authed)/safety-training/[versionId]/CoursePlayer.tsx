@@ -575,17 +575,39 @@ export default function CoursePlayer(props: Props) {
     // `currentTime` WAS actually played — the video just paused
     // mid-tick before `timeupdate` could record it.
     const el = videoRef.current;
-    const openInterval = currentIntervalRef.current ? [currentIntervalRef.current[0], currentIntervalRef.current[1]] : null;
     if (currentIntervalRef.current) {
+      // Branch A: an open interval is still alive — commit it, with
+      // the end extended to el.currentTime (closes the 100-300ms gap
+      // between the last `timeupdate` snapshot and the real pause
+      // position).
       const [start, lastSeen] = currentIntervalRef.current;
       const end = el && Number.isFinite(el.currentTime)
         ? Math.max(lastSeen, el.currentTime)
         : lastSeen;
       watchedIntervalsRef.current.push([start, end]);
       currentIntervalRef.current = null;
+    } else if (
+      el
+      && Number.isFinite(el.currentTime)
+      && watchedIntervalsRef.current.length > 0
+    ) {
+      // Branch B: a late `onTimeUpdate` with dt~0 already took the
+      // ELSE path (naturalAdvance=false → commit + no new interval
+      // because video is paused), so currentIntervalRef is already
+      // null by the time this handler runs.  The last committed
+      // interval's end is still 100-300ms short of the real pause
+      // position for the same tick-boundary reason.  Extend its end
+      // to el.currentTime IF the gap is within the natural-advance
+      // threshold — guarantees we never extend across a legitimate
+      // seek-forward (which produces a gap > jumpGrace).
+      const last = watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1];
+      const rate = el.playbackRate || 1;
+      const jumpGrace = PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE * rate;
+      const gap = el.currentTime - last[1];
+      if (gap > 0 && gap <= jumpGrace) {
+        last[1] = el.currentTime;
+      }
     }
-    // eslint-disable-next-line no-console
-    console.log("[ep4b1-onPause]", JSON.stringify({ elCurrentTime: el?.currentTime ?? null, openInterval, lastTimeRef: lastTimeRef.current, committedTailNow: watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1] ?? null }));
     void sendProgress({ force: true });
   }
 
