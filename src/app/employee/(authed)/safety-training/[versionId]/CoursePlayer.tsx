@@ -575,6 +575,7 @@ export default function CoursePlayer(props: Props) {
     // `currentTime` WAS actually played — the video just paused
     // mid-tick before `timeupdate` could record it.
     const el = videoRef.current;
+    const openInterval = currentIntervalRef.current ? [currentIntervalRef.current[0], currentIntervalRef.current[1]] : null;
     if (currentIntervalRef.current) {
       const [start, lastSeen] = currentIntervalRef.current;
       const end = el && Number.isFinite(el.currentTime)
@@ -583,6 +584,8 @@ export default function CoursePlayer(props: Props) {
       watchedIntervalsRef.current.push([start, end]);
       currentIntervalRef.current = null;
     }
+    // eslint-disable-next-line no-console
+    console.log("[ep4b1-onPause]", JSON.stringify({ elCurrentTime: el?.currentTime ?? null, openInterval, lastTimeRef: lastTimeRef.current, committedTailNow: watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1] ?? null }));
     void sendProgress({ force: true });
   }
 
