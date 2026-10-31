@@ -115,6 +115,12 @@ interface Props {
 
 type Phase =
   | { kind: "video" }
+  // EP-TRAIN-4B §3 (2026-10-31): the final knowledge test now opens
+  // inside the video viewer using the checkpoint-overlay surface.
+  // `quiz-ready` is shown as an in-player overlay once the video has
+  // reached its eligible completion state; the employee starts the
+  // test from the viewer rather than scrolling below the video.
+  | { kind: "quiz-ready" }
   | { kind: "quiz-answering"; attemptId: string; attemptNumber: number }
   | { kind: "grading" }
   | { kind: "quiz-result"; score: number; passed: boolean }
@@ -171,6 +177,7 @@ export default function CoursePlayer(props: Props) {
   const {
     versionId,
     hasVideo,
+    videoDurationSec,
     requiresKnowledgeTest,
     passingScore,
     retakesAllowed,
@@ -192,7 +199,18 @@ export default function CoursePlayer(props: Props) {
   const router = useRouter();
 
   const [progress, setProgress] = useState<ProgressRow>(initialProgress);
-  const [phase, setPhase] = useState<Phase>({ kind: "video" });
+  // EP-TRAIN-4B §3 (2026-10-31): if the employee has already watched
+  // past the unlock threshold (e.g. after a refresh or when returning
+  // after a failed attempt), surface the final-knowledge-test overlay
+  // immediately rather than making them scroll below the video.
+  const initialPhase: Phase =
+    requiresKnowledgeTest
+      && !alreadyCompleted
+      && !blockingSubmittedAttempt
+      && initialProgress.percentComplete >= thresholdPercent
+      ? { kind: "quiz-ready" }
+      : { kind: "video" };
+  const [phase, setPhase] = useState<Phase>(initialPhase);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -535,11 +553,63 @@ export default function CoursePlayer(props: Props) {
   }
 
   function onEnded() {
+    // EP-TRAIN-4B §4 (2026-10-31): extend the final watched interval
+    // to the authoritative video duration before committing.
+    //
+    // Root cause of the 98% end-of-video result the founder saw:
+    //   1. The video element's last `timeupdate` fires at
+    //      `currentTime = duration - ε` (ε ≈ 0.2–0.9s depending on
+    //      the file's keyframe cadence).
+    //   2. onTimeUpdate's natural-advance branch extends
+    //      `currentIntervalRef[1]` to that value — short of
+    //      `duration`.
+    //   3. onEnded used to push that interval UNCHANGED, so unique
+    //      coverage topped out at `duration - ε`.
+    //   4. The client floors coverage before sending
+    //      (`Math.floor(seconds)` in sendProgress).
+    //      → With a 41.5s video + videoDurationSec=42 stored in DB:
+    //        floor(41.3) = 41 → 41/42 = 97.6% → 98% rounded.
+    //
+    // Fix: the `ended` event is a definitive signal that the browser
+    // played the media to completion.  Credit the full authoritative
+    // duration (DB `videoDurationSec`, falling back to the media
+    // element's own `duration` if the DB value is unavailable).
+    // Seeking cannot forge the `ended` event — the browser only
+    // fires it after the media reached its end during actual
+    // playback.
+    const el = videoRef.current;
+    const mediaDuration = el?.duration && Number.isFinite(el.duration) ? el.duration : null;
+    const authoritativeEnd = videoDurationSec && videoDurationSec > 0
+      ? videoDurationSec
+      : mediaDuration;
     if (currentIntervalRef.current) {
-      watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+      const [start, lastSeen] = currentIntervalRef.current;
+      const end = authoritativeEnd !== null ? Math.max(lastSeen, authoritativeEnd) : lastSeen;
+      watchedIntervalsRef.current.push([start, end]);
       currentIntervalRef.current = null;
+    } else if (authoritativeEnd !== null) {
+      // Edge case: no open interval (e.g. video paused briefly then
+      // transitioned to ended via play-to-end from a pause-exit).
+      // Still credit the final segment [lastTime, duration].
+      const lastKnown = lastTimeRef.current;
+      if (lastKnown >= 0 && lastKnown < authoritativeEnd) {
+        watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
+      }
     }
     void sendProgress({ force: true });
+    // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
+    // in-player final assessment overlay rather than making them scroll
+    // past the video to find a Start button.  Only when phase is still
+    // "video" (so a mid-video checkpoint overlay isn't preempted) and
+    // the course requires a knowledge test the employee hasn't passed.
+    if (
+      requiresKnowledgeTest
+      && !alreadyCompleted
+      && !blockingSubmittedAttempt
+      && phase.kind === "video"
+    ) {
+      setPhase({ kind: "quiz-ready" });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -656,29 +726,70 @@ export default function CoursePlayer(props: Props) {
             {/* EP-TRAIN-3 Slice 3 (2026-10-29): checkpoint overlay
                 dims the video + presents the question UI inline when
                 a checkpoint has been triggered or the result is being
-                shown. */}
-            {(phase.kind === "checkpoint-answering" || phase.kind === "checkpoint-result") && (
+                shown.
+                EP-TRAIN-4B §3 (2026-10-31): same surface now also
+                hosts the final-knowledge-test states so the employee
+                never has to scroll below the video to start,
+                submit, or see the result. */}
+            {(phase.kind === "checkpoint-answering"
+              || phase.kind === "checkpoint-result"
+              || phase.kind === "quiz-ready"
+              || phase.kind === "quiz-answering"
+              || phase.kind === "grading"
+              || phase.kind === "quiz-result") && (
               <div
                 className="absolute inset-0 flex items-center justify-center bg-stone-900/85 p-4 overflow-y-auto"
                 data-testid="portal-checkpoint-overlay"
               >
-                <div className="max-w-2xl w-full bg-white rounded-lg shadow-xl p-6 space-y-4 my-auto">
-                  <CheckpointPanel
-                    phase={phase}
-                    checkpoints={sortedCheckpoints}
-                    answers={answers}
-                    multiAnswers={multiAnswers}
-                    busy={busy}
-                    setAnswers={setAnswers}
-                    setMultiAnswers={setMultiAnswers}
-                    onSubmit={onSubmitCheckpoint}
-                    onResume={onResumeAfterCheckpoint}
-                    onRetry={onRetryCheckpoint}
-                  />
+                <div className="max-w-2xl w-full bg-white rounded-lg shadow-xl p-6 space-y-4 my-auto max-h-full overflow-y-auto">
+                  {(phase.kind === "checkpoint-answering" || phase.kind === "checkpoint-result") && (
+                    <CheckpointPanel
+                      phase={phase}
+                      checkpoints={sortedCheckpoints}
+                      answers={answers}
+                      multiAnswers={multiAnswers}
+                      busy={busy}
+                      setAnswers={setAnswers}
+                      setMultiAnswers={setMultiAnswers}
+                      onSubmit={onSubmitCheckpoint}
+                      onResume={onResumeAfterCheckpoint}
+                      onRetry={onRetryCheckpoint}
+                    />
+                  )}
+                  {(phase.kind === "quiz-ready"
+                    || phase.kind === "quiz-answering"
+                    || phase.kind === "grading"
+                    || phase.kind === "quiz-result") && (
+                    <FinalAssessmentPanel
+                      phase={phase}
+                      questions={questions}
+                      answers={answers}
+                      busy={busy}
+                      passingScore={passingScore}
+                      retakesAllowed={retakesAllowed}
+                      setAnswers={setAnswers}
+                      onStart={onStartAttempt}
+                      onSubmit={onSubmitAttempt}
+                      onRetake={onRetake}
+                    />
+                  )}
                 </div>
               </div>
             )}
           </div>
+          {/* EP-TRAIN-4B §2 (2026-10-31): checkpoint markers strip.
+              Rendered as a separate band under the native video
+              controls (NOT inside the player's native timeline, which
+              browsers don't expose).  Each marker sits proportionally
+              at `atSecond / videoDurationSec * 100%` and distinguishes
+              completed / current / upcoming states.  The strip is
+              display-only — clicking a marker does NOT seek, so the
+              existing uncleared-checkpoint seek-cap is preserved. */}
+          <CheckpointMarkersStrip
+            checkpoints={sortedCheckpoints}
+            cleared={cleared}
+            videoDurationSec={videoDurationSec}
+          />
           <div className="px-5 py-3 border-t border-stone-200 flex items-center justify-between gap-4">
             <div className="flex-1 min-w-0">
               <div className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
@@ -702,11 +813,16 @@ export default function CoursePlayer(props: Props) {
         </section>
       )}
 
-      {/* Quiz block */}
-      {requiresKnowledgeTest && !alreadyCompleted && !blockingSubmittedAttempt && (
+      {/* EP-TRAIN-4B §3 (2026-10-31): the knowledge-test start / answer
+          / grade / result UI has moved INTO the in-player overlay above
+          (same surface as mid-video checkpoint overlays).  The below-
+          video quiz section is retained only for the pre-threshold
+          locked state and non-video-blocking error surfacing — it no
+          longer competes with the overlay for the employee's attention. */}
+      {requiresKnowledgeTest && !alreadyCompleted && !blockingSubmittedAttempt && phase.kind === "video" && !videoUnlocked && (
         <section
           className="rounded-lg border border-stone-200 bg-white px-5 py-5"
-          data-testid="portal-course-quiz-section"
+          data-testid="portal-course-quiz-locked-section"
         >
           <div className="flex items-baseline justify-between gap-3">
             <h2 className="font-serif text-xl text-club-ink">Knowledge test</h2>
@@ -714,167 +830,27 @@ export default function CoursePlayer(props: Props) {
               Passing score {passingScore}%
             </span>
           </div>
-
-          {phase.kind === "video" && !videoUnlocked && (
-            <div
-              className="mt-4 rounded-md bg-stone-50 border border-stone-200 px-4 py-3"
-              data-testid="portal-course-quiz-locked"
-            >
-              <p className="text-sm text-stone-700">
-                Complete the training video before starting the knowledge test.
-              </p>
-              <p className="mt-1 text-xs text-stone-500">
-                You&rsquo;ve watched {percentDisplay}% — the quiz unlocks at{" "}
-                {thresholdPercent}%.
-              </p>
-            </div>
-          )}
-
-          {phase.kind === "video" && videoUnlocked && (
-            <div className="mt-4" data-testid="portal-course-quiz-ready">
-              <p className="text-sm text-stone-700">
-                You&rsquo;re ready to take the knowledge test. Your answers will
-                be graded once you submit.
-              </p>
-              <button
-                type="button"
-                className="btn btn-primary mt-3"
-                onClick={onStartAttempt}
-                disabled={busy}
-                data-testid="portal-course-start-attempt"
-              >
-                {busy ? "Loading…" : "Start knowledge test"}
-              </button>
-            </div>
-          )}
-
-          {phase.kind === "quiz-answering" && (
-            <div className="mt-4 space-y-6" data-testid="portal-course-quiz-answering">
-              {questions.map((q, i) => (
-                <fieldset
-                  key={q.id}
-                  className="space-y-2"
-                  data-testid={`portal-course-question-${q.id}`}
-                >
-                  <legend className="text-sm text-club-ink">
-                    <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500 mr-2">
-                      Question {i + 1}
-                    </span>
-                    {q.prompt}
-                  </legend>
-                  <div className="mt-1 space-y-1.5">
-                    {q.options.map((o) => (
-                      <label
-                        key={o.id}
-                        className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
-                          answers[q.id] === o.id
-                            ? "border-club-green-700 bg-club-green-50"
-                            : "border-stone-200 hover:bg-stone-50"
-                        }`}
-                        data-testid={`portal-course-option-${o.id}`}
-                      >
-                        <input
-                          type="radio"
-                          name={q.id}
-                          value={o.id}
-                          checked={answers[q.id] === o.id}
-                          onChange={() =>
-                            setAnswers((prev) => ({ ...prev, [q.id]: o.id }))
-                          }
-                          className="accent-club-green-700"
-                        />
-                        <span className="text-sm text-stone-800">{o.text}</span>
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              ))}
-              <div className="flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={onSubmitAttempt}
-                  disabled={
-                    busy || questions.some((q) => !answers[q.id])
-                  }
-                  data-testid="portal-course-submit-attempt"
-                >
-                  {busy ? "Submitting…" : "Submit answers"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {phase.kind === "grading" && (
-            <div className="mt-4 text-sm text-stone-600" data-testid="portal-course-quiz-grading">
-              Grading your answers…
-            </div>
-          )}
-
-          {phase.kind === "quiz-result" && phase.passed && (
-            <div
-              className="mt-4 rounded-md border border-emerald-200 bg-emerald-50/70 px-4 py-3"
-              data-testid="portal-course-quiz-passed"
-            >
-              <p className="text-sm text-emerald-900">
-                <strong>Training complete.</strong> Score: {phase.score}%.
-              </p>
-              <div className="mt-3">
-                <Link
-                  href="/employee/safety-training"
-                  className="btn btn-secondary btn-sm"
-                  data-testid="portal-course-quiz-back-to-dashboard"
-                >
-                  Back to Safety &amp; Training
-                </Link>
-              </div>
-            </div>
-          )}
-
-          {phase.kind === "quiz-result" && !phase.passed && (
-            <div
-              className="mt-4 rounded-md border border-amber-200 bg-amber-50/70 px-4 py-3"
-              data-testid="portal-course-quiz-failed"
-            >
-              <p className="text-sm text-amber-900">
-                <strong>Not passed yet.</strong> Score: {phase.score}%. Review
-                the training material and try again.
-              </p>
-              {retakesAllowed ? (
-                <div className="mt-3 flex items-center gap-3">
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={onRetake}
-                    data-testid="portal-course-quiz-retake"
-                  >
-                    Try again
-                  </button>
-                  <Link
-                    href="/employee/safety-training"
-                    className="text-xs uppercase tracking-[0.16em] text-stone-500 hover:text-stone-800"
-                  >
-                    Back to Safety &amp; Training
-                  </Link>
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-stone-700">
-                  Retakes aren&rsquo;t allowed on this course. Speak with your
-                  Club administrator.
-                </p>
-              )}
-            </div>
-          )}
-
-          {error && (
-            <div
-              role="alert"
-              className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-              data-testid="portal-course-error"
-            >
-              {error}
-            </div>
-          )}
+          <div
+            className="mt-4 rounded-md bg-stone-50 border border-stone-200 px-4 py-3"
+            data-testid="portal-course-quiz-locked"
+          >
+            <p className="text-sm text-stone-700">
+              Complete the training video before starting the knowledge test.
+            </p>
+            <p className="mt-1 text-xs text-stone-500">
+              You&rsquo;ve watched {percentDisplay}% — the quiz unlocks at{" "}
+              {thresholdPercent}%.
+            </p>
+          </div>
+        </section>
+      )}
+      {error && (
+        <section
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          data-testid="portal-course-error"
+        >
+          {error}
         </section>
       )}
 
@@ -1075,12 +1051,19 @@ function CheckpointPanel({
     );
   }
   if (phase.kind === "checkpoint-result") {
+    // EP-TRAIN-4B §1 (2026-10-31): copy polished to match the Spectre
+    // premium tone — encouraging, specific, no exclamation stacking or
+    // gamified praise.  The policy (attempts remaining, retry
+    // governance, no answer disclosure) is unchanged.
     return (
       <div className="space-y-4" data-testid="portal-checkpoint-result">
         {phase.passed ? (
           <>
-            <h3 className="font-serif text-xl text-emerald-900">Checkpoint cleared</h3>
-            <p className="text-sm text-stone-700">Great. Playback resumes from where you paused.</p>
+            <h3 className="font-serif text-xl text-emerald-900">Nicely done.</h3>
+            <p className="text-sm text-stone-700">
+              You&rsquo;ve got it. You&rsquo;re ready for the next part of your
+              training.
+            </p>
             <div className="flex justify-end">
               <button
                 type="button"
@@ -1088,22 +1071,31 @@ function CheckpointPanel({
                 onClick={onResume}
                 data-testid="portal-checkpoint-resume"
               >
-                Resume video
+                Continue watching
               </button>
             </div>
           </>
         ) : phase.exhausted ? (
           <>
-            <h3 className="font-serif text-xl text-amber-900">No retries remaining</h3>
+            <h3 className="font-serif text-xl text-amber-900">
+              Let&rsquo;s pause here for now.
+            </h3>
             <p className="text-sm text-stone-700">
-              Please contact your manager. They can reset this checkpoint.
+              You&rsquo;ve used your attempts on this checkpoint. Please speak
+              with your manager — they can review the segment with you and
+              reopen this checkpoint when you&rsquo;re ready to try again.
             </p>
           </>
         ) : (
           <>
-            <h3 className="font-serif text-xl text-amber-900">Not quite</h3>
+            <h3 className="font-serif text-xl text-amber-900">
+              Not quite &mdash; give it another try.
+            </h3>
             <p className="text-sm text-stone-700">
-              Review the segment and try again. You have {phase.attemptsRemaining} attempt{phase.attemptsRemaining === 1 ? "" : "s"} left.
+              Review the relevant moment in the video, then re-answer the
+              question. You have {phase.attemptsRemaining} attempt
+              {phase.attemptsRemaining === 1 ? "" : "s"} remaining on this
+              checkpoint.
             </p>
             <div className="flex justify-end gap-3">
               <button
@@ -1121,4 +1113,306 @@ function CheckpointPanel({
     );
   }
   return null;
+}
+
+// EP-TRAIN-4B §3 (2026-10-31): final knowledge test, rendered INSIDE
+// the video viewer overlay.  Mirrors the checkpoint overlay surface so
+// the employee stays within a single visual context from start to
+// finish — no scrolling below the video to begin, submit, or see the
+// result.  All state transitions re-use the pre-existing
+// onStartAttempt / onSubmitAttempt / onRetake handlers; this component
+// is a UI shell only.
+function FinalAssessmentPanel({
+  phase,
+  questions,
+  answers,
+  busy,
+  passingScore,
+  retakesAllowed,
+  setAnswers,
+  onStart,
+  onSubmit,
+  onRetake,
+}: {
+  phase: Extract<Phase, { kind: "quiz-ready" | "quiz-answering" | "grading" | "quiz-result" }>;
+  questions: Question[];
+  answers: Record<string, string>;
+  busy: boolean;
+  passingScore: number;
+  retakesAllowed: boolean;
+  setAnswers: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  onStart: () => void;
+  onSubmit: () => void;
+  onRetake: () => void;
+}) {
+  if (phase.kind === "quiz-ready") {
+    return (
+      <div className="space-y-4" data-testid="portal-course-quiz-ready">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="font-serif text-xl text-club-ink">
+            Ready for your final knowledge test
+          </h3>
+          <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
+            Passing score {passingScore}%
+          </span>
+        </div>
+        <p className="text-sm text-stone-700">
+          You&rsquo;ve finished the training video. The knowledge test confirms
+          what you&rsquo;ve learned. Your answers will be graded once you submit.
+        </p>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onStart}
+            disabled={busy}
+            data-testid="portal-course-start-attempt"
+          >
+            {busy ? "Loading…" : "Start knowledge test"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (phase.kind === "quiz-answering") {
+    return (
+      <div className="space-y-4" data-testid="portal-course-quiz-answering">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="font-serif text-xl text-club-ink">Knowledge test</h3>
+          <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
+            Passing score {passingScore}%
+          </span>
+        </div>
+        <div className="space-y-5">
+          {questions.map((q, i) => (
+            <fieldset
+              key={q.id}
+              className="space-y-2"
+              data-testid={`portal-course-question-${q.id}`}
+            >
+              <legend className="text-sm text-club-ink">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500 mr-2">
+                  Question {i + 1}
+                </span>
+                {q.prompt}
+              </legend>
+              <div className="mt-1 space-y-1.5">
+                {q.options.map((o) => (
+                  <label
+                    key={o.id}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-md border cursor-pointer ${
+                      answers[q.id] === o.id
+                        ? "border-club-green-700 bg-club-green-50"
+                        : "border-stone-200 hover:bg-stone-50"
+                    }`}
+                    data-testid={`portal-course-option-${o.id}`}
+                  >
+                    <input
+                      type="radio"
+                      name={q.id}
+                      value={o.id}
+                      checked={answers[q.id] === o.id}
+                      onChange={() =>
+                        setAnswers((prev) => ({ ...prev, [q.id]: o.id }))
+                      }
+                      className="accent-club-green-700"
+                    />
+                    <span className="text-sm text-stone-800">{o.text}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onSubmit}
+            disabled={busy || questions.some((q) => !answers[q.id])}
+            data-testid="portal-course-submit-attempt"
+          >
+            {busy ? "Submitting…" : "Submit answers"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (phase.kind === "grading") {
+    return (
+      <div className="space-y-2" data-testid="portal-course-quiz-grading">
+        <h3 className="font-serif text-xl text-club-ink">Grading your answers&hellip;</h3>
+        <p className="text-sm text-stone-700">This takes a moment.</p>
+      </div>
+    );
+  }
+  // quiz-result
+  if (phase.passed) {
+    return (
+      <div className="space-y-3" data-testid="portal-course-quiz-passed">
+        <h3 className="font-serif text-xl text-emerald-900">Excellent work.</h3>
+        <p className="text-sm text-stone-700">
+          You passed the knowledge test with {phase.score}%. Your training is
+          now marked complete.
+        </p>
+        <div className="flex justify-end">
+          <Link
+            href="/employee/safety-training"
+            className="btn btn-secondary btn-sm"
+            data-testid="portal-course-quiz-back-to-dashboard"
+          >
+            Back to Safety &amp; Training
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3" data-testid="portal-course-quiz-failed">
+      <h3 className="font-serif text-xl text-amber-900">
+        Close &mdash; not quite there yet.
+      </h3>
+      <p className="text-sm text-stone-700">
+        You scored {phase.score}%, which is just below the {passingScore}%
+        pass mark.
+        {retakesAllowed
+          ? " When you&rsquo;re ready, take a moment to review the training video and try the knowledge test again."
+          : ""}
+      </p>
+      {retakesAllowed ? (
+        <div className="flex items-center justify-end gap-3">
+          <Link
+            href="/employee/safety-training"
+            className="text-xs uppercase tracking-[0.16em] text-stone-500 hover:text-stone-800"
+          >
+            Back to Safety &amp; Training
+          </Link>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={onRetake}
+            data-testid="portal-course-quiz-retake"
+          >
+            Review and retake
+          </button>
+        </div>
+      ) : (
+        <p className="text-xs text-stone-700">
+          Retakes aren&rsquo;t enabled on this course. Please speak with your
+          Club administrator and they&rsquo;ll help you with the next step.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// EP-TRAIN-4B §2 (2026-10-31): visible checkpoint markers strip.
+//
+// Native HTML5 video controls don't expose a hook to render markers on
+// the browser's own timeline, so we draw a parallel strip immediately
+// under the video.  Each marker sits at `cp.atSecond / videoDurationSec
+// * 100%` of the strip's width.  States:
+//
+//   completed — the employee has cleared this checkpoint (filled
+//               green with a check glyph in the accessible name)
+//   upcoming  — not yet cleared (hollow amber ring if required,
+//               hollow stone ring if optional)
+//
+// The strip is DISPLAY-ONLY.  Clicking a marker does nothing; this
+// preserves the existing seek-cap against uncleared required
+// checkpoints — a seeking bypass via marker click is explicitly out
+// of scope per directive §2.
+//
+// Accessibility: the strip is wrapped in a labelled region, each
+// marker exposes an aria-label of the form "Checkpoint N of M at
+// m:ss — completed/upcoming/upcoming required", and the overall count
+// is announced on load.
+export function CheckpointMarkersStrip({
+  checkpoints,
+  cleared,
+  videoDurationSec,
+}: {
+  checkpoints: Checkpoint[];
+  cleared: Set<string>;
+  videoDurationSec: number | null;
+}) {
+  if (!videoDurationSec || videoDurationSec <= 0 || checkpoints.length === 0) {
+    return null;
+  }
+  const total = checkpoints.length;
+  const clearedCount = checkpoints.reduce(
+    (n, cp) => (cleared.has(cp.id) ? n + 1 : n),
+    0,
+  );
+  return (
+    <div
+      className="px-5 pt-3 pb-1 border-t border-stone-200"
+      data-testid="portal-course-checkpoint-strip"
+      role="group"
+      aria-label={`Training checkpoints: ${clearedCount} of ${total} cleared`}
+    >
+      <div className="flex items-baseline justify-between">
+        <div className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
+          Checkpoints
+        </div>
+        <div
+          className="text-xs text-stone-600 tabular-nums"
+          data-testid="portal-course-checkpoint-count"
+        >
+          {clearedCount} of {total} cleared
+        </div>
+      </div>
+      <div className="relative mt-2 h-5">
+        <div
+          className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full bg-stone-200"
+          aria-hidden
+        />
+        {checkpoints.map((cp, i) => {
+          const pct = Math.min(100, Math.max(0, (cp.atSecond / videoDurationSec) * 100));
+          const isCleared = cleared.has(cp.id);
+          const mins = Math.floor(cp.atSecond / 60);
+          const secs = Math.floor(cp.atSecond % 60);
+          const timeLabel = `${mins}:${secs.toString().padStart(2, "0")}`;
+          const statusLabel = isCleared
+            ? "completed"
+            : cp.requiredToProceed
+              ? "upcoming (required)"
+              : "upcoming";
+          return (
+            <span
+              key={cp.id}
+              className={
+                "absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center " +
+                "w-3.5 h-3.5 rounded-full border-2 " +
+                (isCleared
+                  ? "bg-club-green-700 border-club-green-700"
+                  : cp.requiredToProceed
+                    ? "bg-white border-amber-500"
+                    : "bg-white border-stone-400")
+              }
+              style={{ left: `${pct}%` }}
+              data-testid={`portal-course-checkpoint-marker-${cp.id}`}
+              data-checkpoint-status={isCleared ? "completed" : "upcoming"}
+              role="img"
+              aria-label={`Checkpoint ${i + 1} of ${total} at ${timeLabel}, ${statusLabel}`}
+              title={`Checkpoint ${i + 1} at ${timeLabel} — ${statusLabel}`}
+            >
+              {isCleared && (
+                <svg
+                  viewBox="0 0 10 10"
+                  className="w-2 h-2 text-white"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden
+                >
+                  <polyline points="1,5 4,8 9,2" />
+                </svg>
+              )}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
