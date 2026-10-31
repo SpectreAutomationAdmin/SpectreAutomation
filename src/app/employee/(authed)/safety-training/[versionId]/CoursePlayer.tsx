@@ -582,6 +582,7 @@ export default function CoursePlayer(props: Props) {
     const authoritativeEnd = videoDurationSec && videoDurationSec > 0
       ? videoDurationSec
       : mediaDuration;
+    const openInterval = currentIntervalRef.current ? [currentIntervalRef.current[0], currentIntervalRef.current[1]] : null;
     if (currentIntervalRef.current) {
       const [start, lastSeen] = currentIntervalRef.current;
       const end = authoritativeEnd !== null ? Math.max(lastSeen, authoritativeEnd) : lastSeen;
@@ -596,6 +597,19 @@ export default function CoursePlayer(props: Props) {
         watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
       }
     }
+    // EP-TRAIN-4B §4 diagnostic (2026-10-31) — one-shot log so the
+    // Playwright probe can confirm `videoDurationSec` propagated AND
+    // the final interval was extended before sendProgress fires.
+    // Non-sensitive; strip in a follow-up once staging confirms.
+    // eslint-disable-next-line no-console
+    console.log("[ep4b-onEnded]", JSON.stringify({
+      videoDurationSec,
+      mediaDuration,
+      authoritativeEnd,
+      openInterval,
+      watchedIntervalsCount: watchedIntervalsRef.current.length,
+      lastInterval: watchedIntervalsRef.current[watchedIntervalsRef.current.length - 1] ?? null,
+    }));
     void sendProgress({ force: true });
     // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
     // in-player final assessment overlay rather than making them scroll
