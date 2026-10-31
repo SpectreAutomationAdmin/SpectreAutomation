@@ -184,6 +184,29 @@ describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
     expect(seconds).toBe(18); // 10 + 8, NOT 20
   });
 
+  it("EP-TRAIN-4B-1: onPause extends to el.currentTime closes pause-side jitter at SOURCE (0.258s observed)", () => {
+    // Observed staging intervals BEFORE the onPause-source fix:
+    //   [0, 9.776], [10.034, 15.081], [15.081, 19.871], ...
+    //   Gaps: 0.258, 50µs, 0.138, 15µs, 0.159 — all from pause-time
+    //   boundaries where `el.currentTime > lastTimeRef` snapshot.
+    //
+    // AFTER the onPause source fix, each committed interval's end
+    // matches `el.currentTime` at the moment of pause; the first
+    // post-resume tick's dt is sub-millisecond (naturalAdvance
+    // bridges via `[now - dt, now]`).  All gaps collapse under the
+    // 0.05s merge tolerance:
+    const committed: Array<[number, number]> = [
+      [0, 10.03],       // onPause captured currentTime=10.03
+      [10.034, 15.1],   // resume: naturalAdvance bridges from 10.034
+      [15.1, 20.01],    // onPause at currentTime=20.01
+      [20.015, 28.3],   // resume
+      [28.3, 29.98],    // onPause at currentTime=29.98
+      [29.99, 42],      // final-segment resume → extended by onEnded
+    ];
+    expect(uniqueCoverageSeconds(committed)).toBe(42);
+    expect(Math.floor(uniqueCoverageSeconds(committed))).toBe(42);
+  });
+
   it("EP-TRAIN-4B-1: 20 repeated 0.1s pause-resume gaps DO NOT inflate past tolerance", () => {
     // Adversarial: user pause-taps 20 times, each pause creating a
     // 0.1s gap between successive committed intervals.  Prior to

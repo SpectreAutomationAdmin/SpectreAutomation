@@ -558,8 +558,29 @@ export default function CoursePlayer(props: Props) {
   }
 
   function onPause() {
+    // EP-TRAIN-4B-1 (2026-10-31): close the pause-side half of the
+    // tick-boundary coverage gap.
+    //
+    // `onTimeUpdate` snapshots `currentIntervalRef[1]` at each
+    // `timeupdate` event (which fires at most every ~250ms during
+    // playback).  When the user pauses, the committed interval ends
+    // at the LAST `timeupdate` currentTime — typically 100-300ms
+    // short of the real `el.currentTime` at pause.  That gap is
+    // then preserved by the merge (the gap exceeds the 0.05s
+    // tolerance), understating unique coverage by 0.1-0.3s per pause
+    // and compounding into a visibly wrong watch-progress %.
+    //
+    // Fix: extend the committed interval's end to `el.currentTime`
+    // (the real pause position).  Content between `lastSeen` and
+    // `currentTime` WAS actually played — the video just paused
+    // mid-tick before `timeupdate` could record it.
+    const el = videoRef.current;
     if (currentIntervalRef.current) {
-      watchedIntervalsRef.current.push([currentIntervalRef.current[0], currentIntervalRef.current[1]]);
+      const [start, lastSeen] = currentIntervalRef.current;
+      const end = el && Number.isFinite(el.currentTime)
+        ? Math.max(lastSeen, el.currentTime)
+        : lastSeen;
+      watchedIntervalsRef.current.push([start, end]);
       currentIntervalRef.current = null;
     }
     void sendProgress({ force: true });
@@ -627,8 +648,6 @@ export default function CoursePlayer(props: Props) {
         watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
       }
     }
-    // eslint-disable-next-line no-console
-    console.log("[ep4b1-onEnded]", JSON.stringify({ intervals: watchedIntervalsRef.current, lastTimeRef: lastTimeRef.current }));
     void sendProgress({ force: true });
     // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
     // in-player final assessment overlay rather than making them scroll
