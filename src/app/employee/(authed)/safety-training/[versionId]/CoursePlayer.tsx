@@ -149,16 +149,17 @@ const REPORT_INTERVAL_SECONDS = 15;
 const PLAYBACK_JUMP_GRACE_SECONDS_PER_RATE = 0.75;
 
 // EP-TRAIN-4B §4 (2026-10-31) — tick-jitter merge tolerance.
+// EP-TRAIN-4B-1 (2026-10-31) — tolerance TIGHTENED to 0.05s.
 //
-// `onTimeUpdate` records `currentTime` snapshots at each `timeupdate`
-// event; successive snapshots that bracket a pause / resume / seek-cap
-// transition can disagree by sub-millisecond values (e.g. 28.260210 →
-// 28.260256).  Those gaps are measurement jitter from the browser's
-// own `currentTime` precision — NOT real skipped-content gaps.  When
-// merging intervals, close any gap smaller than this tolerance so
-// unique coverage reflects what the user actually watched; a real
-// seek jump produces gaps > 0.5s and still forms a separate interval.
-const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.5;
+// Staging traces showed the real tick-boundary jitter between
+// successive committed intervals is sub-millisecond (0.000046s –
+// 0.000910s observed).  The initial fix used 0.5s which also absorbs
+// user-driven pause-resume gaps and allows cumulative inflation
+// (N pauses × tolerance = N × 0.5s of credited-but-unwatched time).
+// 0.05s (50ms) is >50× the observed jitter and still rules out any
+// legitimate user action gap, while bounding cumulative inflation
+// at an insignificant level even under adversarial repeated pauses.
+const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.05;
 
 // Normalise an array of [start, end] intervals: merge overlaps + sort.
 // Used to compute unique watched coverage (rewatch doesn't double-count).

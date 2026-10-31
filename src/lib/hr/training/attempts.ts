@@ -100,11 +100,33 @@ export async function recordVideoProgress(
   // Monotonic — never regress.
   const nextSeconds = Math.max(cappedSecondsInput, existing?.secondsWatched ?? 0);
   const nextFarthest = Math.max(cappedFarthestInput, existing?.farthestSecond ?? 0);
-  // Coarse guard against "seek to last second then claim 100%": if
-  // farthestSecond is >= duration but secondsWatched hasn't kept up,
-  // the percent is still capped by secondsWatched.
-  const duration = version.videoDurationSec ?? (Math.max(nextSeconds, nextFarthest) || 1);
-  const percentComplete = Math.min(100, Math.floor((nextSeconds / duration) * 100));
+  // EP-TRAIN-4B-1 (2026-10-31) — premature-100% defect root cause.
+  //
+  // When `videoDurationSec` is NULL on a published version (legacy
+  // uploader run without a duration probe, OR probe failed, OR the
+  // field was never populated), the previous fallback used
+  // `Math.max(nextSeconds, nextFarthest)` as the denominator.  That
+  // makes the ratio `nextSeconds / max(nextSeconds, nextFarthest)`
+  // equal to 1.0 whenever `nextSeconds >= nextFarthest` — which is
+  // the common case for natural playback where secondsWatched tracks
+  // farthestSecond.  The user then sees 100% watch progress after
+  // watching only a few seconds.
+  //
+  // Fix: when the course version has no authoritative duration, cap
+  // percentComplete at `VIDEO_COMPLETION_THRESHOLD_PERCENT - 1`
+  // (i.e. BELOW the final-assessment unlock threshold) so a missing
+  // duration cannot be used as a shortcut to course completion.  The
+  // final assessment unlock + completion gate therefore requires
+  // either (a) an authoritative duration on the version, or (b) an
+  // explicit audit-driven override — not a NULL duration + any watch.
+  const hasAuthoritativeDuration = typeof version.videoDurationSec === "number" && version.videoDurationSec > 0;
+  const duration = hasAuthoritativeDuration
+    ? (version.videoDurationSec as number)
+    : (Math.max(nextSeconds, nextFarthest) || 1);
+  let percentComplete = Math.min(100, Math.floor((nextSeconds / duration) * 100));
+  if (!hasAuthoritativeDuration && percentComplete >= VIDEO_COMPLETION_THRESHOLD_PERCENT) {
+    percentComplete = VIDEO_COMPLETION_THRESHOLD_PERCENT - 1;
+  }
 
   const row = await prisma.trainingProgress.upsert({
     where: { employeeId_courseVersionId: { employeeId: actor.employeeId, courseVersionId: version.id } },

@@ -17,7 +17,7 @@
 import { describe, it, expect } from "vitest";
 
 // Mirrors INTERVAL_MERGE_TOLERANCE_SECONDS in CoursePlayer.tsx.
-const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.5;
+const INTERVAL_MERGE_TOLERANCE_SECONDS = 0.05;
 
 function mergeIntervals(intervals: Array<[number, number]>): Array<[number, number]> {
   if (intervals.length === 0) return [];
@@ -175,13 +175,40 @@ describe("EP-TRAIN-4B §4 :: end-of-video progress accuracy", () => {
     expect(Math.round((Math.floor(seconds) / 42) * 100)).toBe(100);
   });
 
-  it("real seek gaps > 0.5s are PRESERVED (tolerance does not inflate coverage)", () => {
+  it("real seek gaps > 0.05s are PRESERVED (tolerance does not inflate coverage)", () => {
     // User watched [0, 10] then seeked ahead 2s to [12, 20].  Gap
-    // between the two intervals is 2s > tolerance (0.5s), so the
+    // between the two intervals is 2s > tolerance (0.05s), so the
     // merge preserves it.
     const committed: Array<[number, number]> = [[0, 10], [12, 20]];
     const seconds = uniqueCoverageSeconds(committed);
     expect(seconds).toBe(18); // 10 + 8, NOT 20
+  });
+
+  it("EP-TRAIN-4B-1: 20 repeated 0.1s pause-resume gaps DO NOT inflate past tolerance", () => {
+    // Adversarial: user pause-taps 20 times, each pause creating a
+    // 0.1s gap between successive committed intervals.  Prior to
+    // tolerance tightening (0.5s), each gap folded during merge →
+    // 20 × 0.1 = 2s inflation on a 42s video (5% unearned credit).
+    // With the new 0.05s tolerance, each 0.1s gap is PRESERVED as
+    // a real gap — zero inflation.
+    const committed: Array<[number, number]> = [];
+    for (let i = 0; i < 20; i++) {
+      committed.push([i * 2, i * 2 + 1.9]);  // 1.9s on + 0.1s gap pattern
+    }
+    const totalRealWatch = 20 * 1.9;  // 38s
+    expect(uniqueCoverageSeconds(committed)).toBeCloseTo(totalRealWatch, 2);
+  });
+
+  it("EP-TRAIN-4B-1: pre-existing 0.000910s microsecond gap IS still absorbed by 0.05s tolerance", () => {
+    // The real staging trace: successive currentTime snapshots at
+    // 15.030706 and 15.031616 — gap of 910µs.  Must still fold.
+    const committed: Array<[number, number]> = [
+      [0, 15.030706],
+      [15.031616, 28.26021],
+      [28.260256, 42],
+    ];
+    expect(uniqueCoverageSeconds(committed)).toBe(42);
+    expect(Math.floor(uniqueCoverageSeconds(committed))).toBe(42);
   });
 
   it("empty-committed-intervals edge case still gets a tail segment", () => {
