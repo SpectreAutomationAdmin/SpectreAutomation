@@ -392,11 +392,20 @@ export default function CoursePlayer(props: Props) {
   // EP-TRAIN-4D (2026-11-01): sendProgress now RETURNS the server
   // response so a caller (notably onEnded's final flush) can gate the
   // post-video UI transition on authoritative eligibility.
+  //
+  // EP-TRAIN-4E-1 (2026-11-01): short-circuit entirely when the
+  // course is already completed — replaying a completed course is a
+  // user-facing affordance only.  Any sendProgress call for a
+  // completed row would update TrainingProgress.updatedAt + possibly
+  // bump secondsWatched higher, which the founder directive forbids:
+  // the completion evidence (TrainingCompletion + the frozen
+  // TrainingProgress snapshot) must survive replay unchanged.
   const sendProgress = useCallback(
     async (opts?: { force?: boolean }): Promise<
       | { ok: true; percentComplete: number; videoCompleted: boolean; hasAuthoritativeDuration: boolean }
       | null
     > => {
+      if (alreadyCompleted) return null;
       if (!hasVideo) return null;
       // EP-TRAIN-3 Slice 3D (2026-10-30): derive secondsWatched from
       // the merged interval union so rewatch doesn't double-count. The
@@ -448,7 +457,7 @@ export default function CoursePlayer(props: Props) {
         inFlightRef.current = false;
       }
     },
-    [hasVideo, versionId, recordProgressAction],
+    [alreadyCompleted, hasVideo, versionId, recordProgressAction],
   );
 
   // EP-TRAIN-4E (2026-11-01) — mount-only stale-percent resync.
@@ -505,10 +514,26 @@ export default function CoursePlayer(props: Props) {
   // -------------------------------------------------------------------------
 
   function onLoadedMetadata(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const el = e.currentTarget;
+    // EP-TRAIN-4E-1 (2026-11-01) — completed-and-passed courses
+    // always open at 0:00 for replay.  The resume-from-farthestSecond
+    // optimization below is for IN-PROGRESS learners.  Chris's
+    // ORIENTATION_2027 (farthestSecond=51 / duration=51) was landing
+    // at min(51, duration-2) = 49, producing the 0:49 opening the
+    // founder reported on an already-completed course.
+    //
+    // Completion is read from TrainingCompletion server-side (not
+    // from percentComplete) — see src/app/employee/(authed)/
+    // safety-training/[versionId]/page.tsx:202 `alreadyCompleted={
+    // completion !== null}`.  Pure UX: no DB write.
+    if (alreadyCompleted) {
+      try { el.currentTime = 0; } catch { /* some browsers refuse pre-metadata seek — ignore */ }
+      lastTimeRef.current = 0;
+      return;
+    }
     // Resume from persisted farthestSecond so the employee doesn't
     // have to re-scrub — but cap at duration - 2 so they don't
     // resume past the end.
-    const el = e.currentTarget;
     if (initialProgress.farthestSecond > 1 && el.duration > 0) {
       el.currentTime = Math.min(initialProgress.farthestSecond, Math.max(0, el.duration - 2));
       lastTimeRef.current = el.currentTime;
@@ -539,7 +564,13 @@ export default function CoursePlayer(props: Props) {
     }
     if (now > farthestRef.current) farthestRef.current = now;
     // Trigger uses clearedRef (always current).
-    if (phase.kind === "video" && openingCheckpointRef.current === null) {
+    // EP-TRAIN-4E-1 (2026-11-01): don't trigger ANY checkpoint
+    // overlay during replay of a completed course — the completion
+    // evidence is already in the DB.  Required checkpoints will be
+    // in clearedRef so this is defensive, but it also suppresses
+    // optional checkpoints which the directive wants to not
+    // interrupt replay.
+    if (!alreadyCompleted && phase.kind === "video" && openingCheckpointRef.current === null) {
       const triggered = sortedCheckpoints.find(
         (cp) => !clearedRef.current.has(cp.id) && now >= cp.atSecond,
       );
