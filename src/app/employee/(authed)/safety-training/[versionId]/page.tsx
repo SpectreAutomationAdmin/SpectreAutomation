@@ -17,7 +17,6 @@
 //     by the layout on the permanent employee-portal cookie).
 
 import { notFound, redirect } from "next/navigation";
-import Link from "next/link";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import {
   getEmployeeCourseView,
@@ -33,6 +32,10 @@ import {
 import { prisma } from "@/lib/prisma";
 import CoursePlayer from "./CoursePlayer";
 import RecommendationsRail from "./RecommendationsRail";
+// EP-UX-1 (2026-11-01) — register the course title under the version
+// id so the top-chrome breadcrumb reads "Home > Safety Training >
+// <Course Title>" instead of the generic "Detail" fallback.
+import { RegisterBreadcrumbLabel } from "@/components/spectre/breadcrumb-labels";
 import {
   recordVideoProgressAction,
   startAttemptAction,
@@ -117,28 +120,15 @@ export default async function EmployeeCoursePage({
       className="w-full px-6 md:px-8 py-6 md:py-8 space-y-6"
       data-testid="portal-course"
     >
-      {/* §2 Breadcrumb (left) + status pills (right) on one row.
-         `flex-wrap` lets narrow viewports stack them without overflow. */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <nav
-          aria-label="Breadcrumb"
-          className="text-xs tracking-[0.14em] uppercase text-stone-500 min-w-0"
-          data-testid="portal-course-breadcrumb"
-        >
-          <Link href="/employee" className="hover:text-club-green-800">
-            Home
-          </Link>
-          <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
-          <Link
-            href="/employee/safety-training"
-            className="hover:text-club-green-800"
-            data-testid="portal-course-back"
-          >
-            Safety &amp; Training
-          </Link>
-          <span aria-hidden="true" className="mx-2 text-stone-300">/</span>
-          <span className="text-stone-800 break-words">{safeTitle}</span>
-        </nav>
+      {/* EP-UX-1 (2026-11-01) — the Breadcrumb trail has moved from
+         the page content into the Employee Portal's top chrome
+         (shared HeaderContextRail).  `RegisterBreadcrumbLabel` here
+         supplies the entity label so the top-chrome crumb reads
+         "Home > Safety Training > <Course Title>" instead of the
+         generic "Detail" fallback.  Status pills remain on the
+         page itself. */}
+      <RegisterBreadcrumbLabel id={versionId} label={safeTitle} />
+      <div className="flex items-center justify-end gap-4 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap" data-testid="portal-course-chips">
           <span
             className="inline-flex items-center rounded-full border border-stone-300 bg-white px-2.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.14em] text-stone-700"

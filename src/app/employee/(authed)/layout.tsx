@@ -30,6 +30,13 @@ import EmployeePortalTopBar from "@/components/employee/EmployeePortalTopBar";
 import EmployeePortalMobileNav from "@/components/employee/EmployeePortalMobileNav";
 import MobileBottomNav from "@/components/employee/mobile/MobileBottomNav";
 import ViewportDebugOverlay from "@/components/employee/ViewportDebugOverlay";
+// EP-UX-1 (2026-11-01) — top-chrome parity with Admin.  The shared
+// HeaderContextRail (reused by EmployeePortalTopBar + the mobile nav)
+// reads dynamic breadcrumb labels from this provider, so pages like
+// /employee/safety-training/[versionId] can register a human-readable
+// title via <RegisterBreadcrumbLabel/> instead of the generic
+// "Detail" fallback.  Admin layout mounts the same provider.
+import { BreadcrumbLabelsProvider } from "@/components/spectre/breadcrumb-labels";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -102,7 +109,7 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
       ?? "unknown";
 
   return (
-    <>
+    <BreadcrumbLabelsProvider>
       {/* ============================================================
           DESKTOP SHELL (md+ only) — HR mobile-hotfix continuation
           (2026-08-28) rebuilt to the accepted desktop reference:
@@ -199,6 +206,6 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
       <Suspense fallback={null}>
         <ViewportDebugOverlay releaseMarker={releaseMarker} />
       </Suspense>
-    </>
+    </BreadcrumbLabelsProvider>
   );
 }

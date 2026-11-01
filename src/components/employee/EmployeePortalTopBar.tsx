@@ -3,16 +3,27 @@
 // HR mobile-hotfix continuation (2026-08-28) — desktop top header
 // rebuilt to the accepted desktop reference.
 //
+// EP-UX-1 (2026-11-01) — the tenant-name section + newly-relocated
+// breadcrumb trail now render through the SHARED
+// `src/components/spectre/HeaderContextRail` component — the same
+// primitive the Admin SpectreTopBar uses — so tenant typography
+// (14 px / 18 px / 600 / 0.002 em letter-spacing, sans-serif,
+// no-wrap, ellipsis @ 44ch) matches Admin exactly.  The surrounding
+// green chrome, h-20, notification bell, and user menu are
+// preserved per the EP-UX-1 scope-protection rule.
+//
 // Dark forest-green bar that spans from the right edge of the
 // sidebar to the right edge of the viewport. Composition:
 //
-//   [ TENANT NAME on 2 lines ] ............ [ 🔔 badge ] [ avatar + given name + chevron ]
+//   [ TENANT NAME ·  Crumb > Crumb > Current ] ... [ 🔔 ] [ avatar + name + ⌄ ]
 //
 // The Spectre / Automation wordmark lives in the sidebar (matching
 // the accepted reference) so the header itself carries only the
-// tenant identity + right-side employee controls.
+// tenant identity + breadcrumb + right-side employee controls.
 
+import type { CSSProperties } from "react";
 import EmployeePortalUserMenu from "./EmployeePortalUserMenu";
+import { HeaderContextRail } from "@/components/spectre/HeaderContextRail";
 
 interface Props {
   clubName: string;
@@ -28,18 +39,21 @@ interface Props {
   unreadNotificationCount?: number | null;
 }
 
-function formatClubNameTwoLines(name: string): React.ReactNode {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length <= 2) return name;
-  const head = parts.slice(0, 2).join(" ");
-  const tail = parts.slice(2).join(" ");
-  return (
-    <>
-      <div className="truncate">{head}</div>
-      <div className="truncate">{tail}</div>
-    </>
-  );
-}
+// EP-UX-1 (2026-11-01) — scope the Spectre palette tokens the shared
+// `HeaderContextRail` reads so the identical typography + layout
+// render in white-on-green inside the Employee Portal's existing
+// green chrome.  Only the four tokens the rail's CSS uses are
+// overridden; nothing cascades beyond the rail wrapper.
+const emeraldChromeRailStyle: CSSProperties = {
+  // tenant name + aria-current + link:hover
+  ["--spectre-text-primary" as string]: "rgba(255, 255, 255, 0.98)",
+  // base crumb colour + non-current link
+  ["--spectre-text-muted" as string]: "rgba(255, 255, 255, 0.72)",
+  // chevron separator between crumbs
+  ["--spectre-text-subtle" as string]: "rgba(255, 255, 255, 0.5)",
+  // 1 px vertical hairline between tenant and first crumb
+  ["--spectre-border-hairline" as string]: "rgba(255, 255, 255, 0.28)",
+};
 
 export default function EmployeePortalTopBar({
   clubName, displayName, givenName, employeeNumber, hasPhoto, photoVersion,
@@ -54,31 +68,26 @@ export default function EmployeePortalTopBar({
       className="relative h-20 flex items-stretch bg-club-green-800 text-white pl-0 pr-8 gap-8 sticky top-0 z-20"
       data-testid="portal-header"
     >
-      {/* Gold vertical separator — now anchored to the topbar's
-         LEFT EDGE (x=0 inside the header, which visually joins the
-         sidebar's right edge at the 256 px sidebar/main-area
-         boundary). The line reinforces the structural boundary
-         between the left nav column and the main content region.
-         Not full header height; ~40 px tall inset. Uses the same
-         `club-gold` token at 55 % opacity so it remains a
-         supporting detail rather than an accent. */}
+      {/* Gold vertical separator — anchored to the topbar's LEFT EDGE
+         (x=0 inside the header, which visually joins the sidebar's
+         right edge at the 256 px sidebar/main-area boundary). The
+         line reinforces the structural boundary between the left nav
+         column and the main content region. ~40 px tall inset. */}
       <div
         aria-hidden="true"
         className="absolute left-0 top-1/2 -translate-y-1/2 w-px h-10 bg-club-gold/55"
         data-testid="portal-header-separator"
       />
-      {/* Tenant identity — canonical current-Club name in two
-         lines, scaled up per the accepted reference. `pl-8` gives
-         the tenant name the same 32 px indent from the separator
-         that the previous `px-8 + gap-8` layout produced. */}
-      <div className="flex items-center min-w-0 flex-1 pl-8">
-        <div
-          className="font-serif text-[22px] leading-[1.15] text-white/95 min-w-0"
-          data-testid="portal-header-club-name"
-          title={clubName}
-        >
-          {formatClubNameTwoLines(clubName)}
-        </div>
+      {/* EP-UX-1 (2026-11-01) — tenant identity + breadcrumb trail,
+         rendered through the shared `HeaderContextRail`.  Admin uses
+         the identical component on `SpectreTopBar`.  The CSS-variable
+         overrides on this wrapper translate the dark-Spectre palette
+         to white-on-green without introducing a new typography path. */}
+      <div
+        className="flex items-center min-w-0 flex-1 pl-8"
+        style={emeraldChromeRailStyle}
+      >
+        <HeaderContextRail tenantName={clubName} />
       </div>
 
       {/* Right-side controls — notification bell + account menu. */}

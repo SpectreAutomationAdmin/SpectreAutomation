@@ -67,6 +67,13 @@ export const SEGMENT_LABEL_OVERRIDES: Record<string, string> = {
   ap: "AP",
   ar: "AR",
   coa: "COA",
+  // EP-UX-1 (2026-11-01) — the Employee Portal lives under /employee/*.
+  // The sidebar's top link is "Home" and points to /employee, so the
+  // first breadcrumb segment should also read "Home" to match the
+  // sidebar taxonomy (same pattern as Admin's "App > Mission Control").
+  // Safe for Admin: admin routes use the PLURAL segment "employees"
+  // (e.g. /app/admin/people/employees), which does not collide.
+  employee: "Home",
   gl: "GL",
   hr: "HR",
   it: "IT",

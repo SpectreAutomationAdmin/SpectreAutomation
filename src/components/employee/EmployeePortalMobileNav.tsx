@@ -56,23 +56,17 @@ interface Props {
   photoVersion: string | null;
 }
 
-/** Break a club name into two lines the way the reference does —
- *  first word (or the first two if it's a two-word club) on line 1,
- *  the rest on line 2. Falls back to a single line for very short
- *  names ("The Club"). */
-function formatClubNameTwoLines(name: string): React.ReactNode {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length <= 2) return name;
-  // "Coulee Ridge Golf & Country Club" → "Coulee Ridge" / "Golf & Country Club"
-  const head = parts.slice(0, 2).join(" ");
-  const tail = parts.slice(2).join(" ");
-  return (
-    <>
-      <div className="truncate">{head}</div>
-      <div className="truncate">{tail}</div>
-    </>
-  );
-}
+// EP-UX-1 (2026-11-01) — tenant typography scope.  Overrides the four
+// Spectre palette tokens the `.spectre-header-rail-tenant` CSS reads
+// so the SAME typography (14 px / 18 px / 600 / 0.002 em letter-
+// spacing, sans-serif, no-wrap, ellipsis @ 44ch) that Admin uses on
+// its dark chrome renders in white on the mobile green chrome.
+const emeraldTenantStyle: React.CSSProperties = {
+  ["--spectre-text-primary" as string]: "rgba(255, 255, 255, 0.98)",
+  ["--spectre-text-muted" as string]: "rgba(255, 255, 255, 0.72)",
+  ["--spectre-text-subtle" as string]: "rgba(255, 255, 255, 0.5)",
+  ["--spectre-border-hairline" as string]: "rgba(255, 255, 255, 0.28)",
+};
 
 export default function EmployeePortalMobileNav({
   clubName,
@@ -168,11 +162,22 @@ export default function EmployeePortalMobileNav({
             </span>
           </span>
           <div aria-hidden="true" className="mx-3 h-8 w-px bg-white/25" />
+          {/* EP-UX-1 (2026-11-01) — tenant typography matches Admin.
+             Breadcrumbs are intentionally omitted at mobile widths
+             (<768 px); the mobile bottom-nav gives location context
+             and the top bar already carries hamburger + wordmark +
+             tenant + avatar, so adding a crumb trail would collide. */}
           <div
-            className="min-w-0 flex-1 font-serif text-[13px] leading-[1.15] text-white/95"
-            data-testid="portal-mobile-club-name"
+            className="min-w-0 flex-1 flex items-center"
+            style={emeraldTenantStyle}
           >
-            {formatClubNameTwoLines(clubName)}
+            <span
+              className="spectre-header-rail-tenant"
+              data-testid="portal-mobile-club-name"
+              title={clubName}
+            >
+              {clubName}
+            </span>
           </div>
         </div>
         {/* Account menu — trigger button lives inside the header, but the
