@@ -26,13 +26,17 @@
 //     Principal cannot enter this page.
 
 import { notFound, redirect } from "next/navigation";
+import Link from "next/link";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import {
   getEmployeeCourseView,
   getEmployeeAttemptHistory,
 } from "@/lib/hr/training/employee-read";
 import { getProgress, VIDEO_COMPLETION_THRESHOLD_PERCENT } from "@/lib/hr/training/attempts";
-import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
+import {
+  resolveApplicableCourses,
+  resolveEmployeeSchedulingEligibility,
+} from "@/lib/hr/training/applicability";
 import { getPlayerState } from "@/lib/hr/training/attempts";
 import {
   getEmployeeTrainingRecommendations,
@@ -103,7 +107,7 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion, recommendations, playerState] = await Promise.all([
+  const [progress, attempts, completion, recommendations, playerState, eligibility] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
     prisma.trainingCompletion.findUnique({
@@ -121,6 +125,11 @@ export default async function EmployeeCoursePage({
       limit: 6,
     }),
     getPlayerState(principal, versionId),
+    // EP-UX-2B (2026-11-01) — the Required Training rail reads from
+    // the same server-authoritative eligibility resolver the dashboard
+    // uses.  Only tenant-scoped, applicable, uncompleted, required
+    // courses appear.
+    resolveEmployeeSchedulingEligibility(principal.employeeId),
   ]);
   const initialClearedCheckpointIds = playerState.checkpoints.filter((c) => c.cleared).map((c) => c.id);
 
@@ -154,6 +163,18 @@ export default async function EmployeeCoursePage({
   const durationLabel = formatDuration(view.version.videoDurationSec);
   const typeLabel = courseTypeLabel(view);
 
+  // EP-UX-2B (2026-11-01) — outstanding required courses for the
+  // right-hand rail.  Filter rules per directive §2:
+  //   1. applicable (resolver guarantees tenant scope + applicability)
+  //   2. required (not merely recommended)
+  //   3. not completed
+  //   4. not the currently viewed version
+  //   5. deterministic ordering by title (no due-date model exists)
+  const outstandingRequired = eligibility.applicable
+    .filter((a) => a.version.required && !a.completed && a.version.id !== versionId)
+    .sort((x, y) => x.title.localeCompare(y.title));
+  const hasAnyAssignments = eligibility.applicable.length > 0;
+
   return (
     <div
       className="w-full px-6 md:px-8 py-6 md:py-8 max-w-[1600px]"
@@ -162,13 +183,25 @@ export default async function EmployeeCoursePage({
       <RegisterBreadcrumbLabel id={versionId} label={safeTitle} />
 
       {/* ------------------------------------------------------------
-          §10 — Course header (title + metadata chip row) */}
+          §10 — Course header (back arrow + title + metadata chip row)
+          EP-UX-2B (2026-11-01) — the play-circle has been replaced by
+          an interactive back arrow that navigates to the Safety &
+          Training dashboard.  Uses an explicit route (not
+          router.back()) so a direct-link / email / bookmark landing
+          still resolves correctly. */}
       <header className="mb-6" data-testid="portal-course-header">
         <h1
           className="font-serif text-3xl md:text-4xl text-club-ink leading-tight flex items-center gap-3"
           data-testid="portal-course-title"
         >
-          <PlayCircle className="text-club-green-800" />
+          <Link
+            href="/employee/safety-training"
+            aria-label="Back to Safety & Training"
+            data-testid="portal-course-back-arrow"
+            className="inline-flex items-center justify-center h-11 w-11 rounded-full text-club-green-800 hover:bg-club-green-50 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold shrink-0"
+          >
+            <BackArrowIcon />
+          </Link>
           <span>{safeTitle}</span>
         </h1>
         <div
@@ -201,14 +234,17 @@ export default async function EmployeeCoursePage({
       </header>
 
       {/* ------------------------------------------------------------
-          §11 — Two-column: CoursePlayer (left) + TrainingStatusPanel (right)
-          Mobile stacks (single column); tablet single column; desktop ≥ lg
-          switches to 70/30 — matches founder reference. */}
+          §11 — EP-UX-2B two-column layout.  Tabs now live INSIDE the
+          left column (constrained to the video-column width) rather
+          than spanning the whole content area.  The right column
+          stacks the Training Status Panel + Required Training rail.
+          Mobile stacks single-column; tablet single-column; desktop
+          lg+ 70/30. */}
       <div
         id="course-video"
-        className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] gap-6 lg:gap-8"
+        className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px] gap-6 lg:gap-8 items-start"
       >
-        {/* LEFT — CoursePlayer (EP-TRAIN-4E, unchanged props) */}
+        {/* LEFT — CoursePlayer (EP-TRAIN-4E, unchanged props) + course tabs */}
         <div className="min-w-0 space-y-6">
           <CoursePlayer
             versionId={versionId}
@@ -236,66 +272,73 @@ export default async function EmployeeCoursePage({
             submitAttemptAction={submitAttemptAction}
             startCheckpointAttemptAction={startCheckpointAttemptAction}
           />
+
+          {/* §14 — Course detail tabs — EP-UX-2B pulls these INTO the
+             left column so they inherit the video's column width.
+             The tabs no longer span under the right-hand rail. */}
+          <TrainingTabs
+            testIdPrefix="portal-course-tabs"
+            tabs={[
+              {
+                id: "about",
+                label: "About This Course",
+                content: (
+                  <AboutThisCoursePanel
+                    description={safeDescription}
+                    typeLabel={typeLabel}
+                    durationLabel={durationLabel}
+                    passingScore={view.version.passingScore}
+                    thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
+                    requiresKnowledgeTest={view.version.requiresKnowledgeTest}
+                    hasVideo={view.version.hasVideo}
+                  />
+                ),
+              },
+              {
+                id: "content",
+                label: "Course Content",
+                content: (
+                  <CourseContentPanel
+                    hasVideo={view.version.hasVideo}
+                    checkpointCount={view.checkpoints.length}
+                    requiresKnowledgeTest={view.version.requiresKnowledgeTest}
+                    questionCount={view.questions.length}
+                  />
+                ),
+              },
+              {
+                id: "result",
+                label: "Your Result",
+                content: (
+                  <YourResultPanel
+                    state={state}
+                    completion={completion}
+                    attempts={submittedAttempts}
+                    passingScore={view.version.passingScore}
+                  />
+                ),
+              },
+            ]}
+          />
         </div>
 
-        {/* RIGHT — Training Status Panel */}
-        <TrainingStatusPanel
-          state={state}
-          completion={completion}
-          progressPercent={initialProgress.percentComplete}
-          attemptCount={submittedAttempts.length}
-          passingScore={view.version.passingScore}
-          thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
-        />
-      </div>
-
-      {/* ------------------------------------------------------------
-          §14 — Course detail tabs */}
-      <div className="mt-12">
-        <TrainingTabs
-          testIdPrefix="portal-course-tabs"
-          tabs={[
-            {
-              id: "about",
-              label: "About This Course",
-              content: (
-                <AboutThisCoursePanel
-                  description={safeDescription}
-                  typeLabel={typeLabel}
-                  durationLabel={durationLabel}
-                  passingScore={view.version.passingScore}
-                  thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
-                  requiresKnowledgeTest={view.version.requiresKnowledgeTest}
-                  hasVideo={view.version.hasVideo}
-                />
-              ),
-            },
-            {
-              id: "content",
-              label: "Course Content",
-              content: (
-                <CourseContentPanel
-                  hasVideo={view.version.hasVideo}
-                  checkpointCount={view.checkpoints.length}
-                  requiresKnowledgeTest={view.version.requiresKnowledgeTest}
-                  questionCount={view.questions.length}
-                />
-              ),
-            },
-            {
-              id: "result",
-              label: "Your Result",
-              content: (
-                <YourResultPanel
-                  state={state}
-                  completion={completion}
-                  attempts={submittedAttempts}
-                  passingScore={view.version.passingScore}
-                />
-              ),
-            },
-          ]}
-        />
+        {/* RIGHT — Training Status Panel + Required Training rail,
+           stacked vertically.  The rail extends naturally down the
+           page independent of the left column's height. */}
+        <div className="space-y-5 min-w-0">
+          <TrainingStatusPanel
+            state={state}
+            completion={completion}
+            progressPercent={initialProgress.percentComplete}
+            attemptCount={submittedAttempts.length}
+            passingScore={view.version.passingScore}
+            thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
+          />
+          <RequiredTrainingRail
+            courses={outstandingRequired}
+            hasAnyAssignments={hasAnyAssignments}
+          />
+        </div>
       </div>
 
       {/* Recommended Training rail — retained from HR-2C B3, moved
@@ -307,6 +350,104 @@ export default async function EmployeeCoursePage({
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EP-UX-2B — Required Training rail (right column, below status panel)
+// ---------------------------------------------------------------------------
+
+type OutstandingItem = Awaited<ReturnType<typeof resolveEmployeeSchedulingEligibility>>["applicable"][number];
+
+function RequiredTrainingRail({
+  courses,
+  hasAnyAssignments,
+}: {
+  courses: OutstandingItem[];
+  hasAnyAssignments: boolean;
+}) {
+  if (courses.length === 0) {
+    const message = hasAnyAssignments
+      ? "There’s no additional required training to complete."
+      : "There’s no required training assigned yet.";
+    return (
+      <aside
+        className="rounded-xl border border-stone-200 bg-white p-5"
+        data-testid="portal-course-required-rail"
+        data-rail-state="empty"
+      >
+        <h2 className="font-serif text-lg text-club-ink">Required Training</h2>
+        <div className="mt-4 flex items-start gap-3">
+          <div className="h-9 w-9 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+            <CheckIcon />
+          </div>
+          <div className="min-w-0">
+            <div className="font-semibold text-emerald-900">You’re all caught up!</div>
+            <div className="mt-1 text-sm text-stone-600">{message}</div>
+          </div>
+        </div>
+      </aside>
+    );
+  }
+  return (
+    <aside
+      className="space-y-3"
+      data-testid="portal-course-required-rail"
+      data-rail-state="list"
+    >
+      <h2 className="font-serif text-lg text-club-ink px-1">Up Next — Required Training</h2>
+      {courses.map((c, i) => (
+        <RequiredCourseCard key={c.version.id} course={c} index={i} />
+      ))}
+    </aside>
+  );
+}
+
+function RequiredCourseCard({ course, index }: { course: OutstandingItem; index: number }) {
+  const href = `/employee/safety-training/${encodeURIComponent(course.version.id)}`;
+  const hasVideo = typeof course.version.videoDurationSec === "number" && course.version.videoDurationSec > 0;
+  const hasAssessment = course.version.requiresKnowledgeTest;
+  const formatLabel = hasVideo && hasAssessment
+    ? "Video + Assessment"
+    : hasVideo
+      ? "Video Only"
+      : hasAssessment
+        ? "Assessment"
+        : "Course";
+  const durationLabel = formatDuration(course.version.videoDurationSec);
+  const started = course.lastAttempt !== null || (course.lastAttempt as unknown) !== undefined;
+  const actionLabel = started ? "Continue Training" : "Start Training";
+  return (
+    <Link
+      href={href}
+      className="group block rounded-xl border border-stone-200 bg-white overflow-hidden hover:border-stone-300 hover:shadow-sm transition-all"
+      data-testid={`portal-course-required-card-${course.courseId}`}
+      data-card-index={index}
+    >
+      {/* Thumbnail — directive §Thumbnails: no TrainingCourseVersion
+         thumbnail/poster field exists, so we render a consistent
+         branded placeholder with a play icon (not stock photography
+         or an unrelated image).  Aspect-video keeps the ratio
+         identical to the course video player's frame above. */}
+      <div className="relative w-full aspect-video bg-gradient-to-br from-club-green-800 to-club-green-900 flex items-center justify-center">
+        <div className="absolute inset-0 opacity-20" style={{ backgroundImage: "radial-gradient(ellipse at center, rgba(255,255,255,0.25) 0%, transparent 60%)" }} />
+        <div className="relative h-12 w-12 rounded-full bg-white/15 border border-white/35 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+          <PlayIcon />
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="font-semibold text-club-ink leading-tight truncate" title={course.title}>
+          {course.title}
+        </div>
+        <div className="mt-1 text-xs text-stone-500">
+          {formatLabel}
+          {durationLabel ? <> · {durationLabel}</> : null}
+        </div>
+        <div className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-club-green-800 text-white group-hover:bg-club-green-900 text-xs font-semibold px-3 py-1.5">
+          <PlayIcon /> {actionLabel}
+        </div>
+      </div>
+    </Link>
   );
 }
 
@@ -636,6 +777,15 @@ function PlayCircle({ className = "" }: { className?: string }) {
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
       <circle cx="12" cy="12" r="10" />
       <path d="M10 8l6 4-6 4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function BackArrowIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
     </svg>
   );
 }

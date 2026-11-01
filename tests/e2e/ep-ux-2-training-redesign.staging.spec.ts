@@ -216,9 +216,37 @@ test.describe("EP-UX-2 :: Safety & Training redesign", () => {
 
       // EP-UX-2A (2026-11-01) — the standalone "Attempt history"
       // section below the player must NOT render anywhere on this page.
-      // Attempt data still lives on the right-side Training Complete
-      // panel ("Attempts" row) and inside the Your Result tab.
       await expect(page.locator('[data-testid="portal-course-history"]')).toHaveCount(0);
+
+      // EP-UX-2B §1 — back arrow replaces the play-circle icon.
+      const backArrow = shell.locator('[data-testid="portal-course-back-arrow"]');
+      await expect(backArrow).toBeVisible();
+      await expect(backArrow).toHaveAttribute("href", "/employee/safety-training");
+      await expect(backArrow).toHaveAttribute("aria-label", "Back to Safety & Training");
+
+      // EP-UX-2B §2 — Required Training rail renders in the right column.
+      const rail = shell.locator('[data-testid="portal-course-required-rail"]');
+      await expect(rail).toBeVisible();
+
+      // The fixture employee auto-inherits applicability to every
+      // Coulee Ridge course with appliesToAll=true (currently 6+).
+      // After seeding ONE completion for the current fixture course,
+      // the rail should render cards for the OTHER required courses
+      // (the current course is excluded per §2.excludeViewedCourse).
+      const cards = shell.locator('[data-testid^="portal-course-required-card-"]');
+      await expect(cards.first()).toBeVisible();
+      // Current course MUST be excluded from the rail.
+      await expect(shell.locator(`[data-testid="portal-course-required-card-${fixture.courseId}"]`)).toHaveCount(0);
+
+      // EP-UX-2B §3 — tabs live INSIDE the left column, not spanning
+      // the full width.  Verified by measuring the tab-row width vs
+      // the right-column width.
+      const tabsBox = await shell.locator('[data-testid="portal-course-tabs"]').boundingBox();
+      const railBox = await rail.boundingBox();
+      // Tabs must END before the rail STARTS (no overlap).
+      if (tabsBox && railBox) {
+        expect(tabsBox.x + tabsBox.width).toBeLessThanOrEqual(railBox.x);
+      }
 
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-about"]')).toHaveAttribute("aria-selected", "true");
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-content"]')).toBeVisible();
