@@ -52,8 +52,13 @@ function s3Client() {
   return new S3Client({ endpoint, region, forcePathStyle, credentials: { accessKeyId, secretAccessKey } });
 }
 
-async function fetchObjectBytes(client, bucket, key) {
-  const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+async function fetchObjectBytes(client, bucket, clubId, storageKey) {
+  // The s3StorageAdapter (src/lib/integrations/storage.ts:60) stores
+  // the real R2 Key as `clubs/${clubId}/${storageKey}` -- prepending
+  // the club prefix regardless of what the storageKey already carries.
+  // Reproduce that convention here so the raw S3 Get lines up.
+  const realKey = `clubs/${clubId}/${storageKey}`;
+  const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: realKey }));
   const chunks = [];
   for await (const chunk of res.Body) chunks.push(chunk);
   return Buffer.concat(chunks);
@@ -131,7 +136,7 @@ async function main() {
       before: { videoDurationSec: null },
     };
     try {
-      const bytes = await fetchObjectBytes(s3, bucket, v.videoStorageKey);
+      const bytes = await fetchObjectBytes(s3, bucket, v.course.clubId, v.videoStorageKey);
       await writeFile(inPath, bytes);
       const probe = await probeDuration(inPath);
       if (!probe.ok) {
