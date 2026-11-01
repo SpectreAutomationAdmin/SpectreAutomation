@@ -489,6 +489,7 @@ model Club {
   trainingProgress                   TrainingProgress[]
   trainingAttempts                   TrainingAttempt[]
   trainingCompletions                TrainingCompletion[]
+  trainingObligations                TrainingObligation[]
   // HR-2C B4 (2026-08-23) — availability persistence.
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
   // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
@@ -4212,6 +4213,7 @@ model Employee {
   trainingProgress                 TrainingProgress[]
   trainingAttempts                 TrainingAttempt[]
   trainingCompletions              TrainingCompletion[]
+  trainingObligations              TrainingObligation[]
   availabilityWeeks                EmployeeAvailabilityWeek[]
   homeNotificationDismissals       EmployeeHomeNotificationDismissal[]
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
@@ -12824,6 +12826,9 @@ model TrainingCourse {
 
   assignments TrainingAssignment[]
   completions TrainingCompletion[]
+  // EP-TRAIN-5A (2026-11-01) -- obligations target a specific version
+  // but ALSO carry a courseId for scalable per-course rollups.
+  obligations TrainingObligation[]
 
   @@unique([clubId, code])
   @@index([clubId])
@@ -12870,6 +12875,8 @@ model TrainingCourseVersion {
   completions TrainingCompletion[]
   // EP-TRAIN-3 Slice 1 (2026-10-29).
   checkpoints TrainingCheckpoint[]
+  // EP-TRAIN-5A (2026-11-01) -- obligations keyed to this exact version.
+  obligations TrainingObligation[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -13062,11 +13069,51 @@ model TrainingCompletion {
   attempt         TrainingAttempt       @relation(fields: [attemptId], references: [id])
   score           Int
   completedAt     DateTime              @default(now())
+  // EP-TRAIN-5A (2026-11-01) -- back-relation to the obligation (if any)
+  // this completion satisfied.  At most ONE obligation can point here
+  // (TrainingObligation.satisfiedByCompletionId is @unique).
+  satisfiedObligation TrainingObligation?
 
   @@unique([employeeId, courseVersionId])
   @@index([clubId, employeeId])
   @@index([clubId, courseId])
   @@index([employeeId, courseId])
+}
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-5A (2026-11-01) -- Training obligation.  Full design + invariants
+// documented against the primary (SQLite) schema; see prisma/schema.prisma
+// at the matching model.
+model TrainingObligation {
+  id                     String                @id @default(cuid())
+  clubId                 String
+  club                   Club                  @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  courseId               String
+  course                 TrainingCourse        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseVersionId        String
+  courseVersion          TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  reason                 String
+  reasonNote             String?
+  issuedByUserId         String?
+  issuedAt               DateTime              @default(now())
+  dueAt                  DateTime?
+  status                 String                @default("OUTSTANDING")
+  satisfiedByCompletionId String?              @unique
+  satisfiedByCompletion   TrainingCompletion?  @relation(fields: [satisfiedByCompletionId], references: [id])
+  satisfiedAt            DateTime?
+  supersededByObligationId String?
+  supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
+  supersedes               TrainingObligation[] @relation("ObligationSupersession")
+  outstandingUniqueKey   String?               @unique
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  @@index([clubId, employeeId, status])
+  @@index([clubId, courseId, status])
+  @@index([clubId, courseVersionId, status])
+  @@index([employeeId, status])
 }
 
 // ===========================================================================

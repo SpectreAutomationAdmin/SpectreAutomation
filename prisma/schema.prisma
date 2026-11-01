@@ -489,6 +489,7 @@ model Club {
   trainingProgress                   TrainingProgress[]
   trainingAttempts                   TrainingAttempt[]
   trainingCompletions                TrainingCompletion[]
+  trainingObligations                TrainingObligation[]
   // HR-2C B4 (2026-08-23) — availability persistence.
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
   // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
@@ -4408,6 +4409,7 @@ model Employee {
   trainingProgress                 TrainingProgress[]
   trainingAttempts                 TrainingAttempt[]
   trainingCompletions              TrainingCompletion[]
+  trainingObligations              TrainingObligation[]
   availabilityWeeks                EmployeeAvailabilityWeek[]
   homeNotificationDismissals       EmployeeHomeNotificationDismissal[]
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
@@ -13014,6 +13016,9 @@ model TrainingCourse {
 
   assignments TrainingAssignment[]
   completions TrainingCompletion[]
+  // EP-TRAIN-5A (2026-11-01) -- obligations target a specific version
+  // but ALSO carry a courseId for scalable per-course rollups.
+  obligations TrainingObligation[]
 
   @@unique([clubId, code])
   @@index([clubId])
@@ -13064,6 +13069,8 @@ model TrainingCourseVersion {
   completions TrainingCompletion[]
   // EP-TRAIN-3 Slice 1 (2026-10-29) -- back-relation to checkpoints.
   checkpoints TrainingCheckpoint[]
+  // EP-TRAIN-5A (2026-11-01) -- obligations keyed to this exact version.
+  obligations TrainingObligation[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -13265,11 +13272,138 @@ model TrainingCompletion {
   attempt         TrainingAttempt       @relation(fields: [attemptId], references: [id])
   score           Int
   completedAt     DateTime              @default(now())
+  // EP-TRAIN-5A (2026-11-01) -- back-relation to the obligation (if any)
+  // that this completion satisfied.  Null for completions that pre-date
+  // the obligation model AND for completions that are not tied to any
+  // active obligation (optional-course completions).  At most ONE
+  // TrainingObligation can point at a given completion
+  // (`TrainingObligation.satisfiedByCompletionId` is @unique).
+  satisfiedObligation TrainingObligation?
 
   @@unique([employeeId, courseVersionId])
   @@index([clubId, employeeId])
   @@index([clubId, courseId])
   @@index([employeeId, courseId])
+}
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-5A (2026-11-01) — Training obligation.
+//
+// Decouples WHAT the employee has historically completed from WHETHER
+// they currently satisfy the club's active training requirement.
+//
+// Prior to this model, "is this course outstanding for this employee"
+// was derived from the absence of a `TrainingCompletion` row for the
+// currently-published `courseVersionId`.  That derivation makes it
+// impossible to express:
+//   (a) "we published v2, but Alice's v1 completion still counts"
+//       (grandfather on New-Employees-Only);
+//   (b) "we need Bob to retake v1 again" (manual reinstatement
+//       without a content change);
+//   (c) "annual food-safety recertification is due" (future).
+//
+// A `TrainingObligation` is a durable, per-employee, per-version
+// requirement to complete a specific course version.  Reasons:
+//   INITIAL          -- the first time the course applies to the
+//                       employee.  Issued by the applicability
+//                       resolver (future 5C work).
+//   REVISION         -- Option B/C publication: when v2 publishes
+//                       with mandatory-retake, every applicable
+//                       employee receives one of these for v2.
+//                       Any outstanding INITIAL obligation for a
+//                       prior version is SUPERSEDED.
+//   MANUAL_REINSTATE -- a manager explicitly asked this employee
+//                       to retake an existing version (reinstatement
+//                       without a content change).  Carries a
+//                       `reasonNote` for the finance / HR audit trail.
+//   RECERTIFICATION  -- future recurring work (annual food safety etc.).
+//                       Field is defined so the model can carry future
+//                       state without another migration; no issuer
+//                       exists yet in EP-TRAIN-5A.
+//
+// Status lifecycle:
+//   OUTSTANDING  → SATISFIED   (upon a passing completion of the
+//                                specified `courseVersionId` AFTER
+//                                `issuedAt`)
+//   OUTSTANDING  → CANCELED    (manager-initiated withdrawal of a
+//                                still-outstanding obligation; audit-
+//                                visible, non-destructive)
+//   OUTSTANDING  → SUPERSEDED  (a REVISION publication retires an
+//                                outstanding INITIAL for a prior
+//                                version)
+//   SATISFIED / CANCELED / SUPERSEDED are terminal — the row remains
+//   for historical audit; subsequent events create NEW obligations.
+//
+// Invariants (enforced at the service layer AND, where portable,
+// at the DB layer):
+//
+//   1. At most ONE OUTSTANDING obligation per (employee, courseVersionId,
+//      reason).  Enforced via `outstandingUniqueKey` which is set to
+//      `${employeeId}|${courseVersionId}|${reason}` on OUTSTANDING rows
+//      and NULL on terminal rows (both SQLite and Postgres treat
+//      multiple NULLs as distinct in a UNIQUE index, so terminal rows
+//      do not collide).
+//
+//   2. One completion satisfies AT MOST one obligation.  Enforced via
+//      `satisfiedByCompletionId @unique` (nullable; terminal rows that
+//      were CANCELED / SUPERSEDED leave it null).
+//
+//   3. An old completion must not automatically satisfy a newly issued
+//      obligation.  Enforced in the service layer: the satisfy-helper
+//      only accepts completions whose `completedAt >= obligation.issuedAt`.
+//
+//   4. Tenant isolation: every write path checks `clubId` against the
+//      principal via the standard `assertTenantOwned` + `requirePermission`
+//      guards (same shape as `publishDraft` in src/lib/hr/training/courses.ts).
+//
+// EP-TRAIN-5A deploys the schema + dormant service only.  No existing
+// surface consults this table yet; the applicability resolver and
+// dashboard continue to render current behaviour unchanged.  5B / 5C
+// wire the manager + employee flows against this model.
+model TrainingObligation {
+  id                     String                @id @default(cuid())
+  clubId                 String
+  club                   Club                  @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // Course + version both carried for scalable rollups ("outstanding
+  // obligations grouped by course") without a join.  courseId MUST
+  // match courseVersion.courseId; enforced in the service layer.
+  courseId               String
+  course                 TrainingCourse        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseVersionId        String
+  courseVersion          TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  // "INITIAL" | "REVISION" | "MANUAL_REINSTATE" | "RECERTIFICATION"
+  reason                 String
+  // Optional free text (required for MANUAL_REINSTATE in the UI;
+  // enforced at the API layer, not the DB).
+  reasonNote             String?
+  // Audit trail: who issued, when, when due.
+  issuedByUserId         String?
+  issuedAt               DateTime              @default(now())
+  dueAt                  DateTime?
+  // "OUTSTANDING" | "SATISFIED" | "CANCELED" | "SUPERSEDED"
+  status                 String                @default("OUTSTANDING")
+  // Set when status transitions to SATISFIED.  @unique: a given
+  // completion can satisfy AT MOST ONE obligation (invariant 2).
+  satisfiedByCompletionId String?              @unique
+  satisfiedByCompletion   TrainingCompletion?  @relation(fields: [satisfiedByCompletionId], references: [id])
+  satisfiedAt            DateTime?
+  // SUPERSEDED-only: pointer to the obligation that replaced this one
+  // (set when a REVISION obligation is issued).  Self-FK.
+  supersededByObligationId String?
+  supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
+  supersedes               TrainingObligation[] @relation("ObligationSupersession")
+  // Set only while status = OUTSTANDING; cleared (set to null) on any
+  // terminal transition.  Backs invariant 1.
+  outstandingUniqueKey   String?               @unique
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  @@index([clubId, employeeId, status])
+  @@index([clubId, courseId, status])
+  @@index([clubId, courseVersionId, status])
+  @@index([employeeId, status])
 }
 
 // ===========================================================================

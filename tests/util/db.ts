@@ -538,6 +538,13 @@ export async function resetDb() {
     // (attempt / question), then course-version, then course. Every
     // table FKs into Club (RESTRICT) so all must clear before
     // c.club.deleteMany().
+    // EP-TRAIN-5A (2026-11-01) — Obligations FK into Completion
+    // (satisfiedByCompletionId SET NULL on delete) + Employee +
+    // Course + CourseVersion.  Clear FIRST so the completion /
+    // course / version deletes below are not blocked by RESTRICT
+    // rules.  Self-FK (supersededByObligationId) is nullable so
+    // deleteMany in a single batch is safe.
+    c.trainingObligation.deleteMany(),
     c.trainingCompletion.deleteMany(),
     c.trainingQuestionResponse.deleteMany(),
     c.trainingAttempt.deleteMany(),
