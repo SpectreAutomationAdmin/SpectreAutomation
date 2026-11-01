@@ -32,6 +32,9 @@ export function memoryDocumentStorageAdapter(bucket = "MEMORY"): DocumentStorage
     async delete({ storageKey }) {
       MEMORY_MAP.delete(`${bucket}:${storageKey}`);
     },
+    async head({ storageKey }) {
+      return MEMORY_MAP.has(`${bucket}:${storageKey}`);
+    },
   };
 }
 
@@ -61,6 +64,15 @@ export async function resolveDocumentStorage(args: {
     },
     async delete({ storageKey }) {
       await shared.delete({ clubId: args.clubId, storageKey });
+    },
+    async head({ storageKey }) {
+      // Not all shared adapters expose a HEAD; fall back to a .get()
+      // check in that case.  The S3 adapter now exposes a native head.
+      if (typeof (shared as { head?: unknown }).head === "function") {
+        return (shared as { head: (a: { clubId: string; storageKey: string }) => Promise<boolean> }).head({ clubId: args.clubId, storageKey });
+      }
+      const result = await shared.get({ clubId: args.clubId, storageKey });
+      return result !== null;
     },
   };
 }

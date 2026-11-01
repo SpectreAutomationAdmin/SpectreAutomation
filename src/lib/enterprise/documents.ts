@@ -20,6 +20,10 @@ export interface StorageAdapter {
   put(args: { clubId: string; storageKey: string; body: Buffer | string; mimeType?: string }): Promise<void>;
   get(args: { clubId: string; storageKey: string }): Promise<Buffer | string | null>;
   delete(args: { clubId: string; storageKey: string }): Promise<void>;
+  // EP-TRAIN-4E-2A (2026-11-01): cheap existence check used by the
+  // training-video reference-establishment paths to prove the R2
+  // object still exists after acquiring the per-key advisory lock.
+  head(args: { clubId: string; storageKey: string }): Promise<boolean>;
 }
 
 export const memoryStorageAdapter: StorageAdapter = (() => {
@@ -28,6 +32,7 @@ export const memoryStorageAdapter: StorageAdapter = (() => {
     async put({ clubId, storageKey, body }) { blobs.set(`${clubId}:${storageKey}`, body); },
     async get({ clubId, storageKey }) { return blobs.get(`${clubId}:${storageKey}`) ?? null; },
     async delete({ clubId, storageKey }) { blobs.delete(`${clubId}:${storageKey}`); },
+    async head({ clubId, storageKey }) { return blobs.has(`${clubId}:${storageKey}`); },
   };
 })();
 

@@ -132,12 +132,28 @@ export async function uploadTrainingVideo(
   // physically remove an R2 object while a reference-creator holds
   // the lock.  Reference and deletion lifecycles are now
   // mutually-exclusive on any given storageKey.
+  //
+  // EP-TRAIN-4E-2A (2026-11-01) -- after acquiring the lock, verify
+  // the R2 object still exists before committing the reference.  The
+  // lock serializes transactions; the HEAD check closes the invariant
+  // that the OBJECT itself is present when the reference commits.
+  // Covers the pathological scenario where a concurrent cleanup
+  // physically deleted the key between our storage.put() and our
+  // lock acquisition (production uploads use fresh sha256 keys so
+  // this is defensive; it is required for the invariant to hold
+  // under test-harness or admin paths that could reuse keys).
   await withPostingGuard(
     principal,
     clubId,
     "hr.training.video.upload",
     async (tx) => {
       await acquireStorageKeyLock(tx, storageKey);
+      const exists = await storage.head({ storageKey });
+      if (!exists) {
+        throw new ConflictError(
+          "Video object was removed before the reference could be committed. Please try uploading again.",
+        );
+      }
       return tx.trainingCourseVersion.update({
         where: { id: versionId },
         data: {
@@ -265,6 +281,17 @@ export async function remediateVideoFastStart(
       const [first, second] = [oldKey, newStorageKey].sort();
       await acquireStorageKeyLock(tx, first);
       if (second !== first) await acquireStorageKeyLock(tx, second);
+      // EP-TRAIN-4E-2A (2026-11-01): verify the NEW object exists
+      // under the lock before committing the reference.  We just
+      // storage.put()'d it a few lines above, but a concurrent
+      // cleanup could in principle have removed it between the
+      // put and the lock acquisition.
+      const newExists = await storage.head({ storageKey: newStorageKey });
+      if (!newExists) {
+        throw new ConflictError(
+          "Remuxed video object was removed before the reference could be committed. Please retry the optimization.",
+        );
+      }
       return tx.trainingCourseVersion.update({
         where: { id: versionId },
         data: {

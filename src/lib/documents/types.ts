@@ -100,6 +100,14 @@ export interface DocumentStorageAdapter {
   }): Promise<void>;
   get(args: { storageKey: string }): Promise<Buffer | null>;
   delete(args: { storageKey: string }): Promise<void>;
+  // EP-TRAIN-4E-2A (2026-11-01): cheap existence check — the HR
+  // training reference-establishment paths MUST verify the R2 object
+  // still exists AFTER acquiring the per-key advisory lock, so a
+  // committed `videoStorageKey` reference cannot point at a cleanup-
+  // deleted object.  Returns true when the object exists, false
+  // when it does not.  Implementations should use a HEAD-equivalent
+  // call to avoid downloading the body.
+  head(args: { storageKey: string }): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------

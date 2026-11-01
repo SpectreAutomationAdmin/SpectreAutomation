@@ -33,6 +33,10 @@ export function localFileStorageAdapter(rootDir = ".data/storage"): StorageAdapt
       const filePath = join(rootDir, clubId, storageKey);
       try { await fs.unlink(filePath); } catch { /* idempotent */ }
     },
+    async head({ clubId, storageKey }) {
+      const filePath = join(rootDir, clubId, storageKey);
+      try { await fs.access(filePath); return true; } catch { return false; }
+    },
   };
 }
 
@@ -47,9 +51,10 @@ export async function s3StorageAdapter(args: { region: string; bucket: string; a
       async put() { throw new Error("@aws-sdk/client-s3 not installed"); },
       async get() { return null; },
       async delete() { /* noop */ },
+      async head() { return false; },
     };
   }
-  const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = S3Module;
+  const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand } = S3Module;
   const client = new S3Client({
     region: args.region,
     credentials: { accessKeyId: args.accessKeyId, secretAccessKey: args.secretAccessKey },
@@ -75,6 +80,18 @@ export async function s3StorageAdapter(args: { region: string; bucket: string; a
     async delete({ clubId, storageKey }) {
       const key = `clubs/${clubId}/${storageKey}`;
       await client.send(new DeleteObjectCommand({ Bucket: args.bucket, Key: key }));
+    },
+    async head({ clubId, storageKey }) {
+      const key = `clubs/${clubId}/${storageKey}`;
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: args.bucket, Key: key }));
+        return true;
+      } catch (err) {
+        // 404 -> false; anything else bubbles up to be caught upstream.
+        const code = (err as { name?: string; $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+        if (code === 404 || (err as { name?: string }).name === "NotFound") return false;
+        throw err;
+      }
     },
   };
 }

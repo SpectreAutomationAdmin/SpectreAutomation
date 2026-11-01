@@ -407,6 +407,24 @@ export async function startNewDraft(
   const result = await prisma.$transaction(async (tx) => {
     // M1d (2026-10-27) -- posting-guard INSIDE the tx so FOR UPDATE on ClubSubscription serializes against suspension.
     await assertPostingAllowed(principal, course.clubId, "hr.training.version.draft", VERSION_ENTITY, courseId, { tx });
+    // EP-TRAIN-4E-2A (2026-11-01) -- startNewDraft clones the source
+    // version's videoStorageKey into a NEW TrainingCourseVersion row
+    // (a new reference to an EXISTING R2 object).  Must take the
+    // per-key advisory lock + verify the R2 object exists before
+    // committing, else cleanup running against the source course
+    // could physically delete the object between our clone-decision
+    // and our commit.
+    if (source?.videoStorageKey) {
+      await acquireStorageKeyLock(tx, source.videoStorageKey);
+      const { resolveDocumentStorage } = await import("../../documents/storage");
+      const storage = await resolveDocumentStorage({ clubId: course.clubId });
+      const exists = await storage.head({ storageKey: source.videoStorageKey });
+      if (!exists) {
+        throw new ConflictError(
+          "Source video object is no longer available — the published course's video was removed. Please re-upload the video on the new draft.",
+        );
+      }
+    }
     const draft = await tx.trainingCourseVersion.create({
       data: {
         courseId,
