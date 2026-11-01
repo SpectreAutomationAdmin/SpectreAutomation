@@ -55,7 +55,7 @@ export async function recordVideoProgressAction(
   courseVersionId: string,
   input: { secondsWatched: number; farthestSecond: number },
 ): Promise<
-  | { ok: true; percentComplete: number; videoCompleted: boolean }
+  | { ok: true; percentComplete: number; videoCompleted: boolean; hasAuthoritativeDuration: boolean }
   | ActionErr
 > {
   try {

@@ -88,7 +88,7 @@ interface Props {
     courseVersionId: string,
     input: { secondsWatched: number; farthestSecond: number },
   ) => Promise<
-    | { ok: true; percentComplete: number; videoCompleted: boolean }
+    | { ok: true; percentComplete: number; videoCompleted: boolean; hasAuthoritativeDuration: boolean }
     | { error: string }
   >;
   startAttemptAction: (
@@ -115,6 +115,23 @@ interface Props {
 
 type Phase =
   | { kind: "video" }
+  // EP-TRAIN-4D (2026-11-01): bounded transient state shown after
+  // natural end-of-video while the final progress flush is in
+  // flight.  Prevents the client from announcing "Ready for your
+  // final knowledge test" before the server has confirmed that
+  // percentComplete >= VIDEO_COMPLETION_THRESHOLD_PERCENT.
+  | { kind: "finalizing" }
+  // EP-TRAIN-4D (2026-11-01): server-confirmed ineligible state —
+  // the employee reached end-of-video but authoritative coverage
+  // is below threshold.  Reason distinguishes "actual coverage
+  // short" from "course video has no authoritative duration
+  // metadata on the server (fail-closed cap at threshold-1)".
+  | {
+      kind: "needs-more-viewing";
+      percentComplete: number;
+      thresholdPercent: number;
+      reason: "coverage" | "duration-metadata-missing";
+    }
   // EP-TRAIN-4B §3 (2026-10-31): the final knowledge test now opens
   // inside the video viewer using the checkpoint-overlay surface.
   // `quiz-ready` is shown as an in-player overlay once the video has
@@ -212,17 +229,45 @@ export default function CoursePlayer(props: Props) {
   const router = useRouter();
 
   const [progress, setProgress] = useState<ProgressRow>(initialProgress);
-  // EP-TRAIN-4B §3 (2026-10-31): if the employee has already watched
-  // past the unlock threshold (e.g. after a refresh or when returning
-  // after a failed attempt), surface the final-knowledge-test overlay
-  // immediately rather than making them scroll below the video.
-  const initialPhase: Phase =
-    requiresKnowledgeTest
-      && !alreadyCompleted
-      && !blockingSubmittedAttempt
-      && initialProgress.percentComplete >= thresholdPercent
-      ? { kind: "quiz-ready" }
-      : { kind: "video" };
+  // EP-TRAIN-4B §3 + EP-TRAIN-4D (2026-11-01): the initial overlay
+  // state is derived from the SERVER-persisted percentComplete (not
+  // from the browser's ended state).  Three cases:
+  //   - percentComplete >= thresholdPercent → quiz-ready (returning
+  //     employee whose earlier session already crossed the gate)
+  //   - 0 < percentComplete < thresholdPercent AND farthestSecond ~=
+  //     videoDurationSec → the employee's prior session reached
+  //     end-of-video but didn't pass eligibility (NULL metadata OR
+  //     actual coverage short); surface needs-more-viewing with the
+  //     authoritative percent so there is no misleading Ready
+  //     button.
+  //   - otherwise → video (fresh viewing or still accumulating)
+  const initialPhase: Phase = (() => {
+    if (!requiresKnowledgeTest || alreadyCompleted || blockingSubmittedAttempt) {
+      return { kind: "video" };
+    }
+    if (initialProgress.percentComplete >= thresholdPercent) {
+      return { kind: "quiz-ready" };
+    }
+    const nearlyAtEnd =
+      typeof videoDurationSec === "number"
+        && videoDurationSec > 0
+        && initialProgress.farthestSecond >= videoDurationSec - 1;
+    if (initialProgress.percentComplete > 0 && nearlyAtEnd) {
+      return {
+        kind: "needs-more-viewing",
+        percentComplete: initialProgress.percentComplete,
+        thresholdPercent,
+        // Only the server knows whether duration metadata is
+        // present; if the stored percent sits AT the fail-closed
+        // cap (thresholdPercent - 1), that's the strong signal
+        // for missing-duration.
+        reason: initialProgress.percentComplete === thresholdPercent - 1
+          ? "duration-metadata-missing"
+          : "coverage",
+      };
+    }
+    return { kind: "video" };
+  })();
   const [phase, setPhase] = useState<Phase>(initialPhase);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -312,9 +357,15 @@ export default function CoursePlayer(props: Props) {
   // Progress reporting
   // -------------------------------------------------------------------------
 
+  // EP-TRAIN-4D (2026-11-01): sendProgress now RETURNS the server
+  // response so a caller (notably onEnded's final flush) can gate the
+  // post-video UI transition on authoritative eligibility.
   const sendProgress = useCallback(
-    async (opts?: { force?: boolean }) => {
-      if (!hasVideo) return;
+    async (opts?: { force?: boolean }): Promise<
+      | { ok: true; percentComplete: number; videoCompleted: boolean; hasAuthoritativeDuration: boolean }
+      | null
+    > => {
+      if (!hasVideo) return null;
       // EP-TRAIN-3 Slice 3D (2026-10-30): derive secondsWatched from
       // the merged interval union so rewatch doesn't double-count. The
       // currentInterval (open playback segment) is folded into the
@@ -327,11 +378,11 @@ export default function CoursePlayer(props: Props) {
       secondsWatchedRef.current = seconds;
       const farthest = farthestRef.current;
       if (!opts?.force && seconds - lastReportedSecondsRef.current < REPORT_INTERVAL_SECONDS) {
-        return;
+        return null;
       }
       // Non-force sends respect the inFlight guard to avoid spam;
       // force-sends wait for the current flight to drain then go.
-      if (inFlightRef.current && !opts?.force) return;
+      if (inFlightRef.current && !opts?.force) return null;
       if (inFlightRef.current && opts?.force) {
         const deadline = Date.now() + 10_000;
         while (inFlightRef.current && Date.now() < deadline) {
@@ -347,7 +398,7 @@ export default function CoursePlayer(props: Props) {
         });
         // Drop stale responses: another request may have already updated
         // state to a NEWER value. Only the latest-resolved seq updates UI.
-        if (seq < highestResolvedSeqRef.current) return;
+        if (seq < highestResolvedSeqRef.current) return null;
         highestResolvedSeqRef.current = seq;
         if ("ok" in result) {
           lastReportedSecondsRef.current = seconds;
@@ -357,9 +408,10 @@ export default function CoursePlayer(props: Props) {
             percentComplete: result.percentComplete,
             videoCompleted: result.videoCompleted,
           }));
-        } else {
-          setError(result.error);
+          return { ok: true, percentComplete: result.percentComplete, videoCompleted: result.videoCompleted, hasAuthoritativeDuration: result.hasAuthoritativeDuration };
         }
+        setError(result.error);
+        return null;
       } finally {
         inFlightRef.current = false;
       }
@@ -673,20 +725,43 @@ export default function CoursePlayer(props: Props) {
         watchedIntervalsRef.current.push([lastKnown, authoritativeEnd]);
       }
     }
-    void sendProgress({ force: true });
-    // EP-TRAIN-4B §3 (2026-10-31): hand the employee straight into the
-    // in-player final assessment overlay rather than making them scroll
-    // past the video to find a Start button.  Only when phase is still
-    // "video" (so a mid-video checkpoint overlay isn't preempted) and
-    // the course requires a knowledge test the employee hasn't passed.
+    // EP-TRAIN-4D (2026-11-01): the final overlay state is now
+    // SERVER-AUTHORITATIVE.  Previously `onEnded` set phase to
+    // `quiz-ready` purely on the browser's `ended` event — but a
+    // course with NULL `videoDurationSec` (legacy upload metadata
+    // missing) caps server-side `percentComplete` at 89% to stay
+    // fail-closed under EP-TRAIN-4B-1.  The client's "Ready" overlay
+    // would then invite a Start click that the server rejects
+    // (< VIDEO_COMPLETION_THRESHOLD_PERCENT), producing the founder's
+    // observed blocker: `0:51 / 0:51` + both checkpoints cleared +
+    // Ready overlay + "Complete the training video (at least 90%)".
+    //
+    // Fix: show a bounded `finalizing` state immediately, flush the
+    // interval union to the server, and transition to the overlay
+    // state the server actually says the employee is in.
     if (
       requiresKnowledgeTest
       && !alreadyCompleted
       && !blockingSubmittedAttempt
       && phase.kind === "video"
     ) {
-      setPhase({ kind: "quiz-ready" });
+      setPhase({ kind: "finalizing" });
     }
+    void sendProgress({ force: true }).then((response) => {
+      if (!requiresKnowledgeTest || alreadyCompleted || blockingSubmittedAttempt) return;
+      if (!response) return; // network error — leave finalizing; useEffect will handle fallback
+      const unlocked = response.percentComplete >= thresholdPercent;
+      if (unlocked) {
+        setPhase({ kind: "quiz-ready" });
+      } else {
+        setPhase({
+          kind: "needs-more-viewing",
+          percentComplete: response.percentComplete,
+          thresholdPercent,
+          reason: response.hasAuthoritativeDuration ? "coverage" : "duration-metadata-missing",
+        });
+      }
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -815,6 +890,8 @@ export default function CoursePlayer(props: Props) {
                 submit, or see the result. */}
             {(phase.kind === "checkpoint-answering"
               || phase.kind === "checkpoint-result"
+              || phase.kind === "finalizing"
+              || phase.kind === "needs-more-viewing"
               || phase.kind === "quiz-ready"
               || phase.kind === "quiz-answering"
               || phase.kind === "grading"
@@ -838,7 +915,9 @@ export default function CoursePlayer(props: Props) {
                       onRetry={onRetryCheckpoint}
                     />
                   )}
-                  {(phase.kind === "quiz-ready"
+                  {(phase.kind === "finalizing"
+                    || phase.kind === "needs-more-viewing"
+                    || phase.kind === "quiz-ready"
                     || phase.kind === "quiz-answering"
                     || phase.kind === "grading"
                     || phase.kind === "quiz-result") && (
@@ -1198,7 +1277,7 @@ function FinalAssessmentPanel({
   onSubmit,
   onRetake,
 }: {
-  phase: Extract<Phase, { kind: "quiz-ready" | "quiz-answering" | "grading" | "quiz-result" }>;
+  phase: Extract<Phase, { kind: "finalizing" | "needs-more-viewing" | "quiz-ready" | "quiz-answering" | "grading" | "quiz-result" }>;
   questions: Question[];
   answers: Record<string, string>;
   busy: boolean;
@@ -1209,6 +1288,57 @@ function FinalAssessmentPanel({
   onSubmit: () => void;
   onRetake: () => void;
 }) {
+  // EP-TRAIN-4D (2026-11-01): bounded transient state while the final
+  // progress flush is persisting on the server.  The decision between
+  // quiz-ready and needs-more-viewing is server-authoritative and
+  // happens in `onEnded` once the server response arrives — this
+  // state is purely for the brief window before that.
+  if (phase.kind === "finalizing") {
+    return (
+      <div className="space-y-3" data-testid="portal-course-finalizing">
+        <h3 className="font-serif text-xl text-club-ink">
+          Finalizing your training progress&hellip;
+        </h3>
+        <p className="text-sm text-stone-700">
+          We&rsquo;re confirming that your viewing time has been recorded.
+          This usually takes a moment.
+        </p>
+      </div>
+    );
+  }
+  if (phase.kind === "needs-more-viewing") {
+    return (
+      <div className="space-y-3" data-testid="portal-course-needs-more-viewing">
+        {phase.reason === "duration-metadata-missing" ? (
+          <>
+            <h3 className="font-serif text-xl text-amber-900">
+              This course can&rsquo;t be completed automatically.
+            </h3>
+            <p className="text-sm text-stone-700">
+              The server doesn&rsquo;t have the authoritative length of this
+              training video on record, so we can&rsquo;t verify that
+              you&rsquo;ve finished watching. Please contact your Club
+              administrator — they can re-publish the course with the
+              correct video details, then you&rsquo;ll be able to take the
+              knowledge test.
+            </p>
+          </>
+        ) : (
+          <>
+            <h3 className="font-serif text-xl text-amber-900">
+              Just a little more to watch.
+            </h3>
+            <p className="text-sm text-stone-700">
+              You&rsquo;ve completed {phase.percentComplete}% of the training
+              video. The knowledge test unlocks at {phase.thresholdPercent}%.
+              Review any segments you&rsquo;d like to revisit and the
+              assessment will open automatically.
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
   if (phase.kind === "quiz-ready") {
     return (
       <div className="space-y-4" data-testid="portal-course-quiz-ready">

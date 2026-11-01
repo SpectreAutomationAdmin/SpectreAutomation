@@ -53,7 +53,7 @@ export const VIDEO_COMPLETION_THRESHOLD_PERCENT = 90;
 export async function recordVideoProgress(
   actor: EmployeePortalPrincipal,
   input: RecordVideoProgressInput,
-): Promise<{ percentComplete: number; videoCompleted: boolean; cappedAt?: number }> {
+): Promise<{ percentComplete: number; videoCompleted: boolean; cappedAt?: number; hasAuthoritativeDuration: boolean }> {
   if (!Number.isFinite(input.secondsWatched) || input.secondsWatched < 0) {
     throw new ValidationError([{ path: "secondsWatched", message: "Must be a positive number." }]);
   }
@@ -153,6 +153,14 @@ export async function recordVideoProgress(
     percentComplete: row.percentComplete,
     videoCompleted,
     cappedAt: Number.isFinite(seekCap) ? (seekCap as number) : undefined,
+    // EP-TRAIN-4D (2026-11-01): the client needs to distinguish
+    // "the employee has not watched enough yet" from "the course's
+    // video has no authoritative duration metadata on the server
+    // (and therefore completion can only progress to the fail-closed
+    // cap at thresholdPercent-1)".  Surfacing this flag lets the
+    // player show a clear state in-viewer instead of offering a
+    // Start button that will be rejected.
+    hasAuthoritativeDuration,
   };
 }
 
