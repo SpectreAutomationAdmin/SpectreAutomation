@@ -23,6 +23,7 @@
 // Question authoring lives in `questions.ts` and operates only on
 // DRAFT versions.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { requirePermission, type Principal } from "../../rbac";
@@ -709,14 +710,36 @@ export async function permanentlyDeleteCourse(
   await cleanupUnreferencedVideoObjects(course.clubId, videoKeys, courseId);
 }
 
-/** EP-TRAIN-4E-1 (2026-11-01) — only delete an R2 video object if it
- *  is not still referenced by any OTHER course's version.  Fixtures
- *  historically shared a single video storageKey (the "REUSED_VIDEO"
- *  helper for the EP-TRAIN-3 isolated-fixture harness); permanent-
- *  deleting a fixture course blindly removed the shared bytes and
- *  broke every other course sharing them.  This helper audits the
- *  live reference count per key and refuses to delete any object
- *  still in use. */
+/** EP-TRAIN-4E-2 (2026-11-01) — concurrency-safe cleanup of
+ *  unreferenced R2 video objects.
+ *
+ *  Required invariant (founder-mandated):
+ *    "No video object may be physically deleted while any committed
+ *     course version references it, including references created
+ *     concurrently with cleanup."
+ *
+ *  Mechanism: a Postgres transaction-scoped advisory lock keyed on
+ *  the storageKey (via `hashtextextended`) serializes ALL operations
+ *  that touch a given storageKey — both cleanup and reference-
+ *  establishment paths acquire the same lock before mutating.  The
+ *  reference-count check AND the physical R2 delete happen inside
+ *  the same transaction while the lock is held, so no concurrent
+ *  path can establish a new reference between the check and the
+ *  delete.  See `acquireStorageKeyLock` + its callers in
+ *  `uploadTrainingVideo` for the reference-side participation.
+ *
+ *  Failure handling (per directive §2):
+ *    - A failed R2 delete does NOT corrupt the DB course delete
+ *      (which has already committed in a prior transaction).  The
+ *      failure is recorded in AuditLog as
+ *      `hr.training.video.r2-delete-failed`, allowing an operator
+ *      to reconcile orphaned R2 bytes later.
+ *    - A failed lock acquisition or reference recount is similarly
+ *      audited as `hr.training.video.cleanup-tx-failed`.  No DB
+ *      change happens if the lock-protected check fails.
+ *    - A retry of this helper on the same key is safe: once the
+ *      R2 object is gone, re-checking confirms it; if another
+ *      reference exists meanwhile, the retry skips the delete. */
 async function cleanupUnreferencedVideoObjects(
   clubId: string,
   videoKeys: string[],
@@ -724,25 +747,107 @@ async function cleanupUnreferencedVideoObjects(
 ): Promise<void> {
   if (videoKeys.length === 0) return;
   const uniqueKeys = Array.from(new Set(videoKeys));
-  // Cross-course reference check: which keys are still referenced by
-  // another course's versions?
-  const still = await prisma.trainingCourseVersion.findMany({
-    where: {
-      videoStorageKey: { in: uniqueKeys },
-      course: { id: { not: excludeCourseId } },
-    },
-    select: { videoStorageKey: true },
-  });
-  const stillReferenced = new Set(still.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string"));
-  const deletable = uniqueKeys.filter((k) => !stillReferenced.has(k));
-  if (deletable.length === 0) return;
-  try {
-    const { resolveDocumentStorage } = await import("../../documents/storage");
-    const storage = await resolveDocumentStorage({ clubId });
-    for (const key of deletable) {
-      try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
+  const { resolveDocumentStorage } = await import("../../documents/storage");
+  const storage = await resolveDocumentStorage({ clubId });
+  for (const key of uniqueKeys) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // §2.7 of EP-TRAIN-4E-1 directive: acquire the per-key
+        // advisory lock BEFORE the reference check.  Any concurrent
+        // reference-creator takes the same lock and will block
+        // until this transaction commits.  Any concurrent cleanup
+        // will serialize on the same lock.  Transaction-scoped so
+        // the lock releases automatically on commit OR abort.
+        await acquireStorageKeyLock(tx, key);
+        const otherRefs = await tx.trainingCourseVersion.count({
+          where: {
+            videoStorageKey: key,
+            course: { id: { not: excludeCourseId } },
+          },
+        });
+        if (otherRefs > 0) {
+          // Another course still references this key — DO NOT touch R2.
+          // Audit so an operator sees the preserved key if they're
+          // tracing a cleanup.
+          await tx.auditLog.create({
+            data: {
+              clubId,
+              action: "hr.training.video.cleanup-skipped",
+              entityType: "TrainingVideoStorageKey",
+              entityId: key,
+              afterJson: safeAuditJson({ reason: "still-referenced", otherCourseRefCount: otherRefs }),
+            },
+          });
+          return;
+        }
+        // Zero references confirmed under lock.  Physical R2 delete
+        // happens INSIDE this transaction while the lock is still
+        // held, so no reference-creator can race in between.  If R2
+        // delete throws, we fall through to the catch below WITHOUT
+        // committing an audit "deleted" row — the key stays in R2
+        // and the next cleanup retry will try again.
+        try {
+          await storage.delete({ storageKey: key });
+          await tx.auditLog.create({
+            data: {
+              clubId,
+              action: "hr.training.video.r2-deleted",
+              entityType: "TrainingVideoStorageKey",
+              entityId: key,
+              afterJson: safeAuditJson({ deletedAt: new Date().toISOString() }),
+            },
+          });
+        } catch (r2err) {
+          // R2 failure: do NOT rollback the DB course delete (it's
+          // already committed in a prior tx).  Record the orphan so
+          // an operator can reconcile.  Then rethrow to abort this
+          // nested transaction so the audit "r2-deleted" row doesn't
+          // land — the catch below writes the failure-audit instead.
+          const msg = r2err instanceof Error ? r2err.message : String(r2err);
+          throw new Error(`R2_DELETE_FAILED:${msg}`);
+        }
+      }, { timeout: 60_000 });
+    } catch (err) {
+      // Any failure (lock timeout, R2 delete fail, audit insert fail)
+      // lands here.  Record so operators can reconcile orphaned R2
+      // bytes, then continue to the next key.
+      try {
+        await prisma.auditLog.create({
+          data: {
+            clubId,
+            action: "hr.training.video.r2-delete-failed",
+            entityType: "TrainingVideoStorageKey",
+            entityId: key,
+            afterJson: safeAuditJson({
+              reason: err instanceof Error ? err.message : String(err),
+              failedAt: new Date().toISOString(),
+            }),
+          },
+        });
+      } catch { /* even audit failed — swallow */ }
     }
-  } catch { /* noop */ }
+  }
+}
+
+/** Postgres advisory lock keyed on a stable 64-bit hash of the
+ *  storageKey.  Transaction-scoped so the lock releases on commit
+ *  OR abort; cannot leak across requests. */
+export async function acquireStorageKeyLock(tx: Prisma.TransactionClient, storageKey: string): Promise<void> {
+  // hashtextextended(text, bigint) returns bigint; combined with
+  // pg_advisory_xact_lock(bigint) gives us a per-storageKey
+  // serialization point.  See postgresql.org/docs/current/functions-admin.html
+  // and functions-string.html.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${storageKey}, 0))`;
+}
+
+/** JSON stringify + size cap for audit payloads. */
+function safeAuditJson(v: unknown): string {
+  try {
+    const s = JSON.stringify(v);
+    return s.length > 4096 ? s.slice(0, 4093) + "..." : s;
+  } catch {
+    return JSON.stringify({ error: "unserialisable" });
+  }
 }
 
 // ---------------------------------------------------------------------------

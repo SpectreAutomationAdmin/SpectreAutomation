@@ -15,6 +15,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { resolveDocumentStorage } from "../../documents/storage";
 import { remuxToFastStart } from "./video-remux";
 import { probeMediaDuration } from "./video-probe";
+import { acquireStorageKeyLock } from "./courses";
 
 const VERSION_ENTITY = "TrainingCourseVersion";
 
@@ -122,20 +123,32 @@ export async function uploadTrainingVideo(
   await storage.put({ storageKey, body: bytesToStore, mimeType });
 
   // M1d (2026-10-27) -- withPostingGuard holds FOR UPDATE on ClubSubscription for the write.
+  //
+  // EP-TRAIN-4E-2 (2026-11-01) -- the DB write that establishes a
+  // TrainingCourseVersion reference to `storageKey` ALSO acquires the
+  // Postgres advisory lock keyed on that `storageKey`.  Cleanup
+  // (`cleanupUnreferencedVideoObjects`) takes the same lock before
+  // its reference-count-and-R2-delete sequence, so no cleanup can
+  // physically remove an R2 object while a reference-creator holds
+  // the lock.  Reference and deletion lifecycles are now
+  // mutually-exclusive on any given storageKey.
   await withPostingGuard(
     principal,
     clubId,
     "hr.training.video.upload",
-    async (tx) => tx.trainingCourseVersion.update({
-      where: { id: versionId },
-      data: {
-        videoStorageKey: storageKey,
-        videoMimeType: mimeType,
-        videoSizeBytes: bytesToStore.length,
-        videoSha256: sha256,
-        videoDurationSec: probedDurationSec,
-      },
-    }),
+    async (tx) => {
+      await acquireStorageKeyLock(tx, storageKey);
+      return tx.trainingCourseVersion.update({
+        where: { id: versionId },
+        data: {
+          videoStorageKey: storageKey,
+          videoMimeType: mimeType,
+          videoSizeBytes: bytesToStore.length,
+          videoSha256: sha256,
+          videoDurationSec: probedDurationSec,
+        },
+      });
+    },
     { entityType: VERSION_ENTITY, entityId: versionId },
   );
   await audit(principal, {
@@ -230,18 +243,37 @@ export async function remediateVideoFastStart(
   // for rollback.
   await storage.put({ storageKey: newStorageKey, body: remux.bytes, mimeType: version.videoMimeType });
 
+  // EP-TRAIN-4E-2 (2026-11-01) -- the fast-start remediation also
+  // establishes a NEW `videoStorageKey` reference and must take the
+  // advisory lock on BOTH the old key (so a concurrent cleanup
+  // waiting for the old-key lock sees the row's updated storageKey
+  // on next re-query) AND the new key (so cleanup for the new key
+  // waits for us).  In practice the new key is a fresh sha256 so
+  // no cleanup is in flight for it; the old key MIGHT be the target
+  // of a cleanup if another version just dropped its reference.
+  // Taking both locks closes the gap.
   await withPostingGuard(
     principal,
     clubId,
     "hr.training.video.optimize",
-    async (tx) => tx.trainingCourseVersion.update({
-      where: { id: versionId },
-      data: {
-        videoStorageKey: newStorageKey,
-        videoSizeBytes: remux.bytes.length,
-        videoSha256: newSha256,
-      },
-    }),
+    async (tx) => {
+      // Lock the OLD key first (the one still referenced in DB),
+      // then the NEW key.  Lock order is deterministic to avoid
+      // deadlock: lexicographic by key string.  version.videoStorageKey
+      // is guaranteed non-null here by the throw at line 169.
+      const oldKey = version.videoStorageKey as string;
+      const [first, second] = [oldKey, newStorageKey].sort();
+      await acquireStorageKeyLock(tx, first);
+      if (second !== first) await acquireStorageKeyLock(tx, second);
+      return tx.trainingCourseVersion.update({
+        where: { id: versionId },
+        data: {
+          videoStorageKey: newStorageKey,
+          videoSizeBytes: remux.bytes.length,
+          videoSha256: newSha256,
+        },
+      });
+    },
     { entityType: VERSION_ENTITY, entityId: versionId },
   );
   await audit(principal, {
