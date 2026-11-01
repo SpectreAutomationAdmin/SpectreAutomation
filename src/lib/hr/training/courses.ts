@@ -766,7 +766,23 @@ export async function listClubCourses(
   // Count TrainingProgress + TrainingAttempt per course via the
   // courseVersion -> course FK; a single aggregate query per fetch
   // avoids an N+1 pattern.
+  //
+  // EP-TRAIN-4E (2026-11-01) — the versionToCourse map MUST include
+  // RETIRED versions too, because an archived course's progress /
+  // attempt rows still reference the RETIRED version and must count
+  // toward hasHistory.  The outer `include.versions` filter above is
+  // only DRAFT/PUBLISHED because we use that collection to pick the
+  // current/draft version for the UI; a separate full-state query
+  // populates the version-to-course map for history counting.
   const courseIds = rows.map((r) => r.id);
+  const allVersions = courseIds.length > 0
+    ? await prisma.trainingCourseVersion.findMany({
+        where: { courseId: { in: courseIds } },
+        select: { id: true, courseId: true },
+      })
+    : [];
+  const versionToCourse = new Map<string, string>();
+  for (const v of allVersions) versionToCourse.set(v.id, v.courseId);
   const [progressGroup, attemptGroup] = courseIds.length > 0
     ? await Promise.all([
         prisma.trainingProgress.groupBy({
@@ -781,11 +797,6 @@ export async function listClubCourses(
         }),
       ])
     : [[], []];
-  // Map courseVersionId -> courseId so group counts can be rolled up.
-  const versionToCourse = new Map<string, string>();
-  for (const r of rows) {
-    for (const v of r.versions) versionToCourse.set(v.id, r.id);
-  }
   const progressByCourse = new Map<string, number>();
   const attemptByCourse = new Map<string, number>();
   for (const g of progressGroup) {
