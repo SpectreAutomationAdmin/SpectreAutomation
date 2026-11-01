@@ -110,13 +110,14 @@ export default async function EmployeeCoursePage({
   const [progress, attempts, completion, playerState, eligibility] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
-    prisma.trainingCompletion.findUnique({
-      where: {
-        employeeId_courseVersionId: {
-          employeeId: principal.employeeId,
-          courseVersionId: versionId,
-        },
-      },
+    // EP-TRAIN-5A-1 (2026-11-01) -- the (employeeId, courseVersionId)
+    // UNIQUE is lifted so a MANUAL_REINSTATE / REVISION retake can
+    // produce a second legitimate completion.  For the course page
+    // we want the LATEST completion (which drives the "already
+    // completed" replay state the Training Status card renders).
+    prisma.trainingCompletion.findFirst({
+      where: { employeeId: principal.employeeId, courseVersionId: versionId },
+      orderBy: { completedAt: "desc" },
       select: { id: true, completedAt: true, score: true },
     }),
     getPlayerState(principal, versionId),

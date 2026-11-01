@@ -13074,7 +13074,13 @@ model TrainingCompletion {
   // (TrainingObligation.satisfiedByCompletionId is @unique).
   satisfiedObligation TrainingObligation?
 
-  @@unique([employeeId, courseVersionId])
+  // EP-TRAIN-5A-1 (2026-11-01) -- see prisma/schema.prisma for the
+  // full rationale.  The (employeeId, courseVersionId) UNIQUE is
+  // demoted to a plain index so repeated completions of the same
+  // course version (REVISION / MANUAL_REINSTATE retakes) can coexist.
+  // `attemptId @unique` above remains the single-completion-per-event
+  // invariant.
+  @@index([employeeId, courseVersionId])
   @@index([clubId, employeeId])
   @@index([clubId, courseId])
   @@index([employeeId, courseId])
@@ -13106,10 +13112,15 @@ model TrainingObligation {
   supersededByObligationId String?
   supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
   supersedes               TrainingObligation[] @relation("ObligationSupersession")
-  outstandingUniqueKey   String?               @unique
+  // EP-TRAIN-5A-1 (2026-11-01) -- see prisma/schema.prisma for the
+  // full semantics.  Mandatory, caller-supplied per-authorized-event
+  // identifier; composite UNIQUE with (club, employee, version, reason)
+  // is the sole idempotency guard.
+  issuanceKey            String
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 
+  @@unique([clubId, employeeId, courseVersionId, reason, issuanceKey])
   @@index([clubId, employeeId, status])
   @@index([clubId, courseId, status])
   @@index([clubId, courseVersionId, status])

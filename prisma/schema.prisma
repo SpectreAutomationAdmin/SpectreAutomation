@@ -13280,7 +13280,18 @@ model TrainingCompletion {
   // (`TrainingObligation.satisfiedByCompletionId` is @unique).
   satisfiedObligation TrainingObligation?
 
-  @@unique([employeeId, courseVersionId])
+  // EP-TRAIN-5A-1 (2026-11-01) -- the historical @@unique(employeeId,
+  // courseVersionId) prevented an employee from completing the same
+  // course version more than once.  The founder directive requires
+  // that MANUAL_REINSTATE and REVISION flows BOTH leave the earlier
+  // completion row untouched AND persist a new completion for the
+  // retake.  The sole DB-level "one completion per event" invariant
+  // is now `attemptId @unique` above — every completion is anchored
+  // to its own non-reusable attempt submission.  The compound
+  // (employeeId, courseVersionId) is kept as a plain index for the
+  // "latest / any completion for this version" read shape used by
+  // the dashboard + course page.
+  @@index([employeeId, courseVersionId])
   @@index([clubId, employeeId])
   @@index([clubId, courseId])
   @@index([employeeId, courseId])
@@ -13394,12 +13405,35 @@ model TrainingObligation {
   supersededByObligationId String?
   supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
   supersedes               TrainingObligation[] @relation("ObligationSupersession")
-  // Set only while status = OUTSTANDING; cleared (set to null) on any
-  // terminal transition.  Backs invariant 1.
-  outstandingUniqueKey   String?               @unique
+  // EP-TRAIN-5A-1 (2026-11-01) -- durable per-authorized-event
+  // identifier supplied by the caller.  Composite UNIQUE with
+  // (clubId, employeeId, courseVersionId, reason, issuanceKey) is the
+  // sole idempotency guard: a repeat submission of the SAME
+  // authorized action carries the SAME issuanceKey and is a no-op;
+  // two INDEPENDENT authorized actions MUST carry DIFFERENT keys and
+  // produce two coexisting rows.
+  //
+  // Shape conventions enforced in the service layer:
+  //   REVISION         -> `rev:${publicationEventId}` (one key per
+  //                        publish-with-retake confirmation)
+  //   MANUAL_REINSTATE -> `rtk:${retakeRequestId}` (one key per
+  //                        manager-confirmed Require-Retake action)
+  //   INITIAL          -> `init:${applicabilityWindowBucket}` (one key
+  //                        per time the course first becomes applicable
+  //                        to the employee — stable, derived)
+  //   RECERTIFICATION  -> `rec:${certificationCycleId}` (future)
+  //
+  // Terminal transitions (SATISFIED / CANCELED / SUPERSEDED) DO NOT
+  // mutate issuanceKey; the historical row stays queryable by its
+  // original key and the composite UNIQUE still rejects an accidental
+  // re-submission of the same authorized event even after the
+  // original is terminal.
+  issuanceKey            String
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 
+  // Idempotency on authorized actions — see issuanceKey.
+  @@unique([clubId, employeeId, courseVersionId, reason, issuanceKey])
   @@index([clubId, employeeId, status])
   @@index([clubId, courseId, status])
   @@index([clubId, courseVersionId, status])

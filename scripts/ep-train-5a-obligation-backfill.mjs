@@ -45,10 +45,6 @@ function parseIds(raw) {
   catch { return []; }
 }
 
-function outstandingKey(employeeId, versionId, reason) {
-  return `${employeeId}|${versionId}|${reason}`;
-}
-
 async function run() {
   const clubs = await prisma.club.findMany({ select: { id: true, name: true } });
   const grandTotals = { satisfied: 0, outstanding: 0, skipped: 0, optional: 0 };
@@ -126,15 +122,21 @@ async function run() {
         });
         if (existing) { skipped++; continue; }
 
-        const completion = await prisma.trainingCompletion.findUnique({
-          where: { employeeId_courseVersionId: { employeeId: emp.id, courseVersionId: v.id } },
+        // EP-TRAIN-5A-1 (2026-11-01) -- the (employeeId,
+        // courseVersionId) UNIQUE on TrainingCompletion is lifted.
+        // Take the MOST RECENT completion for the backfill anchor.
+        const completion = await prisma.trainingCompletion.findFirst({
+          where: { employeeId: emp.id, courseVersionId: v.id },
+          orderBy: { completedAt: "desc" },
           select: { id: true, completedAt: true },
         });
 
         if (completion) {
           if (DRY_RUN) satisfied++;
           else {
-            // SATISFIED path: outstandingUniqueKey stays NULL.
+            // SATISFIED path.  INITIAL backfill issuanceKey is derived
+            // deterministically from the completion id so a re-run
+            // against a mid-populated DB is idempotent.
             await prisma.trainingObligation.create({
               data: {
                 clubId: club.id, employeeId: emp.id, courseId: v.course.id,
@@ -143,7 +145,7 @@ async function run() {
                 status: "SATISFIED",
                 satisfiedByCompletionId: completion.id,
                 satisfiedAt: completion.completedAt,
-                outstandingUniqueKey: null,
+                issuanceKey: `init:backfill:${completion.id}`,
               },
             });
             satisfied++;
@@ -151,13 +153,16 @@ async function run() {
         } else if (v.required) {
           if (DRY_RUN) outstanding++;
           else {
+            // OUTSTANDING path.  issuanceKey is derived from
+            // (employee, version) so a re-run on a row the backfill
+            // already created is a no-op via the composite UNIQUE.
             await prisma.trainingObligation.create({
               data: {
                 clubId: club.id, employeeId: emp.id, courseId: v.course.id,
                 courseVersionId: v.id, reason: "INITIAL",
                 issuedByUserId: null, issuedAt: new Date(),
                 status: "OUTSTANDING",
-                outstandingUniqueKey: outstandingKey(emp.id, v.id, "INITIAL"),
+                issuanceKey: `init:backfill:${emp.id}:${v.id}`,
               },
             });
             outstanding++;

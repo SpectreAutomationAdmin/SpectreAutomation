@@ -256,8 +256,15 @@ export async function getPlayerState(
   if (requiredNotCleared.length > 0) {
     reasons.push(`Clear ${requiredNotCleared.length} required checkpoint${requiredNotCleared.length === 1 ? "" : "s"}.`);
   }
-  const completion = await prisma.trainingCompletion.findUnique({
-    where: { employeeId_courseVersionId: { employeeId: actor.employeeId, courseVersionId: version.id } },
+  // EP-TRAIN-5A-1 (2026-11-01) -- the historical (employeeId,
+  // courseVersionId) UNIQUE is lifted so a MANUAL_REINSTATE /
+  // REVISION retake can produce a second legitimate completion.
+  // For the "has this employee EVER passed this version?" read
+  // shape the course page expects, pick the MOST RECENT completion
+  // (orderBy completedAt desc) rather than the sole historical row.
+  const completion = await prisma.trainingCompletion.findFirst({
+    where: { employeeId: actor.employeeId, courseVersionId: version.id },
+    orderBy: { completedAt: "desc" },
     select: { completedAt: true },
   });
 
@@ -711,9 +718,19 @@ export async function submitAttempt(
       });
     }
     // Final attempts create TrainingCompletion on pass.
+    //
+    // EP-TRAIN-5A-1 (2026-11-01) -- idempotency guard switched from
+    // (employeeId, courseVersionId) to attemptId.  Each attempt is a
+    // non-reusable submission (TrainingAttempt.@@unique(employeeId,
+    // courseVersionId, attemptNumber) prevents re-use); the attemptId
+    // -> completion mapping is 1:1 via TrainingCompletion.attemptId
+    // @unique.  Using the attempt-scoped guard correctly allows a
+    // SECOND passing attempt (manual-retake or revision retake) to
+    // create a SECOND completion row, while a double-submit of the
+    // SAME attempt still returns the existing completion.
     if (kind === "FINAL" && passed) {
       const existing = await tx.trainingCompletion.findUnique({
-        where: { employeeId_courseVersionId: { employeeId: actor.employeeId, courseVersionId: attempt.courseVersion.id } },
+        where: { attemptId: attempt.id },
       });
       if (!existing) {
         const c = await tx.trainingCompletion.create({

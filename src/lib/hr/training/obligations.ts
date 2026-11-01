@@ -73,28 +73,55 @@ export interface ObligationRecord {
 
 type TxLike = Prisma.TransactionClient | typeof prisma;
 
-/** Compose the outstandingUniqueKey the UNIQUE index enforces. */
-function outstandingKey(employeeId: string, courseVersionId: string, reason: ObligationReason): string {
-  return `${employeeId}|${courseVersionId}|${reason}`;
+/** EP-TRAIN-5A-1 helper: compose a conventional MANUAL_REINSTATE
+ *  issuance key from a stable retake-request id.  Callers that
+ *  already have their own event id (e.g. a server-generated cuid
+ *  for the manager's Require-Retake confirmation) should pass that
+ *  directly instead of composing in client code.  Keeping the
+ *  shape convention centralised here so a future audit can
+ *  pattern-match. */
+export function composeIssuanceKey(reason: ObligationReason, eventId: string): string {
+  const prefix: Record<ObligationReason, string> = {
+    INITIAL: "init",
+    REVISION: "rev",
+    MANUAL_REINSTATE: "rtk",
+    RECERTIFICATION: "rec",
+  };
+  return `${prefix[reason]}:${eventId}`;
 }
 
 /**
- * Idempotently issue an obligation.  If an OUTSTANDING obligation
- * already exists for (employeeId, courseVersionId, reason) the
- * existing row is returned unchanged — this is how we honor the
- * directive invariant "repeated publication / page refreshes / retries
- * must not create duplicate obligations" at the service layer and NOT
- * only in the UI.
+ * Idempotently issue an obligation keyed by a caller-supplied
+ * `issuanceKey` representing ONE authorized event.
+ *
+ * EP-TRAIN-5A-1 (2026-11-01) — identity model:
+ *
+ *   - The composite UNIQUE
+ *     (clubId, employeeId, courseVersionId, reason, issuanceKey)
+ *     is the sole idempotency guard.  A repeat call with the SAME
+ *     `issuanceKey` returns the existing row unchanged.  Different
+ *     keys produce distinct rows that may coexist OUTSTANDING.
+ *
+ *   - The CALLER owns issuanceKey assignment:
+ *       * one key per publish-with-retake confirmation ⇒ idempotent
+ *         against publish-button double-click / network retry;
+ *       * one key per Require-Retake form submission ⇒ idempotent
+ *         against form-resubmit;
+ *       * two separate authorized manager actions ⇒ two separate
+ *         keys ⇒ two coexisting OUTSTANDING rows.
+ *
+ *   - A completion satisfies the OLDEST OUTSTANDING obligation first
+ *     (FIFO by issuedAt); see the resolver policy table in
+ *     docs/ep-train-5a1-completion-and-issuance.md §4.
  *
  * The caller is expected to have already:
- *   - checked the principal's `hr:training:write` permission on the
- *     clubId
- *   - loaded the (courseId, courseVersionId) pair and confirmed they
- *     reference each other
+ *   - checked the principal's `hr:training:write` permission on clubId
+ *   - loaded the (courseId, courseVersionId) pair
  *   - run `assertTenantOwned` on the course
  *
- * We re-validate the (course ↔ version) match here as a defense in
- * depth because this helper is also invoked from the backfill script.
+ * We re-validate (course ↔ version) + (course ↔ club) here as
+ * defense in depth because this helper is also invoked from scripts
+ * (the backfill) that have no principal.
  */
 export async function issueObligation(args: {
   clubId: string;
@@ -102,6 +129,10 @@ export async function issueObligation(args: {
   courseId: string;
   courseVersionId: string;
   reason: ObligationReason;
+  /** EP-TRAIN-5A-1 (required) — stable per-authorized-event identifier.
+   *  Pass the SAME value on retry to get idempotency; pass a DIFFERENT
+   *  value to create a second coexisting obligation. */
+  issuanceKey: string;
   reasonNote?: string | null;
   issuedByUserId: string | null;
   dueAt?: Date | null;
@@ -109,6 +140,11 @@ export async function issueObligation(args: {
   tx?: TxLike;
 }): Promise<ObligationRecord> {
   const client = args.tx ?? prisma;
+  if (!args.issuanceKey || args.issuanceKey.trim() === "") {
+    throw new ValidationError([
+      { path: "issuanceKey", message: "issuanceKey is required (EP-TRAIN-5A-1)" },
+    ]);
+  }
   // Defense-in-depth: confirm the version belongs to the course AND
   // the course belongs to the club.  A caller-induced mismatch here
   // is a bug, not a normal path.
@@ -129,10 +165,22 @@ export async function issueObligation(args: {
     ]);
   }
 
-  const key = outstandingKey(args.employeeId, args.courseVersionId, args.reason);
-  // Invariant 1 (idempotency on OUTSTANDING).
+  // Idempotency via the composite UNIQUE on
+  // (clubId, employeeId, courseVersionId, reason, issuanceKey).  If
+  // this exact authorized event already landed, return the existing
+  // row (regardless of its current status — a repeat submit of the
+  // same CANCELED event is still a no-op; the caller MUST allocate a
+  // NEW issuanceKey to re-request after cancellation).
   const existing = await client.trainingObligation.findUnique({
-    where: { outstandingUniqueKey: key },
+    where: {
+      clubId_employeeId_courseVersionId_reason_issuanceKey: {
+        clubId: args.clubId,
+        employeeId: args.employeeId,
+        courseVersionId: args.courseVersionId,
+        reason: args.reason,
+        issuanceKey: args.issuanceKey,
+      },
+    },
   });
   if (existing) return existing as ObligationRecord;
 
@@ -148,7 +196,7 @@ export async function issueObligation(args: {
       issuedAt: args.issuedAt ?? new Date(),
       dueAt: args.dueAt ?? null,
       status: "OUTSTANDING",
-      outstandingUniqueKey: key,
+      issuanceKey: args.issuanceKey,
     },
   });
   return created as ObligationRecord;
@@ -217,10 +265,12 @@ export async function satisfyObligationWithCompletion(args: {
       status: "SATISFIED",
       satisfiedByCompletionId: args.completionId,
       satisfiedAt: new Date(),
-      // Terminal transition — clear the OUTSTANDING unique key so a
-      // future obligation for the same (employee, version, reason)
-      // can be issued without collision.
-      outstandingUniqueKey: null,
+      // EP-TRAIN-5A-1: issuanceKey is NOT cleared on terminal
+      // transition.  The composite UNIQUE still refuses a repeat of
+      // the same authorized event even after SATISFIED, which is the
+      // correct semantics (the caller must allocate a NEW
+      // issuanceKey to re-request a retake after the earlier one was
+      // satisfied).
     },
   });
   return updated as ObligationRecord;
@@ -256,7 +306,10 @@ export async function cancelObligation(args: {
       reasonNote: obligation.reasonNote
         ? `${obligation.reasonNote}\n[canceled] ${args.cancelReason}`
         : `[canceled] ${args.cancelReason}`,
-      outstandingUniqueKey: null,
+      // issuanceKey intentionally preserved on terminal transition
+      // (EP-TRAIN-5A-1).  A manager retake re-request must allocate
+      // a new issuanceKey; this prevents accidental re-issuance of
+      // the same authorized event.
     },
   });
   return updated as ObligationRecord;
@@ -307,7 +360,9 @@ export async function supersedeObligation(args: {
     data: {
       status: "SUPERSEDED",
       supersededByObligationId: args.supersededByObligationId,
-      outstandingUniqueKey: null,
+      // issuanceKey preserved — the superseded row is a historical
+      // audit record, and the composite UNIQUE still rejects a repeat
+      // of the same original authorized event.
     },
   });
   return updated as ObligationRecord;
@@ -341,6 +396,36 @@ export async function listOutstandingObligationsForEmployee(
   }));
 }
 
+/**
+ * EP-TRAIN-5A-1 (2026-11-01) — FIFO completion-to-obligation matcher.
+ *
+ * When an employee completes a course version, this helper picks the
+ * oldest OUTSTANDING obligation for that (employee, courseVersionId)
+ * subject that the completion is eligible to satisfy (i.e. where
+ * completion.completedAt >= obligation.issuedAt).  Subsequent
+ * completions satisfy the next OUTSTANDING in issuedAt order.  The
+ * caller is responsible for invoking satisfyObligationWithCompletion
+ * with the returned id; this helper only READS.  Dormant in 5A-1:
+ * no code consumes it yet; 5C's resolver + attempt-submission path
+ * are the intended callers.
+ */
+export async function pickObligationToSatisfy(args: {
+  employeeId: string;
+  courseVersionId: string;
+  completionCompletedAt: Date;
+}): Promise<ObligationRecord | null> {
+  const row = await prisma.trainingObligation.findFirst({
+    where: {
+      employeeId: args.employeeId,
+      courseVersionId: args.courseVersionId,
+      status: "OUTSTANDING",
+      issuedAt: { lte: args.completionCompletedAt },
+    },
+    orderBy: { issuedAt: "asc" },
+  });
+  return (row ?? null) as ObligationRecord | null;
+}
+
 // Exported for the contract tests + future callers only.  Not used
 // internally.
-export const _internal = { outstandingKey, TERMINAL_STATUSES };
+export const _internal = { TERMINAL_STATUSES };

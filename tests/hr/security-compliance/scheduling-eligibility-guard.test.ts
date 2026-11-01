@@ -362,8 +362,11 @@ describe("HR-2C B4 · scheduling-eligibility guard", () => {
     // Move BACK to Golf — the completion row survives.
     await prisma.employee.update({ where: { id: employeeId }, data: { departmentId: golf.id } });
     expect(await isSchedulingEligible(employeeId)).toBe(true);
-    const stillHasCompletion = await prisma.trainingCompletion.findUnique({
-      where: { employeeId_courseVersionId: { employeeId, courseVersionId: versionId } },
+    // EP-TRAIN-5A-1 (2026-11-01) -- (employeeId, courseVersionId)
+    // UNIQUE lifted; use findFirst to assert "at least one historical
+    // completion survives."
+    const stillHasCompletion = await prisma.trainingCompletion.findFirst({
+      where: { employeeId, courseVersionId: versionId },
     });
     expect(stillHasCompletion).not.toBeNull();
   });

@@ -185,8 +185,13 @@ const require = createRequire("/app/.next/standalone/node_modules/@prisma/client
 const { PrismaClient } = require("@prisma/client");
 const p = new PrismaClient();
 (async () => {
-  const completion = await p.trainingCompletion.findUnique({
-    where: { employeeId_courseVersionId: { employeeId: ${JSON.stringify(fixture.employeeId)}, courseVersionId: ${JSON.stringify(fixture.courseVersionId)} } },
+  // EP-TRAIN-5A-1 (2026-11-01) -- (employeeId, courseVersionId) UNIQUE
+  // lifted; use findFirst with completedAt desc to get the latest
+  // historical completion (preserves the EP-TRAIN-4E "replay from 0"
+  // regression check).
+  const completion = await p.trainingCompletion.findFirst({
+    where: { employeeId: ${JSON.stringify(fixture.employeeId)}, courseVersionId: ${JSON.stringify(fixture.courseVersionId)} },
+    orderBy: { completedAt: "desc" },
     select: { id: true, completedAt: true, score: true },
   });
   const attempts = await p.trainingAttempt.findMany({
