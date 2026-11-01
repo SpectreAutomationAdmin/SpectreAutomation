@@ -248,22 +248,54 @@ export default function CoursePlayer(props: Props) {
     if (initialProgress.percentComplete >= thresholdPercent) {
       return { kind: "quiz-ready" };
     }
-    const nearlyAtEnd =
-      typeof videoDurationSec === "number"
-        && videoDurationSec > 0
-        && initialProgress.farthestSecond >= videoDurationSec - 1;
-    if (initialProgress.percentComplete > 0 && nearlyAtEnd) {
+    // EP-TRAIN-4E (2026-11-01) — authoritative duration + live
+    // coverage recomputation.  Once the server has `videoDurationSec`
+    // populated (new uploads always do; legacy rows were back-filled
+    // by the ops repair), the stored `percentComplete` on an
+    // employee's TrainingProgress row can be a stale snapshot from
+    // the pre-4E NULL-duration regime.  Compute live coverage from
+    // the SAME verifiable watch evidence (secondsWatched) against
+    // the authoritative duration — if that already satisfies the
+    // threshold, land directly in quiz-ready.  A mount-only
+    // useEffect further below force-flushes the server-side
+    // TrainingProgress row so startAttempt won't be rejected by its
+    // own stored stale percent.
+    if (typeof videoDurationSec === "number" && videoDurationSec > 0) {
+      const liveCoverage = Math.min(
+        100,
+        Math.floor((initialProgress.secondsWatched / videoDurationSec) * 100),
+      );
+      if (liveCoverage >= thresholdPercent) {
+        return { kind: "quiz-ready" };
+      }
+      const nearlyAtEnd = initialProgress.farthestSecond >= videoDurationSec - 1;
+      if (initialProgress.percentComplete > 0 && nearlyAtEnd) {
+        return {
+          kind: "needs-more-viewing",
+          percentComplete: Math.max(liveCoverage, initialProgress.percentComplete),
+          thresholdPercent,
+          // Duration IS present on the server, so the UX branch is
+          // "watch a little more" — NEVER the admin-contact /
+          // retry-metadata-error state.  The duration-metadata-
+          // missing branch is reserved for the (post-4E unreachable)
+          // case where videoDurationSec is still NULL at mount.
+          reason: "coverage",
+        };
+      }
+      return { kind: "video" };
+    }
+    // Defensive fallback for videoDurationSec that is somehow still
+    // NULL at mount time (post-4E, this should be unreachable —
+    // uploads refuse without a probed duration and publish is gated
+    // on a non-NULL value).  Keep the retry UX in case a future
+    // regression lets this through.
+    const nearlyAtEndNoDuration = false;
+    if (initialProgress.percentComplete > 0 && nearlyAtEndNoDuration) {
       return {
         kind: "needs-more-viewing",
         percentComplete: initialProgress.percentComplete,
         thresholdPercent,
-        // Only the server knows whether duration metadata is
-        // present; if the stored percent sits AT the fail-closed
-        // cap (thresholdPercent - 1), that's the strong signal
-        // for missing-duration.
-        reason: initialProgress.percentComplete === thresholdPercent - 1
-          ? "duration-metadata-missing"
-          : "coverage",
+        reason: "duration-metadata-missing",
       };
     }
     return { kind: "video" };
@@ -418,6 +450,38 @@ export default function CoursePlayer(props: Props) {
     },
     [hasVideo, versionId, recordProgressAction],
   );
+
+  // EP-TRAIN-4E (2026-11-01) — mount-only stale-percent resync.
+  //
+  // When the server has an authoritative duration populated AND the
+  // employee's stored percentComplete is below threshold BUT their
+  // existing watch evidence (secondsWatched) would satisfy threshold
+  // against the authoritative duration, the TrainingProgress row is a
+  // stale snapshot from the pre-4E regime.  The initial-mount
+  // derivation above already lands them in quiz-ready for display,
+  // but the server-side startAttempt gate reads percentComplete
+  // directly from the DB.  Fire a one-shot force-sendProgress at
+  // mount using the EXISTING secondsWatched + farthestSecond so the
+  // server recomputes percentComplete against the authoritative
+  // duration and persists the update.  No watch evidence is
+  // modified — this is a pure recomputation using existing values
+  // and is audited by the normal recordVideoProgress audit path.
+  const didMountResyncRef = useRef(false);
+  useEffect(() => {
+    if (didMountResyncRef.current) return;
+    didMountResyncRef.current = true;
+    if (!requiresKnowledgeTest || alreadyCompleted || blockingSubmittedAttempt) return;
+    if (typeof videoDurationSec !== "number" || videoDurationSec <= 0) return;
+    const liveCoverage = Math.min(
+      100,
+      Math.floor((initialProgress.secondsWatched / videoDurationSec) * 100),
+    );
+    const storedBelowThreshold = initialProgress.percentComplete < thresholdPercent;
+    const liveMeetsThreshold = liveCoverage >= thresholdPercent;
+    if (!storedBelowThreshold || !liveMeetsThreshold) return;
+    void sendProgress({ force: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Beacon-style flush on unload (best-effort — the server action
   // path is used everywhere else). This ensures a page close doesn't
