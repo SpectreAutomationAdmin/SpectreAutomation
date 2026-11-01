@@ -301,6 +301,18 @@ test.describe("EP-UX-2 :: Safety & Training redesign", () => {
       const shell = page.locator('[data-testid="portal-desktop-shell"]');
       await expect(shell.locator('[data-testid="portal-course-state-pill"]').first()).toContainText("Not Started");
       await expect(shell.locator('[data-testid="portal-course-start"]')).toBeVisible();
+      // EP-UX-2D (2026-11-01) regression guard — the standalone
+      // "Knowledge test" lock panel below the player is removed.
+      // Both its wrapper section AND its inner div must stay absent
+      // on a Not Started / assessment-required course.
+      await expect(page.locator('[data-testid="portal-course-quiz-locked-section"]')).toHaveCount(0);
+      await expect(page.locator('[data-testid="portal-course-quiz-locked"]')).toHaveCount(0);
+      // Nothing in the DOM should carry a visible "Knowledge test"
+      // heading as an h2 directly in the player's left column —
+      // the quiz heading is only valid inside the in-player overlay
+      // (which is an <h3> on the quiz-answering / quiz-ready phase).
+      const strandedH2 = page.locator('h2', { hasText: /^Knowledge test$/ });
+      await expect(strandedH2).toHaveCount(0);
       await page.screenshot({ path: path.join(outDir, "05-course-not-started-desktop-1440.png"), fullPage: true });
       await ctx.close();
     } finally {

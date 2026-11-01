@@ -1111,37 +1111,16 @@ export default function CoursePlayer(props: Props) {
         </section>
       )}
 
-      {/* EP-TRAIN-4B §3 (2026-10-31): the knowledge-test start / answer
-          / grade / result UI has moved INTO the in-player overlay above
-          (same surface as mid-video checkpoint overlays).  The below-
-          video quiz section is retained only for the pre-threshold
-          locked state and non-video-blocking error surfacing — it no
-          longer competes with the overlay for the employee's attention. */}
-      {requiresKnowledgeTest && !alreadyCompleted && !blockingSubmittedAttempt && phase.kind === "video" && !videoUnlocked && (
-        <section
-          className="rounded-lg border border-stone-200 bg-white px-5 py-5"
-          data-testid="portal-course-quiz-locked-section"
-        >
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 className="font-serif text-xl text-club-ink">Knowledge test</h2>
-            <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
-              Passing score {passingScore}%
-            </span>
-          </div>
-          <div
-            className="mt-4 rounded-md bg-stone-50 border border-stone-200 px-4 py-3"
-            data-testid="portal-course-quiz-locked"
-          >
-            <p className="text-sm text-stone-700">
-              Complete the training video before starting the knowledge test.
-            </p>
-            <p className="mt-1 text-xs text-stone-500">
-              You&rsquo;ve watched {percentDisplay}% — the quiz unlocks at{" "}
-              {thresholdPercent}%.
-            </p>
-          </div>
-        </section>
-      )}
+      {/* EP-UX-2D (2026-11-01): the standalone "Knowledge test" lock
+          panel that used to sit below the player is removed.  The right-
+          hand "Ready to Begin" / Training Status card already explains
+          what the employee needs to do; the in-player overlay (above)
+          hosts the actual quiz-ready / quiz-answering / grading /
+          quiz-result UI; and the player control bar visualises watch
+          progress toward the threshold.  There was no interactive
+          surface in the locked panel — it only showed a title + a
+          "finish the video first" sentence — so removing it has zero
+          functional impact. */}
       {error && (
         <section
           role="alert"
