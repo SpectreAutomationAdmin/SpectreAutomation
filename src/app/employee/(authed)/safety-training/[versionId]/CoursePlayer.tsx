@@ -971,7 +971,13 @@ export default function CoursePlayer(props: Props) {
 
   const percentDisplay = Math.min(100, Math.round(progress.percentComplete));
 
-  const historyCount = submittedAttempts.length;
+  // EP-UX-2A (2026-11-01) — the standalone "Attempt history" section
+  // below the player was removed per founder directive.  Attempt
+  // metadata is still surfaced on the right-side Training Complete
+  // panel (attempt count) and inside the "Your Result" tab (full
+  // per-attempt list).  `submittedAttempts` remains in the component's
+  // prop surface because other state transitions (quiz locked /
+  // blocking submitted attempt / canRetake) still read it.
 
   // -------------------------------------------------------------------------
   // Render
@@ -1162,30 +1168,9 @@ export default function CoursePlayer(props: Props) {
         </section>
       )}
 
-      {historyCount > 0 && (
-        <section data-testid="portal-course-history">
-          <h3 className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
-            Attempt history
-          </h3>
-          <ul className="mt-3 space-y-1 text-sm text-stone-700">
-            {submittedAttempts.map((a) => (
-              <li
-                key={a.attemptNumber}
-                className="flex items-center justify-between border-b border-stone-100 py-1"
-                data-testid={`portal-course-history-${a.attemptNumber}`}
-              >
-                <span>Attempt {a.attemptNumber}</span>
-                <span className="tabular-nums">
-                  {a.score}% ·{" "}
-                  <span className={a.passed ? "text-emerald-800" : "text-amber-800"}>
-                    {a.passed ? "Passed" : "Not passed"}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {/* EP-UX-2A (2026-11-01) — "Attempt history" section removed
+         per founder directive.  Attempt data remains visible via
+         the Training Complete panel + the Your Result tab. */}
     </div>
   );
 }

@@ -214,6 +214,12 @@ test.describe("EP-UX-2 :: Safety & Training redesign", () => {
       await expect(shell.locator('[data-testid="portal-course-status-panel"]')).toBeVisible();
       await expect(shell.locator('[data-testid="portal-course-replay"]')).toBeVisible();
 
+      // EP-UX-2A (2026-11-01) — the standalone "Attempt history"
+      // section below the player must NOT render anywhere on this page.
+      // Attempt data still lives on the right-side Training Complete
+      // panel ("Attempts" row) and inside the Your Result tab.
+      await expect(page.locator('[data-testid="portal-course-history"]')).toHaveCount(0);
+
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-about"]')).toHaveAttribute("aria-selected", "true");
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-content"]')).toBeVisible();
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-result"]')).toBeVisible();
