@@ -44,15 +44,19 @@ interface Props {
 // render in white-on-green inside the Employee Portal's existing
 // green chrome.  Only the four tokens the rail's CSS uses are
 // overridden; nothing cascades beyond the rail wrapper.
+//
+// Also set `font-family` explicitly to the same Inter stack Admin's
+// `.spectre-shell` wrapper inherits from.  Without this, the
+// Employee Portal shell (which doesn't use `.spectre-shell`) would
+// fall back to Tailwind's system-font stack and the tenant text
+// would render in a different typeface than Admin — breaking the
+// EP-UX-1 "exact typography" rule.
 const emeraldChromeRailStyle: CSSProperties = {
-  // tenant name + aria-current + link:hover
   ["--spectre-text-primary" as string]: "rgba(255, 255, 255, 0.98)",
-  // base crumb colour + non-current link
   ["--spectre-text-muted" as string]: "rgba(255, 255, 255, 0.72)",
-  // chevron separator between crumbs
   ["--spectre-text-subtle" as string]: "rgba(255, 255, 255, 0.5)",
-  // 1 px vertical hairline between tenant and first crumb
   ["--spectre-border-hairline" as string]: "rgba(255, 255, 255, 0.28)",
+  fontFamily: 'var(--font-inter), Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
 };
 
 export default function EmployeePortalTopBar({

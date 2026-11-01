@@ -61,11 +61,17 @@ interface Props {
 // so the SAME typography (14 px / 18 px / 600 / 0.002 em letter-
 // spacing, sans-serif, no-wrap, ellipsis @ 44ch) that Admin uses on
 // its dark chrome renders in white on the mobile green chrome.
+// Font family explicitly matches Admin's `.spectre-shell` Inter
+// stack — the Employee Portal does not wrap its tree in
+// `.spectre-shell`, so inheritance would otherwise land on
+// Tailwind's system fallback and the tenant would render in a
+// different typeface than Admin.
 const emeraldTenantStyle: React.CSSProperties = {
   ["--spectre-text-primary" as string]: "rgba(255, 255, 255, 0.98)",
   ["--spectre-text-muted" as string]: "rgba(255, 255, 255, 0.72)",
   ["--spectre-text-subtle" as string]: "rgba(255, 255, 255, 0.5)",
   ["--spectre-border-hairline" as string]: "rgba(255, 255, 255, 0.28)",
+  fontFamily: 'var(--font-inter), Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
 };
 
 export default function EmployeePortalMobileNav({
