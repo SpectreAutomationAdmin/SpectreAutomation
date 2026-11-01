@@ -15,6 +15,7 @@ import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { resolveDocumentStorage } from "../../documents/storage";
 import { remuxToFastStart } from "./video-remux";
 import { probeMediaDuration } from "./video-probe";
+import { extractVideoThumbnail } from "./video-thumbnail";
 import { acquireStorageKeyLock } from "./courses";
 
 const VERSION_ENTITY = "TrainingCourseVersion";
@@ -142,6 +143,32 @@ export async function uploadTrainingVideo(
   // lock acquisition (production uploads use fresh sha256 keys so
   // this is defensive; it is required for the invariant to hold
   // under test-harness or admin paths that could reuse keys).
+  // EP-UX-2C §2 (2026-11-01) — extract a representative frame
+  // before persisting the DB reference.  Non-fatal: a thumbnail
+  // failure must NOT block a legitimate video upload.  Storage key
+  // mirrors the video key under a parallel `/thumbnails/` prefix
+  // so the two objects' lifecycles stay transparent to operators.
+  //
+  // Thumbnail PUT happens OUTSIDE the posting-guard tx for the same
+  // reason the video PUT does (network call → no lock held across
+  // the transfer).  The DB write then records BOTH the video and
+  // the thumbnail metadata in a single tx under the storage-key
+  // advisory lock.
+  const thumbResult = await extractVideoThumbnail(bytesToStore, mimeType, probedDurationSec);
+  let thumbnailStorageKey: string | null = null;
+  let thumbnailSizeBytes: number | null = null;
+  if (thumbResult.state === "ok" && thumbResult.bytes) {
+    thumbnailStorageKey = `clubs/${clubId}/training-thumbnails/${version.course.id}/${version.version}/${sha256}.jpg`;
+    thumbnailSizeBytes = thumbResult.bytes.length;
+    try {
+      await storage.put({ storageKey: thumbnailStorageKey, body: thumbResult.bytes, mimeType: thumbResult.mimeType });
+    } catch {
+      // Thumbnail PUT failed — proceed without recording the key.
+      thumbnailStorageKey = null;
+      thumbnailSizeBytes = null;
+    }
+  }
+
   await withPostingGuard(
     principal,
     clubId,
@@ -162,6 +189,9 @@ export async function uploadTrainingVideo(
           videoSizeBytes: bytesToStore.length,
           videoSha256: sha256,
           videoDurationSec: probedDurationSec,
+          videoThumbnailStorageKey: thumbnailStorageKey,
+          videoThumbnailMimeType: thumbnailStorageKey ? thumbResult.mimeType : null,
+          videoThumbnailSizeBytes: thumbnailSizeBytes,
         },
       });
     },
@@ -182,6 +212,9 @@ export async function uploadTrainingVideo(
       faststartNote: remux.note,
       probe: probe.state,
       probeNote: probe.note,
+      thumbnail: thumbResult.state,
+      thumbnailSizeBytes,
+      thumbnailCapturedAtSec: thumbResult.capturedAtSec,
     },
   });
   return { storageKey, sizeBytes: bytesToStore.length, sha256 };

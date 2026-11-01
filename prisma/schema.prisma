@@ -13040,6 +13040,14 @@ model TrainingCourseVersion {
   videoSizeBytes        Int?
   videoSha256           String?
   videoDurationSec      Int?
+  // EP-UX-2C (2026-11-01) -- extracted representative video frame.
+  // Separate R2 object, served through the authenticated proxy at
+  // GET /api/hr/training/versions/[id]/thumbnail.  Null when the
+  // course has no video OR the extraction has not been performed
+  // yet (new upload falls through to the branded placeholder).
+  videoThumbnailStorageKey String?
+  videoThumbnailMimeType   String?
+  videoThumbnailSizeBytes  Int?
   appliesToAll          Boolean        @default(false)
   appliesToDeptIds      String?
   appliesToPositionIds  String?

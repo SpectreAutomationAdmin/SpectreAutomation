@@ -12850,6 +12850,10 @@ model TrainingCourseVersion {
   videoSizeBytes        Int?
   videoSha256           String?
   videoDurationSec      Int?
+  // EP-UX-2C (2026-11-01) -- extracted representative video frame.
+  videoThumbnailStorageKey String?
+  videoThumbnailMimeType   String?
+  videoThumbnailSizeBytes  Int?
   appliesToAll          Boolean        @default(false)
   appliesToDeptIds      String?
   appliesToPositionIds  String?

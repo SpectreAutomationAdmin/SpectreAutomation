@@ -248,6 +248,21 @@ test.describe("EP-UX-2 :: Safety & Training redesign", () => {
         expect(tabsBox.x + tabsBox.width).toBeLessThanOrEqual(railBox.x);
       }
 
+      // EP-UX-2C §2 — Required Training cards use the authenticated
+      // thumbnail proxy.  Image source points at /api/.../thumbnail;
+      // on 404 the client component falls back to the branded
+      // placeholder.  Either state is correct (new fixtures have no
+      // thumbnail; existing B31 does after backfill).
+      await expect(shell.locator('[data-testid="portal-course-required-card-thumbnail"]').first()).toBeVisible();
+
+      // EP-UX-2C §3 — the standalone Recommended Training section
+      // below the course content must NOT render.
+      await expect(page.locator('[data-testid="portal-course-recommendations"]')).toHaveCount(0);
+
+      // EP-UX-2C §4 — the rail must have a valid 4-state attribute.
+      const railState = await rail.getAttribute("data-rail-state");
+      expect(["list", "final-in-progress", "all-caught-up", "none-assigned"]).toContain(railState);
+
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-about"]')).toHaveAttribute("aria-selected", "true");
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-content"]')).toBeVisible();
       await expect(shell.locator('[data-testid="portal-course-tabs-tab-result"]')).toBeVisible();

@@ -38,15 +38,15 @@ import {
   resolveEmployeeSchedulingEligibility,
 } from "@/lib/hr/training/applicability";
 import { getPlayerState } from "@/lib/hr/training/attempts";
-import {
-  getEmployeeTrainingRecommendations,
-  isLikelyStagingFixtureText,
-} from "@/lib/hr/training/employee-recommendations";
+import { isLikelyStagingFixtureText } from "@/lib/hr/training/employee-recommendations";
 import { prisma } from "@/lib/prisma";
 import CoursePlayer from "./CoursePlayer";
-import RecommendationsRail from "./RecommendationsRail";
+// EP-UX-2C §3 (2026-11-01) — the standalone Recommended Training
+// section was removed from this page; the right-hand Required
+// Training rail is now the sole secondary-course surface.
 import { RegisterBreadcrumbLabel } from "@/components/spectre/breadcrumb-labels";
 import TrainingTabs from "@/components/employee/safety-training/TrainingTabs";
+import RequiredCardThumbnail from "@/components/employee/safety-training/RequiredCardThumbnail";
 import {
   recordVideoProgressAction,
   startAttemptAction,
@@ -107,7 +107,7 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion, recommendations, playerState, eligibility] = await Promise.all([
+  const [progress, attempts, completion, playerState, eligibility] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
     prisma.trainingCompletion.findUnique({
@@ -118,11 +118,6 @@ export default async function EmployeeCoursePage({
         },
       },
       select: { id: true, completedAt: true, score: true },
-    }),
-    getEmployeeTrainingRecommendations({
-      employeeId: principal.employeeId,
-      excludeVersionId: versionId,
-      limit: 6,
     }),
     getPlayerState(principal, versionId),
     // EP-UX-2B (2026-11-01) — the Required Training rail reads from
@@ -173,7 +168,23 @@ export default async function EmployeeCoursePage({
   const outstandingRequired = eligibility.applicable
     .filter((a) => a.version.required && !a.completed && a.version.id !== versionId)
     .sort((x, y) => x.title.localeCompare(y.title));
-  const hasAnyAssignments = eligibility.applicable.length > 0;
+  // EP-UX-2C §4 (2026-11-01) — the empty-state wording must distinguish
+  // "current course incomplete, no other required outstanding" from
+  // "current course complete AND no other required outstanding" AND
+  // from "no required courses applicable at all".  Compute all four
+  // signals from the authoritative resolver.
+  const currentApplicable = eligibility.applicable.find((a) => a.version.id === versionId) ?? null;
+  const currentIsRequired = currentApplicable?.version.required === true;
+  const currentIsCompleted = completion !== null;
+  const hasAnyRequiredApplicable = eligibility.applicable.some((a) => a.version.required);
+  // EP-UX-2C §1 (2026-11-01) — the "Continue to Next Training" button
+  // inside the completion overlay navigates to the FIRST outstanding
+  // required course (same ordering the rail uses, so the two surfaces
+  // never disagree).  Null when nothing else is outstanding — the
+  // overlay then shows only "Back to Safety & Training".
+  const nextRequiredCourseHref = outstandingRequired.length > 0
+    ? `/employee/safety-training/${encodeURIComponent(outstandingRequired[0].version.id)}`
+    : null;
 
   return (
     <div
@@ -271,6 +282,7 @@ export default async function EmployeeCoursePage({
             startAttemptAction={startAttemptAction}
             submitAttemptAction={submitAttemptAction}
             startCheckpointAttemptAction={startCheckpointAttemptAction}
+            nextRequiredCourseHref={nextRequiredCourseHref}
           />
 
           {/* §14 — Course detail tabs — EP-UX-2B pulls these INTO the
@@ -336,19 +348,16 @@ export default async function EmployeeCoursePage({
           />
           <RequiredTrainingRail
             courses={outstandingRequired}
-            hasAnyAssignments={hasAnyAssignments}
+            currentIsRequired={currentIsRequired}
+            currentIsCompleted={currentIsCompleted}
+            hasAnyRequiredApplicable={hasAnyRequiredApplicable}
           />
         </div>
       </div>
 
-      {/* Recommended Training rail — retained from HR-2C B3, moved
-         below the primary content so it never visually competes with
-         the active course per EP-UX-2 §8. */}
-      {recommendations.recommendations.length > 0 && (
-        <div className="mt-10">
-          <RecommendationsRail recommendations={recommendations.recommendations} />
-        </div>
-      )}
+      {/* EP-UX-2C §3 (2026-11-01) — Recommended Training removed.
+         The right-hand Required Training rail is now the sole
+         location for secondary training on this page. */}
     </div>
   );
 }
@@ -361,20 +370,70 @@ type OutstandingItem = Awaited<ReturnType<typeof resolveEmployeeSchedulingEligib
 
 function RequiredTrainingRail({
   courses,
-  hasAnyAssignments,
+  currentIsRequired,
+  currentIsCompleted,
+  hasAnyRequiredApplicable,
 }: {
   courses: OutstandingItem[];
-  hasAnyAssignments: boolean;
+  currentIsRequired: boolean;
+  currentIsCompleted: boolean;
+  hasAnyRequiredApplicable: boolean;
 }) {
-  if (courses.length === 0) {
-    const message = hasAnyAssignments
-      ? "There’s no additional required training to complete."
-      : "There’s no required training assigned yet.";
+  // EP-UX-2C §4 (2026-11-01) — four distinct empty-state wordings
+  // computed from authoritative training data, not just the card
+  // count.
+  //
+  //   LIST          Other required courses remain (one or more cards)
+  //   FINAL_IN_PROG Current course is the FINAL required one AND
+  //                 incomplete.  Rail reads "Your Final Required
+  //                 Course" rather than "all caught up".
+  //   ALL_CAUGHT_UP Current course is complete AND no other
+  //                 required remain.  Positive emerald state.
+  //   NONE_ASSIGNED Employee has no applicable required training
+  //                 at all.  Neutral stone state.
+
+  if (courses.length > 0) {
+    return (
+      <aside
+        className="space-y-3"
+        data-testid="portal-course-required-rail"
+        data-rail-state="list"
+      >
+        <h2 className="font-serif text-lg text-club-ink px-1">Up Next — Required Training</h2>
+        {courses.map((c, i) => (
+          <RequiredCourseCard key={c.version.id} course={c} index={i} />
+        ))}
+      </aside>
+    );
+  }
+
+  if (currentIsRequired && !currentIsCompleted) {
     return (
       <aside
         className="rounded-xl border border-stone-200 bg-white p-5"
         data-testid="portal-course-required-rail"
-        data-rail-state="empty"
+        data-rail-state="final-in-progress"
+      >
+        <h2 className="font-serif text-lg text-club-ink">Your Final Required Course</h2>
+        <div className="mt-4 flex items-start gap-3">
+          <div className="h-9 w-9 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+            <FlagIcon />
+          </div>
+          <div className="min-w-0 text-sm text-stone-700">
+            You’re working on your final required course. Complete this
+            training to finish your current requirements.
+          </div>
+        </div>
+      </aside>
+    );
+  }
+
+  if (hasAnyRequiredApplicable) {
+    return (
+      <aside
+        className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-5"
+        data-testid="portal-course-required-rail"
+        data-rail-state="all-caught-up"
       >
         <h2 className="font-serif text-lg text-club-ink">Required Training</h2>
         <div className="mt-4 flex items-start gap-3">
@@ -383,23 +442,35 @@ function RequiredTrainingRail({
           </div>
           <div className="min-w-0">
             <div className="font-semibold text-emerald-900">You’re all caught up!</div>
-            <div className="mt-1 text-sm text-stone-600">{message}</div>
+            <div className="mt-1 text-sm text-stone-700">
+              All current required training is complete.
+            </div>
           </div>
         </div>
       </aside>
     );
   }
+
   return (
     <aside
-      className="space-y-3"
+      className="rounded-xl border border-stone-200 bg-white p-5"
       data-testid="portal-course-required-rail"
-      data-rail-state="list"
+      data-rail-state="none-assigned"
     >
-      <h2 className="font-serif text-lg text-club-ink px-1">Up Next — Required Training</h2>
-      {courses.map((c, i) => (
-        <RequiredCourseCard key={c.version.id} course={c} index={i} />
-      ))}
+      <h2 className="font-serif text-lg text-club-ink">Required Training</h2>
+      <p className="mt-3 text-sm text-stone-600">
+        No required training is currently assigned.
+      </p>
     </aside>
+  );
+}
+
+function FlagIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 21V4" />
+      <path d="M4 4h12l-2 4 2 4H4" />
+    </svg>
   );
 }
 
@@ -417,6 +488,14 @@ function RequiredCourseCard({ course, index }: { course: OutstandingItem; index:
   const durationLabel = formatDuration(course.version.videoDurationSec);
   const started = course.lastAttempt !== null || (course.lastAttempt as unknown) !== undefined;
   const actionLabel = started ? "Continue Training" : "Start Training";
+  // EP-UX-2C §2 (2026-11-01) — thumbnail URL points at the
+  // authenticated per-version proxy.  Returns 404 when no thumbnail
+  // has been extracted or when the caller lacks applicability — in
+  // both cases the <img> onError hook falls back to the branded
+  // placeholder below (CoursePlayerThumbnail client component).
+  const thumbnailUrl = hasVideo
+    ? `/api/hr/training/versions/${encodeURIComponent(course.version.id)}/thumbnail`
+    : null;
   return (
     <Link
       href={href}
@@ -424,17 +503,7 @@ function RequiredCourseCard({ course, index }: { course: OutstandingItem; index:
       data-testid={`portal-course-required-card-${course.courseId}`}
       data-card-index={index}
     >
-      {/* Thumbnail — directive §Thumbnails: no TrainingCourseVersion
-         thumbnail/poster field exists, so we render a consistent
-         branded placeholder with a play icon (not stock photography
-         or an unrelated image).  Aspect-video keeps the ratio
-         identical to the course video player's frame above. */}
-      <div className="relative w-full aspect-video bg-gradient-to-br from-club-green-800 to-club-green-900 flex items-center justify-center">
-        <div className="absolute inset-0 opacity-20" style={{ backgroundImage: "radial-gradient(ellipse at center, rgba(255,255,255,0.25) 0%, transparent 60%)" }} />
-        <div className="relative h-12 w-12 rounded-full bg-white/15 border border-white/35 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
-          <PlayIcon />
-        </div>
-      </div>
+      <RequiredCardThumbnail thumbnailUrl={thumbnailUrl} />
       <div className="p-4">
         <div className="font-semibold text-club-ink leading-tight truncate" title={course.title}>
           {course.title}

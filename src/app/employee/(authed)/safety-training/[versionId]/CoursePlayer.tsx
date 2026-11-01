@@ -111,6 +111,14 @@ interface Props {
     | { ok: true; attemptId: string; attemptNumber: number; attemptsRemaining: number; maxRetries: number }
     | { error: string }
   >;
+  // EP-UX-2C §1 (2026-11-01) — when another required course is
+  // outstanding for the employee, the completion overlay shows a
+  // primary "Continue to Next Training" button that navigates here.
+  // Null → the overlay only shows the secondary "Back to Safety &
+  // Training" button.  Computed on the server from the SAME
+  // outstandingRequired[0] the right-hand rail uses, so the two
+  // surfaces never disagree.
+  nextRequiredCourseHref: string | null;
 }
 
 type Phase =
@@ -224,6 +232,7 @@ export default function CoursePlayer(props: Props) {
     startAttemptAction,
     submitAttemptAction,
     startCheckpointAttemptAction,
+    nextRequiredCourseHref,
   } = props;
 
   const router = useRouter();
@@ -1077,6 +1086,7 @@ export default function CoursePlayer(props: Props) {
                       onSubmit={onSubmitAttempt}
                       onRetake={onRetake}
                       onRetry={onNeedsMoreViewingRetry}
+                      nextRequiredCourseHref={nextRequiredCourseHref}
                     />
                   )}
                 </div>
@@ -1401,6 +1411,7 @@ function FinalAssessmentPanel({
   onSubmit,
   onRetake,
   onRetry,
+  nextRequiredCourseHref,
 }: {
   phase: Extract<Phase, { kind: "finalizing" | "needs-more-viewing" | "quiz-ready" | "quiz-answering" | "grading" | "quiz-result" }>;
   questions: Question[];
@@ -1415,6 +1426,11 @@ function FinalAssessmentPanel({
   // EP-TRAIN-4E A4 (2026-10-31): invoked when the employee hits the
   // "Try again" button on the duration-metadata-missing branch.
   onRetry: () => void;
+  // EP-UX-2C §1 (2026-11-01): optional href for the "Continue to
+  // Next Training" primary button on the passed overlay.  Null when
+  // no other required course is outstanding (overlay shows only the
+  // Back-to-Dashboard button).
+  nextRequiredCourseHref: string | null;
 }) {
   // EP-TRAIN-4D (2026-11-01): bounded transient state while the final
   // progress flush is persisting on the server.  The decision between
@@ -1590,7 +1606,11 @@ function FinalAssessmentPanel({
           You passed the knowledge test with {phase.score}%. Your training is
           now marked complete.
         </p>
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-3 flex-wrap">
+          {/* EP-UX-2C §1 (2026-11-01) — "Back to Safety & Training" is
+             the SECONDARY action when another required course is
+             outstanding; the primary "Continue to Next Training"
+             navigates to the first course on the right-hand rail. */}
           <Link
             href="/employee/safety-training"
             className="btn btn-secondary btn-sm"
@@ -1598,6 +1618,15 @@ function FinalAssessmentPanel({
           >
             Back to Safety &amp; Training
           </Link>
+          {nextRequiredCourseHref && (
+            <Link
+              href={nextRequiredCourseHref}
+              className="btn btn-primary btn-sm"
+              data-testid="portal-course-quiz-continue-next"
+            >
+              Continue to Next Training
+            </Link>
+          )}
         </div>
       </div>
     );
