@@ -648,16 +648,7 @@ export async function deleteDraftCourse(
   // R2 object cleanup is best-effort — the DB write is authoritative.
   // A failed R2 delete leaves orphan bytes that cost nothing more than
   // a sweep by a future ops task.
-  if (videoKeys.length > 0) {
-    try {
-      // Lazy import to avoid pulling the S3 client into other code paths.
-      const { resolveDocumentStorage } = await import("../../documents/storage");
-      const storage = await resolveDocumentStorage({ clubId: course.clubId });
-      for (const key of videoKeys) {
-        try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
-      }
-    } catch { /* noop */ }
-  }
+  await cleanupUnreferencedVideoObjects(course.clubId, videoKeys, courseId);
 }
 
 /** PERMANENTLY delete a course regardless of state — ONLY when zero
@@ -715,15 +706,43 @@ export async function permanentlyDeleteCourse(
       videoStorageKeys: videoKeys,
     },
   });
-  if (videoKeys.length > 0) {
-    try {
-      const { resolveDocumentStorage } = await import("../../documents/storage");
-      const storage = await resolveDocumentStorage({ clubId: course.clubId });
-      for (const key of videoKeys) {
-        try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
-      }
-    } catch { /* noop */ }
-  }
+  await cleanupUnreferencedVideoObjects(course.clubId, videoKeys, courseId);
+}
+
+/** EP-TRAIN-4E-1 (2026-11-01) — only delete an R2 video object if it
+ *  is not still referenced by any OTHER course's version.  Fixtures
+ *  historically shared a single video storageKey (the "REUSED_VIDEO"
+ *  helper for the EP-TRAIN-3 isolated-fixture harness); permanent-
+ *  deleting a fixture course blindly removed the shared bytes and
+ *  broke every other course sharing them.  This helper audits the
+ *  live reference count per key and refuses to delete any object
+ *  still in use. */
+async function cleanupUnreferencedVideoObjects(
+  clubId: string,
+  videoKeys: string[],
+  excludeCourseId: string,
+): Promise<void> {
+  if (videoKeys.length === 0) return;
+  const uniqueKeys = Array.from(new Set(videoKeys));
+  // Cross-course reference check: which keys are still referenced by
+  // another course's versions?
+  const still = await prisma.trainingCourseVersion.findMany({
+    where: {
+      videoStorageKey: { in: uniqueKeys },
+      course: { id: { not: excludeCourseId } },
+    },
+    select: { videoStorageKey: true },
+  });
+  const stillReferenced = new Set(still.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string"));
+  const deletable = uniqueKeys.filter((k) => !stillReferenced.has(k));
+  if (deletable.length === 0) return;
+  try {
+    const { resolveDocumentStorage } = await import("../../documents/storage");
+    const storage = await resolveDocumentStorage({ clubId });
+    for (const key of deletable) {
+      try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
+    }
+  } catch { /* noop */ }
 }
 
 // ---------------------------------------------------------------------------

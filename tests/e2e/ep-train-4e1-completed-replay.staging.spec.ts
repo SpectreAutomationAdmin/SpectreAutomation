@@ -39,19 +39,80 @@ async function portalLogin(page: Page, f: IsolatedFixture): Promise<void> {
   ]);
 }
 
-async function openCourse(page: Page, versionId: string): Promise<void> {
-  await page.goto(`${BASE}/employee/safety-training/${versionId}`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => {
-    const v = document.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
-    return !!v && v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0;
-  }, undefined, { timeout: 30_000 });
+async function openCourse(page: Page, fixture: IsolatedFixture): Promise<void> {
+  // Match the pattern EP-TRAIN-4D uses — navigate via the catalogue
+  // link rather than a direct deep-link so the portal's own session
+  // + applicability path runs first.  Direct deep-links sometimes
+  // land in a cookie-redirect loop that leaves the <video> src
+  // pointed at a path whose first fetch 401s (networkState=3).
+  await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
+  const link = page.locator('[data-testid^="portal-safety-training-course-"]:visible').filter({ hasText: fixture.courseTitle }).first();
+  await expect(link).toBeVisible({ timeout: 15_000 });
+  await Promise.all([
+    page.waitForURL(/\/employee\/safety-training\/[^/]+/, { timeout: 15_000 }),
+    link.click(),
+  ]);
+  await page.waitForLoadState("domcontentloaded");
+  await waitForVideoAttached(page);
 }
 
 async function readCurrentTime(page: Page): Promise<number> {
+  // Takes the max currentTime across any mounted shells so the test
+  // sees whichever shell is actually driving playback.  If both shells
+  // are at 0, max() == 0.  If one shell seeks to 49 and another stays
+  // at 0, max() == 49 — surfacing the bug.
   return page.evaluate(() => {
-    const v = document.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
-    return v ? v.currentTime : -1;
+    const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+    const times = vs.map((v) => v.currentTime).filter((t) => Number.isFinite(t));
+    return times.length === 0 ? -1 : Math.max(...times);
   });
+}
+
+async function waitForVideoAttached(page: Page): Promise<void> {
+  // Step 1: wait for the <video> element to exist in the DOM.
+  await page.waitForSelector('[data-testid="portal-course-video"]', { state: "attached", timeout: 30_000 });
+  // Step 2 (diagnostic): fetch the proxy URL ourselves via the page's
+  // request context (which carries the authenticated cookies).  If
+  // the server returns 404, applicability is broken; if 200 but no
+  // body, media encoding is the issue.  Also dump the cookies the
+  // browser carries + what the current URL is so we can diagnose
+  // session-rotation issues.
+  const src = await page.evaluate(() => {
+    const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+    return vs[0]?.src ?? null;
+  });
+  if (!src) throw new Error(`no video element src found on page ${page.url()}`);
+  // Use page.request which carries the context's cookie jar directly.
+  const resp = await page.request.get(src, { headers: { Range: "bytes=0-1023" } });
+  if (resp.status() !== 200 && resp.status() !== 206) {
+    const body = await resp.text();
+    throw new Error(`video proxy non-success: status=${resp.status()} src=${src} body=${body.slice(0, 200)}`);
+  }
+  // Step 3: force a .load() + .play() → .pause() so Chromium
+  // headless actually fetches metadata.  `preload="auto"` is often
+  // not aggressive enough in headless mode.
+  await page.evaluate(async () => {
+    const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+    for (const v of vs) {
+      try {
+        v.muted = true;
+        v.load();
+        await v.play().then(() => v.pause()).catch(() => { /* autoplay refusal is fine, load() is what we needed */ });
+      } catch { /* noop */ }
+    }
+  });
+  // Step 3: poll for HAVE_METADATA (readyState >= 1 + finite + >0 duration).
+  const reached = await page.waitForFunction(() => {
+    const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+    return vs.some((v) => v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0);
+  }, undefined, { timeout: 90_000, polling: 250 }).catch(() => null);
+  if (!reached) {
+    const state = await page.evaluate(() => {
+      const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+      return vs.map((v) => ({ readyState: v.readyState, duration: v.duration, networkState: v.networkState, src: v.src.slice(0, 120), currentTime: v.currentTime }));
+    });
+    throw new Error(`video never reached HAVE_METADATA — final state: ${JSON.stringify(state)}`);
+  }
 }
 
 /** Seed TrainingProgress and TrainingCompletion rows for the fixture
@@ -190,7 +251,7 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await ctx.newPage();
       await portalLogin(page, fixture);
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       await page.waitForTimeout(500);
       const ct = await readCurrentTime(page);
       expect(ct).toBeLessThan(0.5);
@@ -208,7 +269,7 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await ctx.newPage();
       await portalLogin(page, fixture);
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       await page.waitForTimeout(500);
       const ct = await readCurrentTime(page);
       // Fixture video is 42s; farthestSecond=15 < duration-2=40 → resume at 15.
@@ -230,7 +291,7 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
       const page = await ctx.newPage();
       await portalLogin(page, fixture);
       // §5.4 — fresh open.
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       await page.waitForTimeout(500);
       const ctFresh = await readCurrentTime(page);
       expect(ctFresh).toBeLessThan(0.5);
@@ -238,10 +299,7 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
 
       // §5.5 — refresh.
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => {
-        const v = document.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
-        return !!v && v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0;
-      }, undefined, { timeout: 30_000 });
+      await waitForVideoAttached(page);
       await page.waitForTimeout(500);
       const ctAfterReload = await readCurrentTime(page);
       expect(ctAfterReload).toBeLessThan(0.5);
@@ -249,7 +307,7 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
 
       // §5.6 — navigate away + back.
       await page.goto(`${BASE}/employee/safety-training`, { waitUntil: "domcontentloaded" });
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       await page.waitForTimeout(500);
       const ctAfterNav = await readCurrentTime(page);
       expect(ctAfterNav).toBeLessThan(0.5);
@@ -280,11 +338,13 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await ctx.newPage();
       await portalLogin(page, fixture);
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       // Play at 4x so we don't need to sit through 42s.  The fixture's
       // required checkpoints are at atSecond=15 + atSecond=28.
       await page.evaluate(() => {
-        const v = document.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement;
+        const vs = Array.from(document.querySelectorAll('[data-testid="portal-course-video"]')) as HTMLVideoElement[];
+        const v = vs.find((el) => el.offsetParent !== null);
+        if (!v) return;
         v.muted = true;
         v.playbackRate = 4;
         v.play().catch(() => { /* ignore autoplay refusal */ });
@@ -308,14 +368,11 @@ test.describe("EP-TRAIN-4E-1 completed-replay acceptance", () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
       const page = await ctx.newPage();
       await portalLogin(page, fixture);
-      await openCourse(page, fixture.courseVersionId);
+      await openCourse(page, fixture);
       await page.waitForTimeout(500);
       expect(await readCurrentTime(page)).toBeLessThan(0.5);
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => {
-        const v = document.querySelector('[data-testid="portal-course-video"]') as HTMLVideoElement | null;
-        return !!v && v.readyState >= 1 && Number.isFinite(v.duration) && v.duration > 0;
-      }, undefined, { timeout: 30_000 });
+      await waitForVideoAttached(page);
       await page.waitForTimeout(500);
       expect(await readCurrentTime(page)).toBeLessThan(0.5);
       await page.screenshot({ path: path.join(outDir, "04-mobile-completed-zero.png"), fullPage: true });
