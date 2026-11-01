@@ -1,18 +1,35 @@
-// HR-2C B3 §1-2, §14 (2026-08-20) — Employee Safety & Training dashboard.
+// EP-UX-2 (2026-11-01) — Employee Safety & Training dashboard redesign.
 //
-// Replaces the placeholder from Group A. Reads the canonical
-// applicability + eligibility resolver and groups the employee's
-// applicable courses into a small, restrained hierarchy. Never
-// exposes raw internal enums; course codes / version ids stay
-// out of the visible copy (§1).
+// Replaces the HR-2C B3 stacked-list layout with the founder-approved
+// composition (reference image at `docs/design/ep-ux-2/
+// ep-ux-2-dashboard-reference.png`):
 //
-// The full course experience (video + quiz) lives in
-// `./[versionId]/page.tsx`. This page is a directory index.
+//   1. Hero          : hard-hat icon + "Safety & Training" + description
+//   2. Summary cards : three horizontally-aligned cards
+//                      (completion circle | upcoming deadlines | completed count)
+//   3. Tabs          : My Training | Training History
+//   4. My Training   : Required Training (banner when caught up) +
+//                      Completed Training table
+//   5. Training Hist : full completed-course history (same table)
+//
+// Data model (unchanged — EP-TRAIN-4E frozen):
+//   - Single resolver call `resolveEmployeeSchedulingEligibility`
+//     yields applicable + outstanding + per-course last attempt +
+//     completedAt.
+//   - Scores are fetched in a second query (one roundtrip for all
+//     completed version ids) because the resolver's output does not
+//     carry `TrainingCompletion.score`.
+//   - Deadlines model does not exist on TrainingAssignment; the
+//     "No upcoming deadlines" card renders a permanent neutral
+//     state — accurate, not fabricated.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import { resolveEmployeeSchedulingEligibility } from "@/lib/hr/training/applicability";
+import { prisma } from "@/lib/prisma";
+import TrainingTabs from "@/components/employee/safety-training/TrainingTabs";
+import CircularProgress from "@/components/employee/safety-training/CircularProgress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,215 +38,495 @@ type Applicable = Awaited<
   ReturnType<typeof resolveEmployeeSchedulingEligibility>
 >["applicable"][number];
 
-interface Bucketed {
-  required: Applicable[];
-  completed: Applicable[];
-  optional: Applicable[];
-}
-
-function bucket(items: Applicable[]): Bucketed {
-  const required: Applicable[] = [];
-  const completed: Applicable[] = [];
-  const optional: Applicable[] = [];
-  for (const a of items) {
-    if (a.completed) completed.push(a);
-    else if (a.version.required) required.push(a);
-    else optional.push(a);
-  }
-  // Deterministic ordering: newer completions first; required by title.
-  required.sort((x, y) => x.title.localeCompare(y.title));
-  optional.sort((x, y) => x.title.localeCompare(y.title));
-  completed.sort((x, y) => {
-    const xa = x.completedAt?.getTime() ?? 0;
-    const ya = y.completedAt?.getTime() ?? 0;
-    return ya - xa;
-  });
-  return { required, completed, optional };
-}
-
-function statusLabel(a: Applicable): {
-  label: string;
-  tone: "neutral" | "attention" | "success";
-} {
-  if (a.completed) return { label: "Completed", tone: "success" };
-  const last = a.lastAttempt;
-  if (last && last.submittedAt && !last.passed) {
-    return { label: "Not passed", tone: "attention" };
-  }
-  // We can't know the exact video-progress state here without another
-  // query per course — keep it to "Not started" vs "In progress" at
-  // the course-page level where the progress row is loaded.
-  return { label: "Not started", tone: "neutral" };
-}
-
 function formatCompleted(d: Date | null | undefined): string {
   if (!d) return "";
   return d.toLocaleDateString("en-US", {
     year: "numeric",
-    month: "long",
+    month: "short",
     day: "numeric",
   });
+}
+
+/** EP-UX-2 — derive the human course-type label from the version's
+ *  configured fields.  No new DB queries. */
+function courseTypeLabel(a: Applicable): string {
+  const hasVideo = typeof a.version.videoDurationSec === "number" && a.version.videoDurationSec > 0;
+  const hasAssessment = a.version.requiresKnowledgeTest;
+  if (hasVideo && hasAssessment) return "Video + Assessment";
+  if (hasVideo) return "Video Only";
+  if (hasAssessment) return "Assessment";
+  return "Course";
 }
 
 export default async function EmployeePortalSafetyTrainingPage() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const eligibility = await resolveEmployeeSchedulingEligibility(
-    principal.employeeId,
-  );
-  const { required, completed, optional } = bucket(eligibility.applicable);
-  const outstandingCount = eligibility.outstandingTraining.length;
+  // Resolver — ONE call, same contract as the HR-2C B3 layout.
+  const eligibility = await resolveEmployeeSchedulingEligibility(principal.employeeId);
+  const club = await prisma.club.findUnique({
+    where: { id: principal.clubId },
+    select: { name: true },
+  });
+  const clubName = club?.name ?? "Your Club";
 
-  const totalApplicable = eligibility.applicable.length;
+  // Summary metrics — directive §4 Card 1.
+  const requiredApplicable = eligibility.applicable.filter((a) => a.version.required);
+  const assignedRequiredCount = requiredApplicable.length;
+  const completedRequiredCount = requiredApplicable.filter((a) => a.completed).length;
+  const outstandingRequiredCount = eligibility.outstandingTraining.length;
+  const completedPercent = assignedRequiredCount === 0
+    ? 0
+    : Math.round((completedRequiredCount / assignedRequiredCount) * 100);
+  const allCompleted = assignedRequiredCount > 0 && completedRequiredCount === assignedRequiredCount;
+
+  // Full completed list — includes optional + required completions,
+  // ordered by completedAt DESC.
+  const completed = eligibility.applicable
+    .filter((a) => a.completed && a.completedAt)
+    .sort((x, y) => (y.completedAt?.getTime() ?? 0) - (x.completedAt?.getTime() ?? 0));
+
+  // Scores — single roundtrip for all completed versionIds.
+  const completedVersionIds = completed.map((a) => a.version.id);
+  const completionRows = completedVersionIds.length > 0
+    ? await prisma.trainingCompletion.findMany({
+        where: {
+          employeeId: principal.employeeId,
+          courseVersionId: { in: completedVersionIds },
+        },
+        select: { courseVersionId: true, score: true },
+      })
+    : [];
+  const scoreByVersionId = new Map(completionRows.map((r) => [r.courseVersionId, r.score]));
+
+  // Outstanding required courses — these drive the Required Training section.
+  const outstandingRequired = eligibility.applicable
+    .filter((a) => a.version.required && !a.completed)
+    .sort((x, y) => x.title.localeCompare(y.title));
+
+  const noAssignments = eligibility.applicable.length === 0;
+
+  const completedRows = completed.map((a) => ({
+    courseId: a.courseId,
+    versionId: a.version.id,
+    title: a.title,
+    typeLabel: courseTypeLabel(a),
+    score: scoreByVersionId.get(a.version.id) ?? null,
+    completedAt: a.completedAt as Date,
+  }));
 
   return (
-    <div className="space-y-8" data-testid="portal-safety-training">
-      <header>
-        <h1 className="font-serif text-3xl text-club-ink">Safety &amp; Training</h1>
-        <p className="mt-2 text-sm text-stone-500">
-          Your Club&rsquo;s required training and safety courses. Complete
-          each course to stay in good standing.
+    <div
+      className="w-full px-6 md:px-8 py-6 md:py-8 max-w-[1360px]"
+      data-testid="portal-safety-training"
+    >
+      {/* ------------------------------------------------------------
+          §3 — Hero / page introduction */}
+      <header className="mb-8" data-testid="portal-safety-training-hero">
+        <h1 className="font-serif text-3xl md:text-4xl text-club-ink leading-tight flex items-center gap-3">
+          <HardHatIcon className="text-club-green-800" />
+          <span>Safety &amp; Training</span>
+        </h1>
+        <p className="mt-3 text-sm md:text-base text-stone-600 max-w-3xl">
+          Complete your required training, keep your certifications current,
+          and review your training history.
         </p>
       </header>
 
-      {totalApplicable === 0 ? (
-        <div
-          className="rounded-lg border border-dashed border-stone-300 bg-white px-6 py-10 text-center"
-          data-testid="portal-safety-training-empty"
+      {/* ------------------------------------------------------------
+          §4 — Summary cards */}
+      <section
+        className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10"
+        data-testid="portal-safety-training-summary-cards"
+      >
+        {/* Card 1 — completion */}
+        <article
+          className={
+            "rounded-xl border px-5 py-5 flex items-center gap-4 " +
+            (noAssignments
+              ? "border-stone-200 bg-white"
+              : allCompleted
+                ? "border-emerald-200 bg-emerald-50/60"
+                : "border-stone-200 bg-white")
+          }
+          data-testid="portal-safety-training-card-completion"
         >
-          <p className="text-sm text-stone-600">
-            No training has been assigned to you yet.
-          </p>
-          <p className="mt-2 text-xs text-stone-500">
-            When your Club assigns a course, it will appear here.
-          </p>
-        </div>
-      ) : (
-        <>
-          {outstandingCount > 0 && (
-            <div
-              className="rounded-lg border border-amber-200 bg-amber-50/70 px-5 py-4"
-              data-testid="portal-safety-training-outstanding-summary"
-            >
-              <p className="text-sm text-amber-900">
-                You have{" "}
-                <strong data-testid="portal-safety-training-outstanding-count">
-                  {outstandingCount}
-                </strong>{" "}
-                required training {outstandingCount === 1 ? "course" : "courses"}{" "}
-                to complete.
-              </p>
+          <CircularProgress
+            value={completedPercent}
+            size={64}
+            testId="portal-safety-training-card-completion-circle"
+          />
+          <div className="min-w-0">
+            {noAssignments ? (
+              <>
+                <div className="text-sm font-semibold text-club-ink">No required training</div>
+                <div className="mt-0.5 text-xs text-stone-500">
+                  Nothing is currently assigned.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm font-semibold text-club-ink">
+                  {allCompleted ? "Training Complete" : "In Progress"}
+                </div>
+                <div className="mt-0.5 text-xs text-stone-500">
+                  <span data-testid="portal-safety-training-card-completion-count">
+                    {completedRequiredCount} of {assignedRequiredCount}
+                  </span>{" "}
+                  assigned {assignedRequiredCount === 1 ? "course" : "courses"}
+                </div>
+              </>
+            )}
+          </div>
+        </article>
+
+        {/* Card 2 — deadlines (TrainingAssignment has no due-date model;
+            permanent neutral state per EP-UX-2 §4 directive). */}
+        <article
+          className="rounded-xl border border-stone-200 bg-white px-5 py-5 flex items-center gap-4"
+          data-testid="portal-safety-training-card-deadlines"
+        >
+          <div className="h-12 w-12 rounded-full bg-stone-100 flex items-center justify-center text-stone-500 shrink-0">
+            <CalendarIcon />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-club-ink">No upcoming deadlines</div>
+            <div className="mt-0.5 text-xs text-stone-500">
+              {outstandingRequiredCount === 0
+                ? "All required training is complete."
+                : "Keep your assigned training up to date to stay compliant."}
             </div>
-          )}
+          </div>
+        </article>
 
-          {required.length > 0 && (
-            <Section title="Required training" testId="portal-safety-training-required">
-              <CourseList items={required} />
-            </Section>
-          )}
+        {/* Card 3 — completed count */}
+        <article
+          className="rounded-xl border border-stone-200 bg-white px-5 py-5 flex items-center gap-4"
+          data-testid="portal-safety-training-card-completed"
+        >
+          <div className="h-12 w-12 rounded-full bg-club-green-50 flex items-center justify-center text-club-green-800 shrink-0">
+            <RibbonIcon />
+          </div>
+          <div className="min-w-0">
+            <div
+              className="text-2xl font-semibold text-club-ink tabular-nums leading-tight"
+              data-testid="portal-safety-training-card-completed-count"
+            >
+              {completed.length}
+            </div>
+            <div className="text-xs text-stone-500">Completed courses</div>
+            <a
+              href="#completed-training"
+              className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-club-green-800 hover:text-club-green-900"
+              data-testid="portal-safety-training-card-completed-link"
+            >
+              View training history →
+            </a>
+          </div>
+        </article>
+      </section>
 
-          {completed.length > 0 && (
-            <Section title="Completed" testId="portal-safety-training-completed">
-              <CourseList items={completed} />
-            </Section>
-          )}
-
-          {optional.length > 0 && (
-            <Section title="Optional training" testId="portal-safety-training-optional">
-              <CourseList items={optional} />
-            </Section>
-          )}
-        </>
-      )}
+      {/* ------------------------------------------------------------
+          §5 — Tabs */}
+      <TrainingTabs
+        testIdPrefix="portal-safety-training-tabs"
+        tabs={[
+          {
+            id: "my-training",
+            label: "My Training",
+            content: (
+              <MyTrainingPanel
+                clubName={clubName}
+                outstandingCount={outstandingRequiredCount}
+                outstandingRequired={outstandingRequired}
+                completedRows={completedRows}
+                noAssignments={noAssignments}
+              />
+            ),
+          },
+          {
+            id: "training-history",
+            label: "Training History",
+            content: (
+              <TrainingHistoryPanel
+                completedRows={completedRows}
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Presentational bits
+// Panels
 // ---------------------------------------------------------------------------
 
-function Section({
-  title,
-  testId,
-  children,
-}: {
+interface CompletedRow {
+  courseId: string;
+  versionId: string;
   title: string;
-  testId: string;
-  children: React.ReactNode;
+  typeLabel: string;
+  score: number | null;
+  completedAt: Date;
+}
+
+function MyTrainingPanel({
+  clubName,
+  outstandingCount,
+  outstandingRequired,
+  completedRows,
+  noAssignments,
+}: {
+  clubName: string;
+  outstandingCount: number;
+  outstandingRequired: Applicable[];
+  completedRows: CompletedRow[];
+  noAssignments: boolean;
 }) {
   return (
-    <section data-testid={testId}>
-      <h2 className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
-        {title}
-      </h2>
-      <div className="mt-3 space-y-3">{children}</div>
+    <div className="space-y-10">
+      {/* §6 — Required Training section */}
+      <section data-testid="portal-safety-training-required">
+        <div className="flex items-baseline gap-3 flex-wrap">
+          <h2 className="font-serif text-2xl text-club-ink">Required Training</h2>
+          <span
+            className={
+              "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold tabular-nums " +
+              (outstandingCount === 0
+                ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                : "bg-amber-50 text-amber-800 border border-amber-200")
+            }
+            data-testid="portal-safety-training-required-count"
+          >
+            {outstandingCount} remaining
+          </span>
+        </div>
+        <p className="mt-2 text-sm text-stone-600 max-w-3xl">
+          Training assigned to you by <span data-testid="portal-safety-training-required-clubname">{clubName}</span>.
+          Keep these courses up to date to stay compliant.
+        </p>
+
+        <div className="mt-5">
+          {noAssignments ? (
+            <EmptyAssignments />
+          ) : outstandingCount === 0 ? (
+            <AllCaughtUpBanner />
+          ) : (
+            <ul className="space-y-3" data-testid="portal-safety-training-required-list">
+              {outstandingRequired.map((a) => (
+                <li key={a.courseId}>
+                  <Link
+                    href={`/employee/safety-training/${encodeURIComponent(a.version.id)}`}
+                    className="group block rounded-lg border border-stone-200 bg-white px-5 py-4 hover:border-stone-300 hover:bg-stone-50 transition-colors"
+                    data-testid={`portal-safety-training-course-${a.courseId}`}
+                  >
+                    <div className="flex items-baseline justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-club-ink truncate">{a.title}</div>
+                        <div className="mt-1 text-xs text-stone-500">
+                          {courseTypeLabel(a)}
+                          {a.version.videoDurationSec && a.version.videoDurationSec > 0 ? (
+                            <> · {formatDurationShort(a.version.videoDurationSec)}</>
+                          ) : null}
+                        </div>
+                      </div>
+                      <span className="shrink-0 inline-flex items-center rounded-md bg-club-green-800 text-white text-xs font-semibold px-3 py-1.5 group-hover:bg-club-green-900 transition-colors">
+                        Start
+                      </span>
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      {/* §7 — Completed Training */}
+      <CompletedTrainingSection completedRows={completedRows} />
+    </div>
+  );
+}
+
+function TrainingHistoryPanel({ completedRows }: { completedRows: CompletedRow[] }) {
+  return (
+    <div className="space-y-10">
+      <CompletedTrainingSection
+        completedRows={completedRows}
+        headingOverride="Training History"
+        descriptionOverride="Every course you have ever completed, including historical versions."
+      />
+    </div>
+  );
+}
+
+function CompletedTrainingSection({
+  completedRows,
+  headingOverride,
+  descriptionOverride,
+}: {
+  completedRows: CompletedRow[];
+  headingOverride?: string;
+  descriptionOverride?: string;
+}) {
+  return (
+    <section id="completed-training" data-testid="portal-safety-training-completed">
+      <h2 className="font-serif text-2xl text-club-ink">{headingOverride ?? "Completed Training"}</h2>
+      <p className="mt-2 text-sm text-stone-600 max-w-3xl">
+        {descriptionOverride ?? "All training you’ve completed, with your scores and completion dates."}
+      </p>
+
+      {completedRows.length === 0 ? (
+        <div className="mt-5 rounded-lg border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
+          <p className="text-sm text-stone-600">No completed training yet.</p>
+        </div>
+      ) : (
+        <div className="mt-5 overflow-x-auto rounded-xl border border-stone-200 bg-white">
+          <table className="w-full text-sm" data-testid="portal-safety-training-completed-table">
+            <thead>
+              <tr className="border-b border-stone-200 bg-stone-50/70 text-left">
+                <th className="font-semibold text-stone-700 px-5 py-3">Course</th>
+                <th className="font-semibold text-stone-700 px-5 py-3">Type</th>
+                <th className="font-semibold text-stone-700 px-5 py-3">Score</th>
+                <th className="font-semibold text-stone-700 px-5 py-3">Completed</th>
+                <th className="font-semibold text-stone-700 px-5 py-3 text-right"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {completedRows.map((row) => (
+                <tr key={row.versionId} data-testid={`portal-safety-training-completed-row-${row.courseId}`}>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle className="shrink-0" />
+                      <Link
+                        href={`/employee/safety-training/${encodeURIComponent(row.versionId)}`}
+                        className="font-semibold text-club-green-800 hover:text-club-green-900 truncate"
+                      >
+                        {row.title}
+                      </Link>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3 text-stone-600">{row.typeLabel}</td>
+                  <td className="px-5 py-3 text-stone-700 tabular-nums">
+                    {row.score != null ? `${row.score}%` : "—"}
+                  </td>
+                  <td className="px-5 py-3 text-stone-600 tabular-nums">
+                    {formatCompleted(row.completedAt)}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <Link
+                      href={`/employee/safety-training/${encodeURIComponent(row.versionId)}`}
+                      className="inline-flex items-center rounded-md border border-stone-300 bg-white text-stone-700 text-xs font-semibold px-3 py-1.5 hover:bg-stone-50"
+                    >
+                      View
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }
 
-function CourseList({ items }: { items: Applicable[] }) {
+// ---------------------------------------------------------------------------
+// Small presentational bits
+// ---------------------------------------------------------------------------
+
+function AllCaughtUpBanner() {
   return (
-    <ul className="space-y-3">
-      {items.map((a) => {
-        const status = statusLabel(a);
-        const href = `/employee/safety-training/${encodeURIComponent(a.version.id)}`;
-        const testId = `portal-safety-training-course-${a.courseId}`;
-        return (
-          <li key={a.courseId}>
-            <Link
-              href={href}
-              className="block rounded-lg border border-stone-200 bg-white px-5 py-4 hover:border-stone-300 hover:bg-stone-50 transition-colors"
-              data-testid={testId}
-            >
-              <div className="flex items-baseline justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="font-serif text-lg leading-tight text-club-ink truncate">
-                    {a.title}
-                  </div>
-                  <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-stone-500">
-                    {a.category}
-                    {a.version.required ? " · Required" : " · Optional"}
-                  </div>
-                </div>
-                <StatusBadge label={status.label} tone={status.tone} />
-              </div>
-              {a.completed && a.completedAt && (
-                <div className="mt-2 text-xs text-stone-500">
-                  Completed {formatCompleted(a.completedAt)}
-                  {typeof a.lastAttempt?.attemptNumber === "number" && a.lastAttempt.passed
-                    ? ""
-                    : ""}
-                </div>
-              )}
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
+    <div
+      className="flex items-center gap-4 rounded-xl border border-emerald-200 bg-emerald-50/60 px-5 py-5"
+      data-testid="portal-safety-training-caught-up"
+    >
+      <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-800 shrink-0">
+        <CheckIcon />
+      </div>
+      <div>
+        <div className="font-semibold text-emerald-900">You’re all caught up!</div>
+        <div className="text-sm text-emerald-800/90">All required training is complete. Great work.</div>
+      </div>
+    </div>
   );
 }
 
-function StatusBadge({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "neutral" | "attention" | "success";
-}) {
-  const classes =
-    tone === "success"
-      ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-      : tone === "attention"
-        ? "bg-amber-50 text-amber-800 border border-amber-200"
-        : "bg-stone-100 text-stone-700 border border-stone-200";
+function EmptyAssignments() {
   return (
-    <span
-      className={`shrink-0 rounded-full px-3 py-0.5 text-[11px] font-medium uppercase tracking-[0.1em] ${classes}`}
-      data-testid={`training-status-${tone}`}
+    <div className="rounded-lg border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
+      <p className="text-sm text-stone-600">No training has been assigned to you yet.</p>
+      <p className="mt-2 text-xs text-stone-500">
+        When your Club assigns a course, it will appear here.
+      </p>
+    </div>
+  );
+}
+
+function formatDurationShort(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 60) return `${Math.round(seconds)} sec`;
+  const m = Math.round(seconds / 60);
+  return `${m} min`;
+}
+
+// ---------------------------------------------------------------------------
+// Icons (inline SVG — no deps)
+// ---------------------------------------------------------------------------
+
+function HardHatIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M3 16h18" />
+      <path d="M4.5 16a7.5 7.5 0 0 1 15 0" />
+      <path d="M10 8.5V6a2 2 0 0 1 4 0v2.5" />
+      <path d="M3 16v2a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-2" />
+    </svg>
+  );
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="17" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M8 2v4M16 2v4" />
+    </svg>
+  );
+}
+
+function RibbonIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="9" r="6" />
+      <path d="M8.5 14l-2 7 5.5-3 5.5 3-2-7" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12l5 5L20 7" />
+    </svg>
+  );
+}
+
+function CheckCircle({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
     >
-      {label}
-    </span>
+      <circle cx="12" cy="12" r="10" fill="#059669" opacity="0.12" />
+      <circle cx="12" cy="12" r="8" fill="#059669" />
+      <path d="M8.5 12.5l2.5 2.5L15.5 10" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
   );
 }

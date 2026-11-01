@@ -42,9 +42,9 @@ async function portalLogin(page: Page, f: IsolatedFixture): Promise<void> {
 }
 
 async function readTenantComputed(page: Page): Promise<Record<string, string>> {
-  return page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const el = document.querySelector('[data-testid="spectre-header-rail-tenant"]') as HTMLElement | null;
-    if (!el) return {};
+    if (!el) return null;
     const cs = window.getComputedStyle(el);
     return {
       fontFamily: cs.fontFamily,
@@ -57,6 +57,7 @@ async function readTenantComputed(page: Page): Promise<Record<string, string>> {
       maxWidth: cs.maxWidth,
     };
   });
+  return result ?? {};
 }
 
 async function readTenantColor(page: Page): Promise<string> {
