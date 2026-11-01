@@ -14,6 +14,7 @@ import { withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { resolveDocumentStorage } from "../../documents/storage";
 import { remuxToFastStart } from "./video-remux";
+import { probeMediaDuration } from "./video-probe";
 
 const VERSION_ENTITY = "TrainingCourseVersion";
 
@@ -94,6 +95,24 @@ export async function uploadTrainingVideo(
     );
   }
   const bytesToStore = remux.bytes;
+
+  // EP-TRAIN-4E A2 (2026-10-31) — server-side authoritative duration.
+  //
+  // We NEVER trust the client-supplied `durationSec` as the field we
+  // persist.  Spectre's final-assessment eligibility (90% watched-
+  // coverage threshold) is anchored to this value, so the server
+  // measures it directly from the stored bytes.  If probing fails on
+  // a file that otherwise looks like valid video, we REFUSE the upload
+  // outright — no NULL rows reach the DB from this path again.
+  const probe = await probeMediaDuration(bytesToStore, mimeType);
+  if (probe.state !== "ok" || probe.durationSec === null) {
+    throw new ConflictError(
+      `We couldn't determine the video's length. ${probe.note}. ` +
+      `Please try uploading again — the file has NOT been saved.`,
+    );
+  }
+  const probedDurationSec = probe.durationSec;
+
   const sha256 = createHash("sha256").update(bytesToStore).digest("hex");
   const storageKey = `clubs/${clubId}/training/${version.course.id}/${version.version}/${sha256}`;
   const storage = await resolveDocumentStorage({ clubId });
@@ -114,7 +133,7 @@ export async function uploadTrainingVideo(
         videoMimeType: mimeType,
         videoSizeBytes: bytesToStore.length,
         videoSha256: sha256,
-        videoDurationSec: input.durationSec ?? null,
+        videoDurationSec: probedDurationSec,
       },
     }),
     { entityType: VERSION_ENTITY, entityId: versionId },
@@ -128,9 +147,12 @@ export async function uploadTrainingVideo(
       sha256,
       sizeBytes: bytesToStore.length,
       mimeType,
-      durationSec: input.durationSec ?? null,
+      durationSec: probedDurationSec,
+      clientReportedDurationSec: input.durationSec ?? null,
       faststart: remux.state,
       faststartNote: remux.note,
+      probe: probe.state,
+      probeNote: probe.note,
     },
   });
   return { storageKey, sizeBytes: bytesToStore.length, sha256 };

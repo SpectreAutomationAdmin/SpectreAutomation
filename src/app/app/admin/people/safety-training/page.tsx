@@ -14,6 +14,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { listClubCourses } from "@/lib/hr/training/courses";
 import SafetyTrainingTabs from "./_SafetyTrainingTabs";
+import CourseRowActions from "./CourseRowActions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ export const dynamic = "force-dynamic";
 export default async function SafetyTrainingCatalogue({
   searchParams,
 }: {
-  searchParams: Promise<{ err?: string }>;
+  searchParams: Promise<{ err?: string; view?: string }>;
 }) {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
@@ -31,7 +32,12 @@ export default async function SafetyTrainingCatalogue({
   }
   const canAuthor = hasPermission(principal, clubId, "hr:training:write");
   const canReadCompliance = hasPermission(principal, clubId, "hr:training:compliance:read");
-  const { err } = await searchParams;
+  const canArchive = hasPermission(principal, clubId, "hr:training:publish");
+  const { err, view } = await searchParams;
+  // EP-TRAIN-4E B5 (2026-10-31): default = Active.  ?view=archived
+  // shows the archived catalogue so administrators can review +
+  // restore.
+  const archivedView = view === "archived";
 
   const courses = await listClubCourses(principal, clubId);
   const active = courses.filter((c) => !c.retiredAt);
@@ -69,63 +75,109 @@ export default async function SafetyTrainingCatalogue({
         </div>
       )}
 
-      <section data-testid="training-active-courses">
-        <h2 className="section-title text-lg mt-2 mb-3">Active courses</h2>
-        {active.length === 0 ? (
-          <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
-            <p className="text-sm text-stone-600">No courses yet.</p>
-            {canAuthor && (
-              <p className="mt-2 text-xs text-stone-500">
-                Click <span className="font-medium">+ Create course</span> to author your first safety course.
-              </p>
-            )}
-          </div>
-        ) : (
-          <table className="table-base w-full">
-            <thead>
-              <tr>
-                <th className="text-left">Course</th>
-                <th className="text-left">Category</th>
-                <th className="text-left">Required</th>
-                <th className="text-left">State</th>
-                <th className="text-left"> </th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((c) => (
-                <CourseRow key={c.id} course={c} canAuthor={canAuthor} />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      {/* EP-TRAIN-4E B5 (2026-10-31): catalogue filter.  Default is
+          Active; administrators switch to Archived to review + restore
+          retired courses. */}
+      <div
+        className="mb-5 flex items-center gap-4 text-sm"
+        data-testid="training-catalogue-view-toggle"
+      >
+        <Link
+          href="/app/admin/people/safety-training"
+          className={!archivedView ? "font-medium text-club-ink" : "text-stone-500 hover:text-club-ink"}
+          data-testid="training-view-active"
+        >
+          Active <span className="text-stone-400">({active.length})</span>
+        </Link>
+        <Link
+          href="/app/admin/people/safety-training?view=archived"
+          className={archivedView ? "font-medium text-club-ink" : "text-stone-500 hover:text-club-ink"}
+          data-testid="training-view-archived"
+        >
+          Archived <span className="text-stone-400">({retired.length})</span>
+        </Link>
+      </div>
 
-      {retired.length > 0 && (
-        <section className="mt-10" data-testid="training-retired-courses">
-          <h2 className="section-title text-lg mt-2 mb-3">Retired courses</h2>
-          <table className="table-base w-full">
-            <thead>
-              <tr>
-                <th className="text-left">Course</th>
-                <th className="text-left">Category</th>
-                <th className="text-left">Retired</th>
-              </tr>
-            </thead>
-            <tbody>
-              {retired.map((c) => (
-                <tr key={c.id} className="text-stone-500">
-                  <td>
-                    <Link href={`/app/admin/people/safety-training/${c.id}`} className="text-club-ink hover:underline">
-                      {c.title}
-                    </Link>
-                    <div className="text-xs text-stone-400 font-mono">{c.code}</div>
-                  </td>
-                  <td>{c.category}</td>
-                  <td>{c.retiredAt?.toLocaleDateString() ?? ""}</td>
+      {!archivedView && (
+        <section data-testid="training-active-courses">
+          <h2 className="section-title text-lg mt-2 mb-3">Active courses</h2>
+          {active.length === 0 ? (
+            <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
+              <p className="text-sm text-stone-600">No courses yet.</p>
+              {canAuthor && (
+                <p className="mt-2 text-xs text-stone-500">
+                  Click <span className="font-medium">+ Create course</span> to author your first safety course.
+                </p>
+              )}
+            </div>
+          ) : (
+            <table className="table-base w-full">
+              <thead>
+                <tr>
+                  <th className="text-left">Course</th>
+                  <th className="text-left">Category</th>
+                  <th className="text-left">Required</th>
+                  <th className="text-left">State</th>
+                  <th className="text-right"> </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {active.map((c) => (
+                  <CourseRow key={c.id} course={c} canAuthor={canAuthor} canArchive={canArchive} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {archivedView && (
+        <section data-testid="training-archived-courses">
+          <h2 className="section-title text-lg mt-2 mb-3">Archived courses</h2>
+          {retired.length === 0 ? (
+            <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-10 text-center">
+              <p className="text-sm text-stone-600">No archived courses.</p>
+              <p className="mt-2 text-xs text-stone-500">
+                Archived courses show here so administrators can review their history or restore them.
+              </p>
+            </div>
+          ) : (
+            <table className="table-base w-full">
+              <thead>
+                <tr>
+                  <th className="text-left">Course</th>
+                  <th className="text-left">Category</th>
+                  <th className="text-left">Archived</th>
+                  <th className="text-right"> </th>
+                </tr>
+              </thead>
+              <tbody>
+                {retired.map((c) => (
+                  <tr key={c.id} className="text-stone-500" data-testid={`training-archived-row-${c.id}`}>
+                    <td>
+                      <Link href={`/app/admin/people/safety-training/${c.id}`} className="text-club-ink hover:underline">
+                        {c.title}
+                      </Link>
+                      <div className="text-xs text-stone-400 font-mono">{c.code}</div>
+                    </td>
+                    <td>{c.category}</td>
+                    <td>{c.retiredAt?.toLocaleDateString() ?? ""}</td>
+                    <td className="text-right">
+                      {canArchive && (
+                        <CourseRowActions
+                          courseId={c.id}
+                          courseCode={c.code}
+                          courseTitle={c.title}
+                          state="archived"
+                          hasHistory={c.hasHistory}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </section>
       )}
     </div>
@@ -135,9 +187,11 @@ export default async function SafetyTrainingCatalogue({
 function CourseRow({
   course,
   canAuthor,
+  canArchive,
 }: {
   course: Awaited<ReturnType<typeof listClubCourses>>[number];
   canAuthor: boolean;
+  canArchive: boolean;
 }) {
   const currentBadge = course.currentVersion
     ? { label: `Published · v${course.currentVersion.version}`, tone: "emerald" }
@@ -150,8 +204,13 @@ function CourseRow({
     : course.currentVersion
       ? `/app/admin/people/safety-training/${course.id}`
       : `/app/admin/people/safety-training/${course.id}`;
+  // EP-TRAIN-4E B1 (2026-10-31): classify the row for state-aware
+  // action rendering.  "active-draft-only" means the course has
+  // NEVER been published (hasHistory is false AND no currentVersion).
+  const rowState: "active-draft-only" | "active-published" =
+    course.currentVersion ? "active-published" : "active-draft-only";
   return (
-    <tr>
+    <tr data-testid={`training-active-row-${course.id}`}>
       <td>
         <Link href={targetLink} className="text-club-ink hover:underline font-medium">
           {course.title}
@@ -165,14 +224,25 @@ function CourseRow({
         {draftBadge && <span className="ml-2"><StateBadge {...draftBadge} /></span>}
       </td>
       <td className="text-right">
-        {canAuthor && (
-          <Link
-            href={targetLink}
-            className="text-xs text-emerald-800 hover:text-emerald-900 underline underline-offset-4"
-          >
-            {course.draftVersion ? "Continue editing" : course.currentVersion ? "View" : "Open"}
-          </Link>
-        )}
+        <div className="flex flex-col items-end gap-1">
+          {canAuthor && (
+            <Link
+              href={targetLink}
+              className="text-xs text-emerald-800 hover:text-emerald-900 underline underline-offset-4"
+            >
+              {course.draftVersion ? "Continue editing" : course.currentVersion ? "View" : "Open"}
+            </Link>
+          )}
+          {canArchive && (
+            <CourseRowActions
+              courseId={course.id}
+              courseCode={course.code}
+              courseTitle={course.title}
+              state={rowState}
+              hasHistory={course.hasHistory}
+            />
+          )}
+        </div>
       </td>
     </tr>
   );

@@ -18,6 +18,9 @@ import {
   publishDraft,
   retireCourse,
   startNewDraft,
+  restoreCourse,
+  deleteDraftCourse,
+  permanentlyDeleteCourse,
 } from "@/lib/hr/training/courses";
 import { remediateVideoFastStart } from "@/lib/hr/training/video";
 import {
@@ -187,6 +190,74 @@ export async function retireCourseAction(courseId: string): Promise<void> {
     if (isAppError(err)) {
       redirect(withErr("/app/admin/people/safety-training", err.safeMessage));
     }
+    throw err;
+  }
+}
+
+// EP-TRAIN-4E B3 (2026-10-31): archive = the existing retire flow with
+// no re-published side effect.  Separate action name so UI callers can
+// label it "Archive" without changing the service's historical
+// retireCourse semantics.
+export async function archiveCourseAction(
+  courseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await retireCourse(principal, courseId);
+    revalidatePath("/app/admin/people/safety-training");
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
+    throw err;
+  }
+}
+
+// EP-TRAIN-4E B3 (2026-10-31): restore = clear retiredAt, promote the
+// most-recently-published version back to PUBLISHED.  Idempotent.
+export async function restoreCourseAction(
+  courseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await restoreCourse(principal, courseId);
+    revalidatePath("/app/admin/people/safety-training");
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
+    throw err;
+  }
+}
+
+// EP-TRAIN-4E B2 (2026-10-31): hard-delete a never-published draft
+// with zero legitimate training history.  Server-side dependency check
+// refuses any deletion that would destroy employee evidence.
+export async function deleteDraftCourseAction(
+  courseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await deleteDraftCourse(principal, courseId);
+    revalidatePath("/app/admin/people/safety-training");
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
+    throw err;
+  }
+}
+
+// EP-TRAIN-4E B4 (2026-10-31): hard-delete a course regardless of
+// state when (and ONLY when) zero legitimate training records
+// reference it.  For disposable test courses on staging/dev.
+export async function permanentlyDeleteCourseAction(
+  courseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await permanentlyDeleteCourse(principal, courseId);
+    revalidatePath("/app/admin/people/safety-training");
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
     throw err;
   }
 }

@@ -260,6 +260,14 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
   if (version.state !== "DRAFT") reasons.push(`Version is already ${version.state}.`);
   if (!version.title || version.title.trim().length < 3) reasons.push("Course title is required.");
   if (!version.videoStorageKey) reasons.push("Training video is required.");
+  // EP-TRAIN-4E A2 (2026-10-31) — a published video course MUST have
+  // an authoritative duration persisted.  New uploads measure it
+  // server-side; legacy versions without it (pre-EP-TRAIN-4E) are
+  // blocked from re-publication until the duration is repaired via
+  // the dedicated repair script.
+  if (version.videoStorageKey && !version.videoDurationSec) {
+    reasons.push("Training video is missing its length metadata — ask support to run the duration-repair utility before publishing.");
+  }
 
   // Validate per-question option integrity by question type. Final-
   // assessment questions have checkpointId=null; checkpoint questions
@@ -494,6 +502,231 @@ export async function retireCourse(
 }
 
 // ---------------------------------------------------------------------------
+// EP-TRAIN-4E B1-B5 (2026-10-31) — restore + hard-delete lifecycle
+// ---------------------------------------------------------------------------
+
+/** Un-archive a course that was previously `retireCourse`'d.
+ *  Clears Course.retiredAt and promotes the most-recently-published
+ *  version back to PUBLISHED (currentVersionId points to it again).
+ *  Idempotent: calling on a non-retired course is a no-op. */
+export async function restoreCourse(
+  principal: Principal,
+  courseId: string,
+): Promise<void> {
+  const course = await prisma.trainingCourse.findUnique({
+    where: { id: courseId },
+    include: {
+      versions: {
+        orderBy: [{ publishedAt: "desc" }, { version: "desc" }],
+      },
+    },
+  });
+  if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
+  assertTenantOwned(course, principal);
+  requirePermission(principal, course.clubId, "hr:training:publish");
+  if (!course.retiredAt) return;
+
+  // Pick the version that was PUBLISHED (or last RETIRED-from-published)
+  // to re-promote.  If no version was ever published, the course goes
+  // back to its draft-only state (no currentVersionId).
+  const candidate = course.versions.find((v) => v.state === "PUBLISHED")
+    ?? course.versions.find((v) => v.state === "RETIRED" && v.publishedAt !== null)
+    ?? null;
+
+  await prisma.$transaction(async (tx) => {
+    await assertPostingAllowed(principal, course.clubId, "hr.training.course.restore", COURSE_ENTITY, courseId, { tx });
+    await tx.trainingCourse.update({
+      where: { id: courseId },
+      data: {
+        retiredAt: null,
+        currentVersionId: candidate?.id ?? null,
+      },
+    });
+    if (candidate) {
+      await tx.trainingCourseVersion.update({
+        where: { id: candidate.id },
+        data: { state: "PUBLISHED", retiredAt: null },
+      });
+    }
+  });
+  await audit(principal, {
+    action: "hr.training.course.restore",
+    entityType: COURSE_ENTITY,
+    entityId: courseId,
+    clubId: course.clubId,
+    after: { restoredAt: new Date(), currentVersionId: candidate?.id ?? null },
+  });
+}
+
+/** How many legitimate training records point at this course? */
+async function countCourseHistory(courseId: string): Promise<{
+  progressRows: number;
+  attemptRows: number;
+  completionRows: number;
+  assignmentRows: number;
+  total: number;
+}> {
+  const [progressRows, attemptRows, completionRows, assignmentRows] = await Promise.all([
+    prisma.trainingProgress.count({ where: { courseVersion: { courseId } } }),
+    prisma.trainingAttempt.count({ where: { courseVersion: { courseId } } }),
+    prisma.trainingCompletion.count({ where: { courseId } }),
+    prisma.trainingAssignment.count({ where: { courseId } }),
+  ]);
+  return {
+    progressRows,
+    attemptRows,
+    completionRows,
+    assignmentRows,
+    total: progressRows + attemptRows + completionRows + assignmentRows,
+  };
+}
+
+/** DELETE a DRAFT course with no legitimate training history.
+ *
+ *  Preconditions (ALL must hold or ConflictError is thrown):
+ *   - the course has never been PUBLISHED (no publishedAt on any version);
+ *   - every version is in DRAFT state;
+ *   - zero TrainingProgress / TrainingAttempt / TrainingCompletion rows;
+ *   - zero TrainingAssignment rows.
+ *
+ *  Cascading deletes (handled by Prisma schema's onDelete relations):
+ *   TrainingAnswerOption → TrainingQuestion → TrainingCheckpoint →
+ *   TrainingCourseVersion → TrainingCourse.
+ *
+ *  R2 media objects whose storageKey is only referenced by versions on
+ *  THIS course are deleted after the DB write.  (Keys referenced from
+ *  other courses' versions are left alone.)
+ *
+ *  Audit row written with a full before-snapshot. */
+export async function deleteDraftCourse(
+  principal: Principal,
+  courseId: string,
+): Promise<void> {
+  const course = await prisma.trainingCourse.findUnique({
+    where: { id: courseId },
+    include: { versions: { select: { id: true, state: true, publishedAt: true, videoStorageKey: true } } },
+  });
+  if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
+  assertTenantOwned(course, principal);
+  requirePermission(principal, course.clubId, "hr:training:publish");
+
+  const nonDraft = course.versions.filter((v) => v.state !== "DRAFT" || v.publishedAt !== null);
+  if (nonDraft.length > 0) {
+    throw new ConflictError(
+      "This course has a published or retired version and can't be hard-deleted.  Archive it instead; its training history will remain available to administrators.",
+    );
+  }
+  const history = await countCourseHistory(courseId);
+  if (history.total > 0) {
+    throw new ConflictError(
+      `Can't delete: ${history.total} training record(s) reference this course (progress ${history.progressRows}, attempts ${history.attemptRows}, completions ${history.completionRows}, assignments ${history.assignmentRows}).  Archive it instead.`,
+    );
+  }
+
+  const videoKeys = course.versions.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string");
+
+  await withPostingGuard(
+    principal,
+    course.clubId,
+    "hr.training.course.delete-draft",
+    async (tx) => tx.trainingCourse.delete({ where: { id: courseId } }),
+    { entityType: COURSE_ENTITY, entityId: courseId },
+  );
+  await audit(principal, {
+    action: "hr.training.course.delete-draft",
+    entityType: COURSE_ENTITY,
+    entityId: courseId,
+    clubId: course.clubId,
+    before: {
+      code: course.code,
+      title: course.title,
+      category: course.category,
+      versionCount: course.versions.length,
+      videoStorageKeys: videoKeys,
+    },
+  });
+  // R2 object cleanup is best-effort — the DB write is authoritative.
+  // A failed R2 delete leaves orphan bytes that cost nothing more than
+  // a sweep by a future ops task.
+  if (videoKeys.length > 0) {
+    try {
+      // Lazy import to avoid pulling the S3 client into other code paths.
+      const { resolveDocumentStorage } = await import("../../documents/storage");
+      const storage = await resolveDocumentStorage({ clubId: course.clubId });
+      for (const key of videoKeys) {
+        try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
+      }
+    } catch { /* noop */ }
+  }
+}
+
+/** PERMANENTLY delete a course regardless of state — ONLY when zero
+ *  legitimate training records reference it.  Intended for cleaning
+ *  up disposable test courses on staging or in a dev tenant without
+ *  destroying any real employee compliance evidence.
+ *
+ *  Preconditions:
+ *   - zero TrainingProgress / TrainingAttempt / TrainingCompletion /
+ *     TrainingAssignment rows (as `deleteDraftCourse`);
+ *   - the caller holds `hr:training:publish`.
+ *
+ *  Does NOT infer "test course" from the title.  The caller provides
+ *  the courseId explicitly and the server enforces the dependency
+ *  invariant. */
+export async function permanentlyDeleteCourse(
+  principal: Principal,
+  courseId: string,
+): Promise<void> {
+  const course = await prisma.trainingCourse.findUnique({
+    where: { id: courseId },
+    include: { versions: { select: { id: true, state: true, videoStorageKey: true } } },
+  });
+  if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
+  assertTenantOwned(course, principal);
+  requirePermission(principal, course.clubId, "hr:training:publish");
+
+  const history = await countCourseHistory(courseId);
+  if (history.total > 0) {
+    throw new ConflictError(
+      `Can't permanently delete: ${history.total} training record(s) reference this course (progress ${history.progressRows}, attempts ${history.attemptRows}, completions ${history.completionRows}, assignments ${history.assignmentRows}).  Archive it instead.`,
+    );
+  }
+
+  const videoKeys = course.versions.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string");
+
+  await withPostingGuard(
+    principal,
+    course.clubId,
+    "hr.training.course.delete-permanent",
+    async (tx) => tx.trainingCourse.delete({ where: { id: courseId } }),
+    { entityType: COURSE_ENTITY, entityId: courseId },
+  );
+  await audit(principal, {
+    action: "hr.training.course.delete-permanent",
+    entityType: COURSE_ENTITY,
+    entityId: courseId,
+    clubId: course.clubId,
+    before: {
+      code: course.code,
+      title: course.title,
+      category: course.category,
+      versionCount: course.versions.length,
+      versionStates: course.versions.map((v) => v.state),
+      videoStorageKeys: videoKeys,
+    },
+  });
+  if (videoKeys.length > 0) {
+    try {
+      const { resolveDocumentStorage } = await import("../../documents/storage");
+      const storage = await resolveDocumentStorage({ clubId: course.clubId });
+      for (const key of videoKeys) {
+        try { await storage.delete({ storageKey: key }); } catch { /* noop */ }
+      }
+    } catch { /* noop */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Read helpers
 // ---------------------------------------------------------------------------
 
@@ -508,6 +741,10 @@ export async function listClubCourses(
   retiredAt: Date | null;
   currentVersion: { id: string; version: number; state: string; required: boolean } | null;
   draftVersion: { id: string; version: number } | null;
+  // EP-TRAIN-4E B1 (2026-10-31): true iff any legitimate training
+  // record points at this course.  Row-action UI uses this flag to
+  // decide whether permanent-delete / draft-delete is safe to offer.
+  hasHistory: boolean;
 }>> {
   requirePermission(principal, clubId, "hr:training:read");
   const rows = await prisma.trainingCourse.findMany({
@@ -518,13 +755,59 @@ export async function listClubCourses(
         where: { state: { in: ["DRAFT", "PUBLISHED"] } },
         select: { id: true, version: true, state: true, required: true },
       },
+      _count: {
+        select: {
+          completions: true,
+          assignments: true,
+        },
+      },
     },
   });
+  // Count TrainingProgress + TrainingAttempt per course via the
+  // courseVersion -> course FK; a single aggregate query per fetch
+  // avoids an N+1 pattern.
+  const courseIds = rows.map((r) => r.id);
+  const [progressGroup, attemptGroup] = courseIds.length > 0
+    ? await Promise.all([
+        prisma.trainingProgress.groupBy({
+          by: ["courseVersionId"],
+          where: { courseVersion: { courseId: { in: courseIds } } },
+          _count: { _all: true },
+        }),
+        prisma.trainingAttempt.groupBy({
+          by: ["courseVersionId"],
+          where: { courseVersion: { courseId: { in: courseIds } } },
+          _count: { _all: true },
+        }),
+      ])
+    : [[], []];
+  // Map courseVersionId -> courseId so group counts can be rolled up.
+  const versionToCourse = new Map<string, string>();
+  for (const r of rows) {
+    for (const v of r.versions) versionToCourse.set(v.id, r.id);
+  }
+  const progressByCourse = new Map<string, number>();
+  const attemptByCourse = new Map<string, number>();
+  for (const g of progressGroup) {
+    const cid = versionToCourse.get(g.courseVersionId);
+    if (!cid) continue;
+    progressByCourse.set(cid, (progressByCourse.get(cid) ?? 0) + g._count._all);
+  }
+  for (const g of attemptGroup) {
+    const cid = versionToCourse.get(g.courseVersionId);
+    if (!cid) continue;
+    attemptByCourse.set(cid, (attemptByCourse.get(cid) ?? 0) + g._count._all);
+  }
   return rows.map((r) => {
     const currentVersion = r.versions.find((v) => v.state === "PUBLISHED") ?? null;
     const draftVersion = r.versions.find((v) => v.state === "DRAFT")
       ? { id: r.versions.find((v) => v.state === "DRAFT")!.id, version: r.versions.find((v) => v.state === "DRAFT")!.version }
       : null;
+    const historyTotal =
+      (r._count?.completions ?? 0)
+      + (r._count?.assignments ?? 0)
+      + (progressByCourse.get(r.id) ?? 0)
+      + (attemptByCourse.get(r.id) ?? 0);
     return {
       id: r.id,
       code: r.code,
@@ -533,6 +816,7 @@ export async function listClubCourses(
       retiredAt: r.retiredAt,
       currentVersion,
       draftVersion,
+      hasHistory: historyTotal > 0,
     };
   });
 }

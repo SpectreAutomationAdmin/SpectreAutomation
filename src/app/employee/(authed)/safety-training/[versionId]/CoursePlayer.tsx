@@ -831,6 +831,49 @@ export default function CoursePlayer(props: Props) {
     setError(null);
   }
 
+  // EP-TRAIN-4E A4 (2026-10-31): "Try again" from the
+  // needs-more-viewing / duration-metadata-missing branch.  Flushes
+  // whatever coverage the client holds, then asks the server to
+  // re-evaluate.  If the server-side state has since been repaired
+  // (duration backfilled by the ops repair script), the fresh
+  // response will unlock quiz-ready without a page refresh.
+  async function onNeedsMoreViewingRetry() {
+    setError(null);
+    setBusy(true);
+    setPhase({ kind: "finalizing" });
+    try {
+      const response = await sendProgress({ force: true });
+      if (!response) {
+        // Server didn't respond — stay in a bounded state and let the
+        // employee try once more.
+        setPhase({
+          kind: "needs-more-viewing",
+          percentComplete: progress.percentComplete,
+          thresholdPercent,
+          reason: "duration-metadata-missing",
+        });
+        return;
+      }
+      const unlocked = response.percentComplete >= thresholdPercent;
+      if (unlocked) {
+        setPhase({ kind: "quiz-ready" });
+      } else {
+        setPhase({
+          kind: "needs-more-viewing",
+          percentComplete: response.percentComplete,
+          thresholdPercent,
+          reason: response.hasAuthoritativeDuration ? "coverage" : "duration-metadata-missing",
+        });
+      }
+      // Pull a fresh server-rendered course view so any
+      // administrator-side repair (e.g. videoDurationSec backfill) is
+      // visible on the next render.
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const percentDisplay = Math.min(100, Math.round(progress.percentComplete));
 
   const historyCount = submittedAttempts.length;
@@ -932,6 +975,7 @@ export default function CoursePlayer(props: Props) {
                       onStart={onStartAttempt}
                       onSubmit={onSubmitAttempt}
                       onRetake={onRetake}
+                      onRetry={onNeedsMoreViewingRetry}
                     />
                   )}
                 </div>
@@ -1276,6 +1320,7 @@ function FinalAssessmentPanel({
   onStart,
   onSubmit,
   onRetake,
+  onRetry,
 }: {
   phase: Extract<Phase, { kind: "finalizing" | "needs-more-viewing" | "quiz-ready" | "quiz-answering" | "grading" | "quiz-result" }>;
   questions: Question[];
@@ -1287,6 +1332,9 @@ function FinalAssessmentPanel({
   onStart: () => void;
   onSubmit: () => void;
   onRetake: () => void;
+  // EP-TRAIN-4E A4 (2026-10-31): invoked when the employee hits the
+  // "Try again" button on the duration-metadata-missing branch.
+  onRetry: () => void;
 }) {
   // EP-TRAIN-4D (2026-11-01): bounded transient state while the final
   // progress flush is persisting on the server.  The decision between
@@ -1310,18 +1358,31 @@ function FinalAssessmentPanel({
     return (
       <div className="space-y-3" data-testid="portal-course-needs-more-viewing">
         {phase.reason === "duration-metadata-missing" ? (
+          // EP-TRAIN-4E A4 (2026-10-31) — this branch should rarely
+          // fire now that uploads measure duration server-side and the
+          // one-shot repair fixed legacy rows.  If it does fire (a
+          // media object went missing on R2, or ffprobe transiently
+          // failed on upload), the employee sees a short, professional
+          // "try again" copy with a Retry button — never a "contact
+          // your administrator" dead-end.
           <>
             <h3 className="font-serif text-xl text-amber-900">
-              This course can&rsquo;t be completed automatically.
+              We couldn&rsquo;t finish loading this training.
             </h3>
             <p className="text-sm text-stone-700">
-              The server doesn&rsquo;t have the authoritative length of this
-              training video on record, so we can&rsquo;t verify that
-              you&rsquo;ve finished watching. Please contact your Club
-              administrator — they can re-publish the course with the
-              correct video details, then you&rsquo;ll be able to take the
-              knowledge test.
+              Please try again shortly.
             </p>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={onRetry}
+                disabled={busy}
+                data-testid="portal-course-needs-more-viewing-retry"
+              >
+                {busy ? "Loading…" : "Try again"}
+              </button>
+            </div>
           </>
         ) : (
           <>
