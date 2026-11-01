@@ -254,6 +254,13 @@ test.describe("EP-UX-2 :: Safety & Training redesign", () => {
       // placeholder.  Either state is correct (new fixtures have no
       // thumbnail; existing B31 does after backfill).
       await expect(shell.locator('[data-testid="portal-course-required-card-thumbnail"]').first()).toBeVisible();
+      // EP-UX-2C §2 — enumerate thumbnail states so we can tell
+      // "placeholder for a reason" (no video / 404) from
+      // "image loaded but intro frame is dark" at a glance.
+      const thumbStates = await shell.locator('[data-testid="portal-course-required-card-thumbnail"]').evaluateAll((nodes) =>
+        nodes.map((n) => (n as HTMLElement).getAttribute("data-thumbnail-state"))
+      );
+      console.log(`[EP-UX-2C] thumbnail states for ${thumbStates.length} required-rail cards: ${JSON.stringify(thumbStates)}`);
 
       // EP-UX-2C §3 — the standalone Recommended Training section
       // below the course content must NOT render.

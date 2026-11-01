@@ -61,17 +61,14 @@ async function fetchObjectBytes(client, bucket, clubId, storageKey) {
   return Buffer.concat(chunks);
 }
 
-async function putObjectBytes(client, bucket, clubId, storageKey, bytes, mimeType) {
-  const realKey = `clubs/${clubId}/${storageKey}`;
-  await client.send(new PutObjectCommand({
-    Bucket: bucket, Key: realKey, Body: bytes, ContentType: mimeType,
-  }));
-}
-
 function pickCaptureSeconds(durationSec) {
+  // Mirror src/lib/hr/training/video-thumbnail.ts — midpoint of
+  // duration, floored at 3s, capped at 60s. Short training videos
+  // tend to open on a dark title card; midpoint is far more
+  // representative of the lesson content.
   if (!durationSec || !Number.isFinite(durationSec) || durationSec <= 2) return 0.5;
-  const candidate = Math.round(durationSec * 0.1);
-  return Math.max(1, Math.min(10, candidate));
+  const candidate = Math.round(durationSec * 0.5);
+  return Math.max(3, Math.min(60, candidate));
 }
 
 async function runFfmpegThumbnail(inPath, outPath, seekSec, timeoutMs = 20_000) {
@@ -160,16 +157,22 @@ async function main() {
         row.outcome = "would-update";
         row.proposedThumbnailStorageKey = `clubs/${v.course.clubId}/${thumbStorageKey}`;
       } else {
-        await putObjectBytes(s3, bucket, v.course.clubId, thumbStorageKey, thumbBytes, "image/jpeg");
-        // The DB column stores the pre-double-prefix form so the
-        // existing resolveDocumentStorage.get() works correctly:
-        //   adapter PUT at `clubs/${clubId}/${storageKey}` ⇔
-        //   adapter GET at `clubs/${clubId}/${storageKey}`.
-        // The storage.put call ABOVE already added the clubs prefix,
-        // so the DB key stores `clubs/${clubId}/training-thumbnails/...`
-        // and the adapter re-prefixes on fetch — giving the correct
-        // real R2 key (double-prefixed, matching the upload service).
+        // EP-UX-2C §2 repair (2026-11-01) — mirror the live-upload
+        // DOUBLE-prefix convention exactly.  The live uploader does
+        // `storage.put({storageKey: "clubs/<cid>/training-thumbnails/..."})`
+        // which routes through `resolveDocumentStorage.put()` →
+        // `s3StorageAdapter.put()` → prepends ANOTHER `clubs/<cid>/`,
+        // landing the R2 object at `clubs/<cid>/clubs/<cid>/training-...`.
+        // The DB stores the SINGLE-prefix string.  Reads then do
+        // `resolveDocumentStorage.get({storageKey: dbKey})` which again
+        // prepends ONE `clubs/<cid>/` → fetches the DOUBLE-prefix R2
+        // object correctly.  This script uses the RAW S3 client, so it
+        // must physically PUT at the DOUBLE-prefix path to match.
         const dbKey = `clubs/${v.course.clubId}/${thumbStorageKey}`;
+        const realR2Key = `clubs/${v.course.clubId}/${dbKey}`;
+        await s3.send(new PutObjectCommand({
+          Bucket: bucket, Key: realR2Key, Body: thumbBytes, ContentType: "image/jpeg",
+        }));
         await prisma.trainingCourseVersion.update({
           where: { id: v.id },
           data: {

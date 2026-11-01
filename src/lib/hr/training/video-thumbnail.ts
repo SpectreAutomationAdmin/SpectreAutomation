@@ -41,12 +41,19 @@ export interface ThumbnailResult {
 const THUMBNAIL_MIME = "image/jpeg";
 const TARGET_WIDTH = 640;
 
-/** Pick a sensible representative timestamp.  Avoids the black / title
- *  frames at the very start by seeking 10 % in, clamped to [1, 10]s. */
+/** Pick a sensible representative timestamp.  Short training videos
+ *  tend to open on a dark branded title card for 3-6s, so seeking at
+ *  10 % lands right in the title. The midpoint is far more
+ *  representative of the actual lesson content.  Clamp to a lower
+ *  bound of 3s so videos with no intro still skip the first frame
+ *  (which can be an encoder-black). */
 function pickCaptureSeconds(durationSec: number | null | undefined): number {
   if (!durationSec || !Number.isFinite(durationSec) || durationSec <= 2) return 0.5;
-  const candidate = Math.round(durationSec * 0.1);
-  return Math.max(1, Math.min(10, candidate));
+  // 50% of duration, floored at 3s, capped at 60s (keeps extraction
+  // fast even on long-form videos — ffmpeg -ss before -i uses a
+  // keyframe seek that stays O(constant)).
+  const candidate = Math.round(durationSec * 0.5);
+  return Math.max(3, Math.min(60, candidate));
 }
 
 async function runFfmpegThumbnail(
