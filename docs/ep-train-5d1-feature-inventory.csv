@@ -1,0 +1,84 @@
+feature_num,section,feature,classification,admin_route,component,action_or_api,service,model,permission,browser_verified,known_limitation
+1,A,Training catalogue list,FULLY_IMPLEMENTED,/app/admin/people/safety-training,safety-training/page.tsx,SSR,courses.listClubCourses,TrainingCourse,hr:training:read,yes,
+2,A,Archived courses toggle,FULLY_IMPLEMENTED,/app/admin/people/safety-training?archived=1,safety-training/page.tsx,SSR,courses.listClubCourses,TrainingCourse,hr:training:read,yes,
+3,A,Courses/Compliance tabs,FULLY_IMPLEMENTED,both,_SafetyTrainingTabs.tsx,,,,hr:training:read+compliance:read,yes,
+4,A,Club-wide compliance roll-up,FULLY_IMPLEMENTED,/safety-training/compliance,compliance/page.tsx,SSR,compliance.getClubTrainingCompliance,TrainingCompletion+TrainingObligation,hr:training:compliance:read,yes,no CSV export
+5,A,Compliance filters,IMPLEMENTED_NOT_VERIFIED,/safety-training/compliance?status/dept/course/q,compliance/page.tsx,query-string,same,,hr:training:compliance:read,yes-not-exercised,
+6,A,Outstanding requirements rail (dashboard-level),NOT_IMPLEMENTED,,,,,,,,,
+7,A,Overdue training surfacing,NOT_IMPLEMENTED,,,,,TrainingObligation.dueAt,,,no UI
+8,A,Admin KPI card row,NOT_IMPLEMENTED,,,,,,,,,
+9,B,Create new course,FULLY_IMPLEMENTED,/safety-training/new,new/page.tsx,createCourseAction,courses.createCourse,TrainingCourse+TrainingCourseVersion,hr:training:write,yes,
+10,B,Edit course identity,FULLY_IMPLEMENTED,/safety-training/[courseId]/[versionId],[versionId]/page.tsx,updateDraftAction,courses.updateDraft,TrainingCourseVersion,hr:training:write (DRAFT only),yes,PUBLISHED read-only
+11,B,Course categories enum,FULLY_IMPLEMENTED,both forms,,,TRAINING_COURSE_CATEGORIES,,,yes,fixed enum
+12,B,Required vs optional,FULLY_IMPLEMENTED,version editor+new,checkbox,updateDraftAction,courses.updateDraft,TrainingCourseVersion.required,hr:training:write,yes,
+13,B,Course thumbnails,FULLY_IMPLEMENTED,version editor,VideoUploader,POST/GET /thumbnail,video+video-thumbnail,TrainingCourseVersion,hr:training:write+read,yes,auto-generated
+14,B,Video upload R2 + range stream,FULLY_IMPLEMENTED,version editor,VideoUploader,/api/hr/training/versions/[id]/video,video.uploadTrainingVideo+video-stream,TrainingCourseVersion,hr:training:write+read,yes,2GB max
+15,B,Fast-start remux,FULLY_IMPLEMENTED,version editor,Optimize button,optimizeVideoAction,video.remediateVideoFastStart,TrainingCourseVersion,hr:training:write,yes,
+16,B,Course versioning,FULLY_IMPLEMENTED,course-detail versions table,[courseId]/page.tsx,,,TrainingCourseVersion.state,,yes,
+17,B,Start new draft (Revise),FULLY_IMPLEMENTED,course-detail Revise training,[courseId]/page.tsx,startNewDraftAction,courses.startNewDraft,TrainingCourseVersion DRAFT,hr:training:write,yes,does not clone checkpoints (5C-3C defect)
+18,B,Publish v1,FULLY_IMPLEMENTED,version editor PublishPanel,PublishPanel.tsx,publishDraftAction,courses.publishDraft,TrainingCourseVersion.state,hr:training:publish,yes,
+19,B,Publish readiness check,FULLY_IMPLEMENTED,version editor,PublishPanel.tsx,,courses.checkPublishReadiness,,,yes,
+20,B,Publish REVISION with policy,FULLY_IMPLEMENTED,version editor PublishRevisionDialog,PublishRevisionDialog.tsx,publishDraftWithPolicyAction,revisions.publishDraftWithPolicy,TrainingObligation (REVISION),hr:training:publish,yes-5C-3C,
+21,B,Course retire,FULLY_IMPLEMENTED,course detail,[courseId]/page.tsx button,retireCourseAction,courses.retireCourse,TrainingCourse.retiredAt,hr:training:publish,yes,
+22,B,Course archive,FULLY_IMPLEMENTED,catalogue row,CourseRowActions.tsx,archiveCourseAction,courses.retireCourse,TrainingCourse.retiredAt,hr:training:publish,yes,
+23,B,Course restore,FULLY_IMPLEMENTED,catalogue archived,CourseRowActions.tsx,restoreCourseAction,courses.restoreCourse,TrainingCourse,hr:training:publish,yes,
+24,B,Delete DRAFT-only course,FULLY_IMPLEMENTED,catalogue row,CourseRowActions.tsx,deleteDraftCourseAction,courses.deleteDraftCourse,hard delete,hr:training:publish,yes,DRAFT only
+25,B,Permanent delete (no-history guard),FULLY_IMPLEMENTED,catalogue row,CourseRowActions.tsx,permanentlyDeleteCourseAction,courses.permanentlyDeleteCourse,hard delete,hr:training:publish,yes,refuses with history
+26,C,Video timeline editor,FULLY_IMPLEMENTED,version editor,TimelineEditor.tsx,multiple,checkpoints.*+questions.*,TrainingCheckpoint+TrainingQuestion,hr:training:write,yes,
+27,C,Checkpoint placement,FULLY_IMPLEMENTED,TimelineEditor,,createCheckpointAction+update+delete,checkpoints.*,TrainingCheckpoint,hr:training:write,yes,
+28,C,Required-to-proceed checkpoint,FULLY_IMPLEMENTED,checkpoint form,checkbox,updateCheckpointAction,checkpoints.updateCheckpoint,TrainingCheckpoint.requiredToProceed,hr:training:write,yes,
+29,C,Checkpoint retry limit,FULLY_IMPLEMENTED,checkpoint form,input,updateCheckpointAction,,TrainingCheckpoint.maxRetries,hr:training:write,yes,
+30,C,SINGLE_CHOICE question,FULLY_IMPLEMENTED,QuizEditor,question form,createQuestionAction+update,questions.*,TrainingQuestion+TrainingAnswerOption,hr:training:write,yes,
+31,C,MULTI_ANSWER question,FULLY_IMPLEMENTED,QuizEditor,,,,,hr:training:write,yes,
+32,C,TRUE_FALSE question,FULLY_IMPLEMENTED,QuizEditor,,,,,hr:training:write,yes,
+33,C,Correct-answer config,FULLY_IMPLEMENTED,QuizEditor,,,,,hr:training:write,yes,
+34,C,Reorder questions,FULLY_IMPLEMENTED,QuizEditor,reorder button,reorderQuestionsAction,questions.reorderQuestions,TrainingQuestion.displayOrder,hr:training:write,yes,
+35,C,Final-assessment passing threshold,FULLY_IMPLEMENTED,version editor,passingScore input,updateDraftAction,courses.updateDraft,TrainingCourseVersion.passingScore,hr:training:write,yes,
+36,C,Minimum watched % (90),FULLY_IMPLEMENTED,hardcoded,attempts.ts,,attempts.recordVideoProgress,,,server-enforced,constant not admin-editable
+37,C,Preview/test as employee,PARTIALLY_IMPLEMENTED,course-detail Open,,,shares employee runtime,,hr:training:read,yes,writes real TrainingProgress on admin playback
+38,D,Everyone applicability,FULLY_IMPLEMENTED,version editor+new,ApplicabilityPicker.tsx,updateDraftAction/createCourseAction,courses.updateDraft+createCourse,TrainingCourseVersion.appliesToAll,hr:training:write,yes,
+39,D,Department applicability,FULLY_IMPLEMENTED,version editor,ApplicabilityPicker.tsx scoped,updateDraftAction,courses.updateDraft,TrainingCourseVersion.appliesToDeptIds,hr:training:write (DRAFT only),yes,
+40,D,Position applicability,FULLY_IMPLEMENTED,version editor,ApplicabilityPicker.tsx scoped,updateDraftAction,courses.updateDraft,TrainingCourseVersion.appliesToPositionIds,hr:training:write (DRAFT only),yes,
+41,D,Individual employee assignment,PARTIALLY_IMPLEMENTED,employee profile Training tab,AssignTrainingButton.tsx,assignTrainingCourseAction,assignments.assignCourseToEmployee,TrainingAssignment,hr:training:assign,yes,one-at-a-time
+42,D,Combined dept+position,FULLY_IMPLEMENTED,ApplicabilityPicker Scoped,,,,,hr:training:write,yes,OR not AND
+43,D,Change published applicability,PARTIALLY_IMPLEMENTED,Revise Training workflow,ApplicabilityPicker+PublishRevisionDialog,startNewDraftAction+updateDraftAction+publishDraftWithPolicyAction,3 services,TrainingCourseVersion+TrainingObligation,hr:training:write+publish,yes-5C-3C,issues REVISION obligations
+44,D,Preview employees affected before saving,NOT_IMPLEMENTED,,,,revisions.previewRetakeTargets exists for retake only,,,,,no scoped preview
+45,D,Course-level applicable roster,FULLY_IMPLEMENTED,course detail,[courseId]/page.tsx,SSR,applicability.resolveApplicableCourses,,hr:training:compliance:read,yes,read-only no +Add
+46,D,Bulk assign to employees,NOT_IMPLEMENTED,,,,needs batch wrapper,TrainingAssignment,,,
+47,D,Employee transfer re-eval,FULLY_IMPLEMENTED,automatic,,,applicability.collectActiveRoleContext,,,yes,no notification
+48,D,Assignment deadlines (TrainingAssignment),NOT_IMPLEMENTED,,,,,TrainingAssignment lacks dueAt,,,TrainingObligation.dueAt exists
+49,D,Required/optional per assignment,PARTIALLY_IMPLEMENTED,,,,,version carries required flag; per-emp cannot override,,,by design
+50,E,Revise Training,FULLY_IMPLEMENTED,course detail Revise training,[courseId]/page.tsx button,startNewDraftAction,courses.startNewDraft,TrainingCourseVersion DRAFT,hr:training:write,yes,checkpoint clone defect
+51,E,Publish policies (3 types),FULLY_IMPLEMENTED,PublishRevisionDialog,PublishRevisionDialog.tsx,publishDraftWithPolicyAction,revisions.publishDraftWithPolicy,TrainingObligation REVISION,hr:training:publish,yes-5C-3C,
+52,E,Preview retake targets,FULLY_IMPLEMENTED,RequireRetakeDialog step 2,RequireRetakeDialog.tsx,previewRetakeAction,revisions.previewRetakeTargets,,hr:training:read,yes,
+53,E,Require Retake,FULLY_IMPLEMENTED,course detail dialog,RequireRetakeDialog.tsx,requireRetakeAction,revisions.issueManualReinstatement,TrainingObligation MANUAL_REINSTATE,hr:training:publish,yes-5C-3B+5C-3C,
+54,E,Keep Both vs Replace,FULLY_IMPLEMENTED,RequireRetakeDialog,per-emp selector,requireRetakeAction (conflictResolution),revisions.issueManualReinstatement,TrainingObligation,hr:training:publish,yes-5C-3C,
+55,E,Reason + optional deadline (retake),FULLY_IMPLEMENTED,dialog,reason textarea+due-date,requireRetakeAction,same,reasonNote+dueAt,hr:training:publish,yes,
+56,E,Auto-supersession,FULLY_IMPLEMENTED,on publish,server-side,,revisions.publishDraftWithPolicy supersession loop,TrainingObligation.supersededByObligationId,hr:training:publish,yes-5C-3C,MANUAL_REINSTATE never superseded
+57,E,Historical completion preservation,FULLY_IMPLEMENTED,by design,,,all services,TrainingCompletion never deleted,,yes,
+58,E,Employee Updated Training Required,FULLY_IMPLEMENTED,employee portal,course+dashboard,,compliance-resolver,,,,yes-5C-3C,
+59,E,Employee Retake Required,FULLY_IMPLEMENTED,employee portal,course+dashboard,,same,,,yes-5C-3A/B/C,
+60,E,Employee Initial Training Required (persisted),FULLY_IMPLEMENTED,employee portal,course+dashboard,,same + 5C-4B-α UI,,,,yes-5C-4B-α,
+61,F,Employee assigned+completed courses,FULLY_IMPLEMENTED,employee profile Training tab,EmployeeTrainingSection.tsx,SSR,compliance.getEmployeeTrainingRecord,,hr:training:compliance:read,yes,
+62,F,Employee outstanding requirements,FULLY_IMPLEMENTED,same,,,same,TrainingObligation OUTSTANDING,hr:training:compliance:read,yes,
+63,F,Employee training attempts,FULLY_IMPLEMENTED,same,,,employee-read,TrainingAttempt,hr:training:compliance:read,yes,
+64,F,Assessment results,FULLY_IMPLEMENTED,same,,,,TrainingAttempt.score+.passed,hr:training:compliance:read,yes,
+65,F,Checkpoint completion state,IMPLEMENTED_NOT_VERIFIED,employee profile,,,,TrainingProgress.checkpointClearedJson,hr:training:compliance:read,no-not-browser-verified,
+66,F,Watched progress,IMPLEMENTED_NOT_VERIFIED,employee profile,,,,TrainingProgress.farthestSecond,hr:training:compliance:read,no-not-browser-verified,
+67,F,Completion dates+scores,FULLY_IMPLEMENTED,same,,,,TrainingCompletion,hr:training:compliance:read,yes,
+68,F,Course version history,FULLY_IMPLEMENTED,course detail versions,[courseId]/page.tsx,,,TrainingCourseVersion,hr:training:read,yes,
+69,F,Upcoming deadlines surface,NOT_IMPLEMENTED,,,,,TrainingObligation.dueAt exists but no sorted surface,,,
+70,F,Overdue identification,NOT_IMPLEMENTED,,,,,,,,no now>dueAt filter
+71,F,Manually assign training,FULLY_IMPLEMENTED,employee profile +Assign training,AssignTrainingButton.tsx,assignTrainingCourseAction,assignments.assignCourseToEmployee,TrainingAssignment,hr:training:assign,yes,1-at-a-time
+72,F,Require retake,FULLY_IMPLEMENTED,course detail dialog,RequireRetakeDialog,requireRetakeAction,revisions.issueManualReinstatement,TrainingObligation MANUAL_REINSTATE,hr:training:publish,yes,
+73,F,Export completion records (CSV),NOT_IMPLEMENTED,,,,,,,,no export endpoint
+74,F,Generate compliance reports,PARTIALLY_IMPLEMENTED,compliance page HTML only,compliance/page.tsx,,compliance.getClubTrainingCompliance,,hr:training:compliance:read,yes,no PDF/download
+75,G,hr:training:read permission,FULLY_IMPLEMENTED,,,,,,CLUB_ADMIN+GM+AUDITOR,yes,
+76,G,hr:training:write permission,FULLY_IMPLEMENTED,,,,,,CLUB_ADMIN,yes,
+77,G,hr:training:publish permission,FULLY_IMPLEMENTED,,,,,,CLUB_ADMIN,yes,
+78,G,hr:training:assign permission,FULLY_IMPLEMENTED,,,,,,CLUB_ADMIN+GM,yes,
+79,G,hr:training:compliance:read permission,FULLY_IMPLEMENTED,,,,,,CLUB_ADMIN+GM+AUDITOR,yes,
+80,G,Tenant isolation,FULLY_IMPLEMENTED,all services,,,,assertTenantOwned+requirePermission,all,yes,
+81,G,Audit logging (24 actions),FULLY_IMPLEMENTED,all services,,,audit(),,all,yes,
+82,G,API-route authorization,FULLY_IMPLEMENTED,/api/hr/training/versions/[id]/*,,,,both routes gate principal+applicability,,yes,
+83,G,Admin visible-but-inaccessible for GM,INACCESSIBLE,version editor,readOnly chrome,,,canAuthor=false,,yes,intentional - shows disabled form
