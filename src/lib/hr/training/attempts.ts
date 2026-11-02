@@ -19,6 +19,11 @@ import { prisma } from "../../prisma";
 import { audit } from "../../audit";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import type { EmployeePortalPrincipal } from "../../employee-portal-session";
+import {
+  resolveActiveObligationForSession,
+  upsertObligationScopedProgress,
+} from "./training-session";
+import { satisfyObligationWithCompletion } from "./obligations";
 
 const ATTEMPT_ENTITY = "TrainingAttempt";
 const PROGRESS_ENTITY = "TrainingProgress";
@@ -83,8 +88,23 @@ export async function recordVideoProgress(
     throw new ConflictError("Version has no video attached.");
   }
 
+  // EP-TRAIN-5C-2 (2026-11-02) -- resolve the active OUTSTANDING
+  // obligation for this (employee, courseVersion).  When one exists,
+  // every read + write on this call routes to the obligation-scoped
+  // progress row, so a retake does NOT inherit watched coverage or
+  // cleared checkpoints from the prior completed training session.
+  // When no obligation exists, the legacy singleton row is used --
+  // byte-for-byte identical to pre-5C-2 behavior.
+  const activeObligation = await resolveActiveObligationForSession({
+    employeeId: actor.employeeId,
+    courseVersionId: version.id,
+  });
+
   const existing = await prisma.trainingProgress.findFirst({
-    where: { employeeId: actor.employeeId, courseVersionId: version.id },
+    where: {
+      employeeId: actor.employeeId, courseVersionId: version.id,
+      obligationId: activeObligation?.id ?? null,
+    },
   });
 
   // EP-TRAIN-3 Slice 3 (2026-10-29) -- seek-forward prevention.
@@ -128,21 +148,22 @@ export async function recordVideoProgress(
     percentComplete = VIDEO_COMPLETION_THRESHOLD_PERCENT - 1;
   }
 
-  const row = await prisma.trainingProgress.upsert({
-    where: { employeeId_courseVersionId: { employeeId: actor.employeeId, courseVersionId: version.id } },
-    create: {
-      clubId: actor.clubId,
-      employeeId: actor.employeeId,
-      courseVersionId: version.id,
-      secondsWatched: nextSeconds,
-      farthestSecond: nextFarthest,
-      percentComplete,
-    },
-    update: {
-      secondsWatched: nextSeconds,
-      farthestSecond: nextFarthest,
-      percentComplete,
-    },
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation-scoped upsert replaces
+  // the legacy Prisma.upsert on @@unique(employeeId, courseVersionId)
+  // which no longer exists.  When activeObligation is null the helper
+  // writes the legacy singleton row (preserved by the partial UNIQUE
+  // WHERE obligationId IS NULL).
+  const row = await upsertObligationScopedProgress({
+    clubId: actor.clubId,
+    employeeId: actor.employeeId,
+    courseVersionId: version.id,
+    obligationId: activeObligation?.id ?? null,
+    nextSecondsWatched: nextSeconds,
+    nextFarthestSecond: nextFarthest,
+    nextPercentComplete: percentComplete,
+    // The cleared-set is preserved unchanged by this upsert because
+    // we DO NOT pass nextCheckpointClearedJson (undefined means
+    // "leave untouched").
   });
   const videoCompleted = row.percentComplete >= VIDEO_COMPLETION_THRESHOLD_PERCENT;
   // Record the cleared-set unchanged on the upsert.
@@ -213,13 +234,28 @@ export async function getPlayerState(
   });
   if (!version) throw new NotFoundError("TrainingCourseVersion", courseVersionId);
 
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation-scoped reads.  When an
+  // active OUTSTANDING obligation exists, read progress + checkpoint
+  // attempts filtered to that obligation's session; the pre-5C-2
+  // "latest completion wins" global signal is NOT used to gate the
+  // final-assessment unlock on this read path.
+  const activeObligation = await resolveActiveObligationForSession({
+    employeeId: actor.employeeId,
+    courseVersionId: version.id,
+  });
+
   const progress = await prisma.trainingProgress.findFirst({
-    where: { employeeId: actor.employeeId, courseVersionId: version.id },
+    where: {
+      employeeId: actor.employeeId, courseVersionId: version.id,
+      obligationId: activeObligation?.id ?? null,
+    },
     select: { secondsWatched: true, farthestSecond: true, percentComplete: true, checkpointClearedJson: true },
   });
   const cleared = parseClearedCheckpointIds(progress?.checkpointClearedJson ?? null);
 
-  // Per-checkpoint attempt counts in one query.
+  // Per-checkpoint attempt counts in one query.  When an active
+  // obligation exists, scope the count to attempts tied to that
+  // obligation so the retake session's retry counters start fresh.
   const attemptCounts = await prisma.trainingAttempt.groupBy({
     by: ["checkpointId"],
     where: {
@@ -228,6 +264,7 @@ export async function getPlayerState(
       kind: "CHECKPOINT",
       checkpointId: { not: null },
       submittedAt: { not: null },
+      obligationId: activeObligation?.id ?? null,
     },
     _count: { _all: true },
   });
@@ -256,13 +293,41 @@ export async function getPlayerState(
   if (requiredNotCleared.length > 0) {
     reasons.push(`Clear ${requiredNotCleared.length} required checkpoint${requiredNotCleared.length === 1 ? "" : "s"}.`);
   }
-  // EP-TRAIN-5A-1 (2026-11-01) -- the historical (employeeId,
-  // courseVersionId) UNIQUE is lifted so a MANUAL_REINSTATE /
-  // REVISION retake can produce a second legitimate completion.
-  // For the "has this employee EVER passed this version?" read
-  // shape the course page expects, pick the MOST RECENT completion
-  // (orderBy completedAt desc) rather than the sole historical row.
-  const completion = await prisma.trainingCompletion.findFirst({
+  // EP-TRAIN-5C-2 (2026-11-02) -- the finalAssessmentUnlocked gate
+  // becomes obligation-aware.
+  //
+  // When an active OUTSTANDING obligation exists, the gate consults
+  // ONLY the completion LINKED to that specific obligation (via
+  // TrainingObligation.satisfiedByCompletionId).  A pre-5C-2
+  // historical completion on the same courseVersion no longer
+  // blocks the new attempt's final-assessment unlock -- the retake
+  // can legitimately re-run the assessment and produce a NEW
+  // completion row satisfying the OUTSTANDING obligation.
+  //
+  // When no active obligation exists, the gate falls back to the
+  // pre-5C-2 "latest completion wins" derivation -- preserves the
+  // EP-TRAIN-4E completed-course replay-only state byte-for-byte.
+  let gatingCompletedAt: Date | null = null;
+  if (activeObligation) {
+    const satisfiedBy = await prisma.trainingObligation.findUnique({
+      where: { id: activeObligation.id },
+      select: { satisfiedByCompletion: { select: { completedAt: true } } },
+    });
+    gatingCompletedAt = satisfiedBy?.satisfiedByCompletion?.completedAt ?? null;
+  } else {
+    const latest = await prisma.trainingCompletion.findFirst({
+      where: { employeeId: actor.employeeId, courseVersionId: version.id },
+      orderBy: { completedAt: "desc" },
+      select: { completedAt: true },
+    });
+    gatingCompletedAt = latest?.completedAt ?? null;
+  }
+
+  // completedAt surfaced on the read is "the latest completion AT ALL"
+  // on this version, so the UI can still display "You passed on X"
+  // even for an in-progress retake (directive §4: historical
+  // completions remain visible).
+  const latestAtAll = await prisma.trainingCompletion.findFirst({
     where: { employeeId: actor.employeeId, courseVersionId: version.id },
     orderBy: { completedAt: "desc" },
     select: { completedAt: true },
@@ -276,9 +341,9 @@ export async function getPlayerState(
     percentComplete: progress?.percentComplete ?? 0,
     videoCompleted,
     checkpoints,
-    finalAssessmentUnlocked: reasons.length === 0 && completion === null,
+    finalAssessmentUnlocked: reasons.length === 0 && gatingCompletedAt === null,
     finalAssessmentReasons: reasons,
-    completedAt: completion?.completedAt ?? null,
+    completedAt: latestAtAll?.completedAt ?? null,
   };
 }
 
@@ -316,11 +381,24 @@ export async function startAttempt(
   input: StartAttemptInput,
 ): Promise<{ attemptId: string; attemptNumber: number }> {
   const version = await loadApplicablePublishedVersion(actor, input.courseVersionId);
+  // EP-TRAIN-5C-2 (2026-11-02) -- resolve the active obligation.
+  // When present, every pre-attempt gate is scoped to that session:
+  // progress + cleared checkpoints come from the obligation-scoped
+  // row; the "already completed" refusal checks only the obligation's
+  // own satisfiedByCompletion pointer, not every historical row.
+  const activeObligation = await resolveActiveObligationForSession({
+    employeeId: actor.employeeId,
+    courseVersionId: version.id,
+  });
+
   // Refuse if video threshold isn't met (§11 — quiz cannot open until
   // video is watched).
   if (version.videoStorageKey) {
     const progress = await prisma.trainingProgress.findFirst({
-      where: { employeeId: actor.employeeId, courseVersionId: version.id },
+      where: {
+        employeeId: actor.employeeId, courseVersionId: version.id,
+        obligationId: activeObligation?.id ?? null,
+      },
       select: { percentComplete: true, checkpointClearedJson: true },
     });
     if (!progress || progress.percentComplete < VIDEO_COMPLETION_THRESHOLD_PERCENT) {
@@ -329,8 +407,6 @@ export async function startAttempt(
       );
     }
     // EP-TRAIN-3 Slice 3 (2026-10-29) -- final-assessment gating.
-    // All REQUIRED checkpoints must be cleared before the final
-    // assessment unlocks.  Non-required checkpoints are skippable.
     const required = await prisma.trainingCheckpoint.findMany({
       where: { courseVersionId: version.id, requiredToProceed: true },
       select: { id: true, label: true, atSecond: true },
@@ -345,13 +421,28 @@ export async function startAttempt(
       }
     }
   }
-  // Refuse if the employee has already passed this version.
-  const completion = await prisma.trainingCompletion.findFirst({
-    where: { employeeId: actor.employeeId, courseVersionId: version.id },
-    select: { id: true },
-  });
-  if (completion) throw new ConflictError("This course version is already completed.");
-  // Refuse if retakes disabled AND there's already a submitted FINAL attempt.
+  // EP-TRAIN-5C-2 — refuse only if THIS obligation is already satisfied
+  // (or if no obligation exists and any historical completion exists,
+  // which preserves the pre-5C-2 EP-TRAIN-4E replay-only guard).
+  if (activeObligation) {
+    const satisfied = await prisma.trainingObligation.findUnique({
+      where: { id: activeObligation.id },
+      select: { satisfiedByCompletionId: true },
+    });
+    if (satisfied?.satisfiedByCompletionId) {
+      throw new ConflictError("This training requirement is already completed.");
+    }
+  } else {
+    const completion = await prisma.trainingCompletion.findFirst({
+      where: { employeeId: actor.employeeId, courseVersionId: version.id },
+      select: { id: true },
+    });
+    if (completion) throw new ConflictError("This course version is already completed.");
+  }
+  // Refuse if retakes disabled AND this specific session already has
+  // a submitted FINAL attempt.  Scope by obligationId so a retake
+  // under a NEW obligation is NOT blocked by the prior session's
+  // submitted attempt.
   if (!version.retakesAllowed) {
     const priorSubmitted = await prisma.trainingAttempt.findFirst({
       where: {
@@ -359,6 +450,7 @@ export async function startAttempt(
         courseVersionId: version.id,
         kind: "FINAL",
         submittedAt: { not: null },
+        obligationId: activeObligation?.id ?? null,
       },
       select: { id: true },
     });
@@ -366,14 +458,14 @@ export async function startAttempt(
       throw new ConflictError("Retakes are not allowed on this course.");
     }
   }
-  // Refuse if there is an OPEN FINAL attempt (started but not submitted) —
-  // return the existing attempt id so the employee resumes.
+  // Resume an OPEN FINAL attempt WITHIN THE SAME SESSION.
   const openAttempt = await prisma.trainingAttempt.findFirst({
     where: {
       employeeId: actor.employeeId,
       courseVersionId: version.id,
       kind: "FINAL",
       submittedAt: null,
+      obligationId: activeObligation?.id ?? null,
     },
     select: { id: true, attemptNumber: true },
     orderBy: { attemptNumber: "desc" },
@@ -395,6 +487,10 @@ export async function startAttempt(
       courseVersionId: version.id,
       attemptNumber,
       kind: "FINAL",
+      // EP-TRAIN-5C-2 (2026-11-02) — stamp the active obligation
+      // (null for legacy sessions) so this attempt + any subsequent
+      // completion are traceable to the authorized training event.
+      obligationId: activeObligation?.id ?? null,
     },
   });
   return { attemptId: row.id, attemptNumber };
@@ -427,9 +523,22 @@ export async function startCheckpointAttempt(
   });
   if (!checkpoint) throw new NotFoundError("TrainingCheckpoint", input.checkpointId);
 
-  // Gating: employee must have reached this checkpoint in the video.
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation-scoped reads: pick the
+  // active obligation, then read the matching progress + checkpoint-
+  // attempt rows for that session.  Retake sessions get a fresh retry
+  // budget per checkpoint.
+  const activeObligation = await resolveActiveObligationForSession({
+    employeeId: actor.employeeId,
+    courseVersionId: version.id,
+  });
+
+  // Gating: employee must have reached this checkpoint in the video
+  // within the active session.
   const progressRow = await prisma.trainingProgress.findFirst({
-    where: { employeeId: actor.employeeId, courseVersionId: version.id },
+    where: {
+      employeeId: actor.employeeId, courseVersionId: version.id,
+      obligationId: activeObligation?.id ?? null,
+    },
     select: { farthestSecond: true, checkpointClearedJson: true },
   });
   const farthestSecond = progressRow?.farthestSecond ?? 0;
@@ -451,6 +560,7 @@ export async function startCheckpointAttempt(
         kind: "CHECKPOINT",
         checkpointId: checkpoint.id,
         passed: true,
+        obligationId: activeObligation?.id ?? null,
       },
       orderBy: { attemptNumber: "desc" },
       select: { id: true, attemptNumber: true },
@@ -465,7 +575,7 @@ export async function startCheckpointAttempt(
     }
   }
 
-  // Retry budget: count prior submitted attempts for this checkpoint.
+  // Retry budget: count prior submitted attempts for THIS session.
   const priorAttempts = await prisma.trainingAttempt.count({
     where: {
       employeeId: actor.employeeId,
@@ -473,6 +583,7 @@ export async function startCheckpointAttempt(
       kind: "CHECKPOINT",
       checkpointId: checkpoint.id,
       submittedAt: { not: null },
+      obligationId: activeObligation?.id ?? null,
     },
   });
   // maxRetries is the number of RETRIES after the initial attempt --
@@ -484,7 +595,7 @@ export async function startCheckpointAttempt(
     );
   }
 
-  // Resume an OPEN checkpoint attempt if one exists.
+  // Resume an OPEN checkpoint attempt within the same session.
   const openAttempt = await prisma.trainingAttempt.findFirst({
     where: {
       employeeId: actor.employeeId,
@@ -492,6 +603,7 @@ export async function startCheckpointAttempt(
       kind: "CHECKPOINT",
       checkpointId: checkpoint.id,
       submittedAt: null,
+      obligationId: activeObligation?.id ?? null,
     },
     orderBy: { attemptNumber: "desc" },
     select: { id: true, attemptNumber: true },
@@ -520,6 +632,7 @@ export async function startCheckpointAttempt(
       attemptNumber,
       kind: "CHECKPOINT",
       checkpointId: checkpoint.id,
+      obligationId: activeObligation?.id ?? null,
     },
   });
   return {
@@ -678,6 +791,16 @@ export async function submitAttempt(
     : score >= attempt.courseVersion.passingScore;
   const now = new Date();
 
+  // EP-TRAIN-5C-2 (2026-11-02) -- resolve the session's obligation
+  // BEFORE opening the tx so the checkpoint-cleared + completion
+  // writes inside the tx target the correct scope.  Reading the
+  // attempt row's own obligationId (set at startAttempt /
+  // startCheckpointAttempt) is authoritative: it ties the attempt
+  // to the session it belongs to even if a NEW obligation has been
+  // issued for the same (employee, version) since the attempt
+  // began.
+  const sessionObligationId: string | null = attempt.obligationId;
+
   const result = await prisma.$transaction(async (tx) => {
     await tx.trainingAttempt.update({
       where: { id: attempt.id },
@@ -699,22 +822,27 @@ export async function submitAttempt(
     // never TrainingCompletion.
     if (kind === "CHECKPOINT" && passed && attempt.checkpointId) {
       const progress = await tx.trainingProgress.findFirst({
-        where: { employeeId: actor.employeeId, courseVersionId: attempt.courseVersion.id },
+        where: {
+          employeeId: actor.employeeId, courseVersionId: attempt.courseVersion.id,
+          obligationId: sessionObligationId,
+        },
       });
       const cleared = parseClearedCheckpointIds(progress?.checkpointClearedJson ?? null);
       cleared.add(attempt.checkpointId);
-      await tx.trainingProgress.upsert({
-        where: { employeeId_courseVersionId: { employeeId: actor.employeeId, courseVersionId: attempt.courseVersion.id } },
-        create: {
-          clubId: actor.clubId,
-          employeeId: actor.employeeId,
-          courseVersionId: attempt.courseVersion.id,
-          secondsWatched: 0,
-          farthestSecond: 0,
-          percentComplete: 0,
-          checkpointClearedJson: serialiseClearedCheckpointIds(cleared),
-        },
-        update: { checkpointClearedJson: serialiseClearedCheckpointIds(cleared) },
+      // Obligation-scoped upsert replaces the Prisma.upsert on the
+      // dropped @@unique(employeeId, courseVersionId).  See
+      // src/lib/hr/training/training-session.ts for the full
+      // find-first-then-update-or-create logic.
+      await upsertObligationScopedProgress({
+        clubId: actor.clubId,
+        employeeId: actor.employeeId,
+        courseVersionId: attempt.courseVersion.id,
+        obligationId: sessionObligationId,
+        nextSecondsWatched: progress?.secondsWatched ?? 0,
+        nextFarthestSecond: progress?.farthestSecond ?? 0,
+        nextPercentComplete: progress?.percentComplete ?? 0,
+        nextCheckpointClearedJson: serialiseClearedCheckpointIds(cleared),
+        tx,
       });
     }
     // Final attempts create TrainingCompletion on pass.
@@ -744,6 +872,22 @@ export async function submitAttempt(
           },
         });
         completionId = c.id;
+        // EP-TRAIN-5C-2 (2026-11-02) -- atomic completion + obligation
+        // satisfaction.  When the attempt belongs to an authorized
+        // training session (obligationId != null), mark that
+        // obligation SATISFIED in the same tx.  satisfyObligationWithCompletion
+        // re-validates EP-TRAIN-5A-1 invariants (status, completion
+        // subject-match, issuedAt <= completedAt) and will throw
+        // (rolling back the whole tx) if any invariant is violated.
+        // The @unique(satisfiedByCompletionId) guard prevents a
+        // single completion from satisfying two obligations.
+        if (sessionObligationId) {
+          await satisfyObligationWithCompletion({
+            obligationId: sessionObligationId,
+            completionId: c.id,
+            tx,
+          });
+        }
       } else {
         completionId = existing.id;
       }

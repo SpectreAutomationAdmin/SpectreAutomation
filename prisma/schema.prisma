@@ -13195,8 +13195,25 @@ model TrainingProgress {
   // row with no checkpoint interactions yet.
   checkpointClearedJson String?
 
-  @@unique([employeeId, courseVersionId])
+  // EP-TRAIN-5C-2 (2026-11-02) -- nullable obligation scope.  NULL
+  // means the legacy singleton row (the EP-TRAIN-4E replay-only
+  // progress for a course the employee completed before 5C-2 and
+  // currently has no OUTSTANDING obligation on).  A non-null
+  // obligationId means this progress row is scoped to a specific
+  // retake / revision training session; previous watched coverage +
+  // cleared checkpoints are NOT inherited.
+  obligationId    String?
+  obligation      TrainingObligation?   @relation("ProgressForObligation", fields: [obligationId], references: [id], onDelete: SetNull)
+
+  // EP-TRAIN-5C-2 -- the UNIQUE guarantees live in raw-SQL partial
+  // indexes on the migration (both engines):
+  //   UNIQUE(employeeId, courseVersionId) WHERE obligationId IS NULL
+  //   UNIQUE(employeeId, courseVersionId, obligationId) WHERE obligationId IS NOT NULL
+  // Prisma schema expresses only the compound index for query speed.
+  @@index([employeeId, courseVersionId])
+  @@index([employeeId, courseVersionId, obligationId])
   @@index([clubId, employeeId])
+  @@index([obligationId])
 }
 
 // One row per quiz attempt (submission). Never overwritten — failed
@@ -13222,11 +13239,21 @@ model TrainingAttempt {
   checkpointId    String?
   checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
 
+  // EP-TRAIN-5C-2 (2026-11-02) -- nullable obligation scope on the
+  // attempt row.  NULL means the attempt belongs to the legacy
+  // "pre-5C-2 session" (no obligation context); a non-null
+  // obligationId ties the attempt to the specific authorized
+  // training session, so analytics + supersession replay can trace
+  // which attempts belong to which authorized event.
+  obligationId    String?
+  obligation      TrainingObligation?   @relation("AttemptForObligation", fields: [obligationId], references: [id], onDelete: SetNull)
+
   responses  TrainingQuestionResponse[]
   completion TrainingCompletion?
 
   @@unique([employeeId, courseVersionId, attemptNumber])
   @@index([clubId, employeeId])
+  @@index([obligationId])
   @@index([courseVersionId, passed])
 }
 
@@ -13405,6 +13432,10 @@ model TrainingObligation {
   supersededByObligationId String?
   supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
   supersedes               TrainingObligation[] @relation("ObligationSupersession")
+  // EP-TRAIN-5C-2 (2026-11-02) -- back-relations to obligation-
+  // scoped progress + attempt rows.
+  scopedProgress           TrainingProgress[]   @relation("ProgressForObligation")
+  scopedAttempts           TrainingAttempt[]    @relation("AttemptForObligation")
   // EP-TRAIN-5A-1 (2026-11-01) -- durable per-authorized-event
   // identifier supplied by the caller.  Composite UNIQUE with
   // (clubId, employeeId, courseVersionId, reason, issuanceKey) is the

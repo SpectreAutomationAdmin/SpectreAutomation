@@ -12993,8 +12993,14 @@ model TrainingProgress {
   // EP-TRAIN-3 Slice 1 (2026-10-29) -- cleared checkpoint ids.
   checkpointClearedJson String?
 
-  @@unique([employeeId, courseVersionId])
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation scope (see prisma/schema.prisma).
+  obligationId    String?
+  obligation      TrainingObligation?   @relation("ProgressForObligation", fields: [obligationId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, courseVersionId])
+  @@index([employeeId, courseVersionId, obligationId])
   @@index([clubId, employeeId])
+  @@index([obligationId])
 }
 
 // One row per quiz attempt (submission). Never overwritten — failed
@@ -13018,6 +13024,10 @@ model TrainingAttempt {
   checkpointId    String?
   checkpoint      TrainingCheckpoint?   @relation(fields: [checkpointId], references: [id])
 
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation scope (see prisma/schema.prisma).
+  obligationId    String?
+  obligation      TrainingObligation?   @relation("AttemptForObligation", fields: [obligationId], references: [id], onDelete: SetNull)
+
   responses  TrainingQuestionResponse[]
   completion TrainingCompletion?
 
@@ -13025,6 +13035,7 @@ model TrainingAttempt {
   @@index([clubId, employeeId])
   @@index([courseVersionId, passed])
   @@index([checkpointId])
+  @@index([obligationId])
 }
 
 // Per-attempt per-question response. Server grades correctness by
@@ -13112,6 +13123,9 @@ model TrainingObligation {
   supersededByObligationId String?
   supersededByObligation   TrainingObligation?  @relation("ObligationSupersession", fields: [supersededByObligationId], references: [id])
   supersedes               TrainingObligation[] @relation("ObligationSupersession")
+  // EP-TRAIN-5C-2 (2026-11-02) -- obligation-scoped progress/attempt back-relations.
+  scopedProgress           TrainingProgress[]   @relation("ProgressForObligation")
+  scopedAttempts           TrainingAttempt[]    @relation("AttemptForObligation")
   // EP-TRAIN-5A-1 (2026-11-01) -- see prisma/schema.prisma for the
   // full semantics.  Mandatory, caller-supplied per-authorized-event
   // identifier; composite UNIQUE with (club, employee, version, reason)
