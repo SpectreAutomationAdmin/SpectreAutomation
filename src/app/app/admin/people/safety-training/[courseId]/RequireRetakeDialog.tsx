@@ -48,7 +48,14 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
   const [filter, setFilter] = useState("");
   const [preview, setPreview] = useState<ReadonlyArray<PreviewRow>>([]);
   const [error, setError] = useState<string | null>(null);
-  const [confirmedResult, setConfirmedResult] = useState<{ eventId: string; obligationCount: number } | null>(null);
+  // EP-TRAIN-5B-1 — per-employee conflict resolution choice, populated
+  // in the review step when the preview surfaces prior OUTSTANDING
+  // obligations for that employee.  Shape: { [employeeId]: "KEEP_BOTH" | "REPLACE" }.
+  const [conflictChoice, setConflictChoice] = useState<Record<string, "KEEP_BOTH" | "REPLACE">>({});
+  const [confirmedResult, setConfirmedResult] = useState<{
+    eventId: string; obligationCount: number;
+    canceledPriorCount: number; keptBothCount: number;
+  } | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -61,6 +68,7 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
     setPreview([]);
     setError(null);
     setConfirmedResult(null);
+    setConflictChoice({});
   }
 
   const filtered = filter
@@ -91,14 +99,27 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
 
   function confirm() {
     setError(null);
+    // EP-TRAIN-5B-1 — every employee flagged as having a prior
+    // OUTSTANDING obligation MUST have a conflict resolution picked
+    // before we can submit.
+    const unresolved = preview
+      .filter((p) => p.existingOutstandingObligations.length > 0)
+      .filter((p) => !conflictChoice[p.employeeId]);
+    if (unresolved.length > 0) {
+      setError(`Pick "Keep both" or "Replace" for ${unresolved.length} employee${unresolved.length === 1 ? "" : "s"} with existing requirements.`);
+      return;
+    }
     const fd = new FormData();
     for (const id of selectedIds) fd.append("employeeId", id);
     fd.set("reason", reason.trim());
     if (dueAt) fd.set("dueAt", dueAt);
+    for (const [empId, choice] of Object.entries(conflictChoice)) {
+      fd.set(`conflictResolution:${empId}`, choice);
+    }
     startTransition(async () => {
       const result = await requireRetakeAction(courseId, fd);
       if (!result.ok) { setError(result.error); return; }
-      setConfirmedResult({ eventId: result.eventId, obligationCount: result.obligationCount });
+      setConfirmedResult(result);
       setStep("success");
       router.refresh();
     });
@@ -249,7 +270,7 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
                             {p.existingOutstandingObligations.length === 0
                               ? <span className="text-stone-500">None</span>
                               : (
-                                <div className="space-y-1" data-testid={`training-require-retake-conflict-${p.employeeNumber}`}>
+                                <div className="space-y-2" data-testid={`training-require-retake-conflict-${p.employeeNumber}`}>
                                   {p.existingOutstandingObligations.map((o) => (
                                     <div key={o.obligationId} className="text-amber-800">
                                       {o.reason === "REVISION" ? "Updated training required" : o.reason === "MANUAL_REINSTATE" ? "Retake required" : o.reason}
@@ -258,8 +279,39 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
                                       {o.reasonNote && <span className="block text-[10px] text-stone-500">“{o.reasonNote.slice(0, 60)}{o.reasonNote.length > 60 ? "…" : ""}”</span>}
                                     </div>
                                   ))}
-                                  <div className="text-[10px] text-stone-500">
-                                    This will add an additional requirement; existing ones remain in place and are satisfied in the order issued.
+                                  {/* EP-TRAIN-5B-1 — mandatory conflict choice. */}
+                                  <div className="mt-2 rounded border border-stone-200 bg-white px-2 py-2">
+                                    <div className="text-[10px] uppercase tracking-wide text-stone-500 mb-1">
+                                      How should this be handled?
+                                    </div>
+                                    <label className="flex items-start gap-2 py-0.5 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name={`conflict-${p.employeeId}`}
+                                        value="KEEP_BOTH"
+                                        checked={conflictChoice[p.employeeId] === "KEEP_BOTH"}
+                                        onChange={() => setConflictChoice((prev) => ({ ...prev, [p.employeeId]: "KEEP_BOTH" }))}
+                                        className="mt-0.5"
+                                        data-testid={`training-conflict-${p.employeeNumber}-keep-both`}
+                                      />
+                                      <span className="text-stone-700">
+                                        <strong>Keep both.</strong> Employee will need two separate completions.
+                                      </span>
+                                    </label>
+                                    <label className="flex items-start gap-2 py-0.5 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name={`conflict-${p.employeeId}`}
+                                        value="REPLACE"
+                                        checked={conflictChoice[p.employeeId] === "REPLACE"}
+                                        onChange={() => setConflictChoice((prev) => ({ ...prev, [p.employeeId]: "REPLACE" }))}
+                                        className="mt-0.5"
+                                        data-testid={`training-conflict-${p.employeeNumber}-replace`}
+                                      />
+                                      <span className="text-stone-700">
+                                        <strong>Replace existing.</strong> Cancel the prior requirement, issue this new one.
+                                      </span>
+                                    </label>
                                   </div>
                                 </div>
                               )}
@@ -292,9 +344,15 @@ export default function RequireRetakeDialog({ courseId, courseTitle, roster }: P
               <div className="px-6 py-6 space-y-3" data-testid="training-require-retake-success">
                 <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                   <div className="font-medium">Retake requirement issued.</div>
-                  <div className="mt-1">
-                    {confirmedResult.obligationCount} new requirement{confirmedResult.obligationCount === 1 ? "" : "s"} created.
-                    Historical completions were not changed.
+                  <div className="mt-1 space-y-0.5">
+                    <div>{confirmedResult.obligationCount} new requirement{confirmedResult.obligationCount === 1 ? "" : "s"} created.</div>
+                    {confirmedResult.canceledPriorCount > 0 && (
+                      <div>{confirmedResult.canceledPriorCount} prior requirement{confirmedResult.canceledPriorCount === 1 ? "" : "s"} canceled.</div>
+                    )}
+                    {confirmedResult.keptBothCount > 0 && (
+                      <div>{confirmedResult.keptBothCount} employee{confirmedResult.keptBothCount === 1 ? "" : "s"} kept their existing requirement in addition to the new one.</div>
+                    )}
+                    <div>Historical completions were not changed.</div>
                   </div>
                 </div>
                 <div className="flex justify-end">

@@ -41,6 +41,7 @@ import {
   previewRetakeTargets,
   issueManualReinstatement,
   type RevisionPolicy,
+  type RetakeConflictResolution,
 } from "@/lib/hr/training/revisions";
 
 function withErr(path: string, safeMessage: string): string {
@@ -616,11 +617,20 @@ export async function previewRetakeAction(
  *  with a mandatory reason + optional due date.  One server-side
  *  event id per confirmed submission -> idempotent against double-
  *  click; a separate submission creates a separate authorized event
- *  per EP-TRAIN-5A-1 semantics. */
+ *  per EP-TRAIN-5A-1 semantics.
+ *
+ *  EP-TRAIN-5B-1 — accepts a per-employee conflictResolution map
+ *  for employees who already have an OUTSTANDING obligation on the
+ *  course.  The form fields are named "conflictResolution:<employeeId>"
+ *  and hold "KEEP_BOTH" or "REPLACE".
+ */
 export async function requireRetakeAction(
   courseId: string,
   formData: FormData,
-): Promise<{ ok: true; eventId: string; obligationCount: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; eventId: string; obligationCount: number; canceledPriorCount: number; keptBothCount: number }
+  | { ok: false; error: string }
+> {
   const principal = await requirePrincipal();
   const employeeIds = formData.getAll("employeeId").map(String).filter(Boolean);
   const reason = ((formData.get("reason") as string | null) ?? "").trim();
@@ -629,12 +639,28 @@ export async function requireRetakeAction(
   if (dueAt && Number.isNaN(dueAt.getTime())) {
     return { ok: false, error: "Due date is not a valid date." };
   }
+  // EP-TRAIN-5B-1 — collect per-employee conflict resolutions from
+  // "conflictResolution:<employeeId>" form entries.
+  const conflictResolution: Record<string, RetakeConflictResolution> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("conflictResolution:")) continue;
+    const empId = key.slice("conflictResolution:".length);
+    const v = String(value).trim();
+    if (v === "KEEP_BOTH" || v === "REPLACE") conflictResolution[empId] = v;
+  }
   try {
     const result = await issueManualReinstatement({
       principal, courseId, employeeIds, reason, dueAt,
+      conflictResolution,
     });
     revalidatePath(`/app/admin/people/safety-training/${courseId}`);
-    return { ok: true, eventId: result.eventId, obligationCount: result.obligationIds.length };
+    return {
+      ok: true,
+      eventId: result.eventId,
+      obligationCount: result.obligationIds.length,
+      canceledPriorCount: result.perEmployee.reduce((n, p) => n + p.canceledObligationIds.length, 0),
+      keptBothCount: result.perEmployee.filter((p) => p.conflictResolution === "KEEP_BOTH").length,
+    };
   } catch (err) {
     if (isAppError(err)) return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
     throw err;

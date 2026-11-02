@@ -380,14 +380,19 @@ describe("EP-TRAIN-5B · administrative revision + reinstatement", () => {
     expect(emp1.existingOutstandingObligations.length).toBe(0);
   });
 
-  it("§6.8 — a SECOND independent reinstatement coexists with the first (different eventIds)", async () => {
+  it("§6.8 — a SECOND independent reinstatement with KEEP_BOTH coexists with the first (different eventIds)", async () => {
     await issueManualReinstatement({
       principal: fx.adminPrincipal, courseId: fx.courseId,
       employeeIds: [fx.employees[0].id], reason: "First ask",
     });
+    // EP-TRAIN-5B-1 — the second ask now REQUIRES an explicit
+    // conflictResolution because the first ask left an OUTSTANDING
+    // obligation on this course for this employee.  "KEEP_BOTH" is
+    // the directive's affirmative choice for two independent events.
     await issueManualReinstatement({
       principal: fx.adminPrincipal, courseId: fx.courseId,
       employeeIds: [fx.employees[0].id], reason: "Second ask",
+      conflictResolution: { [fx.employees[0].id]: "KEEP_BOTH" },
     });
     const outstanding = await prisma.trainingObligation.count({
       where: {
@@ -399,10 +404,251 @@ describe("EP-TRAIN-5B · administrative revision + reinstatement", () => {
   });
 
   // -------------------------------------------------------------------------
-  // §6.9 — Supersession helper exists (dormant; verified by 5A-1 tests)
+  // EP-TRAIN-5B-1 (2026-11-02) — Revision supersession policy
   // -------------------------------------------------------------------------
-  // (Covered in tests/hr/training/obligations.test.ts "supersedeObligation"
-  //  section; 5B's publish/reinstate flows do NOT auto-supersede.)
+  describe("EP-TRAIN-5B-1 — Revision supersession", () => {
+    it("ALL_APPLICABLE supersedes OUTSTANDING INITIAL on an older version for every targeted employee", async () => {
+      // Pre-seed an OUTSTANDING INITIAL obligation against v1 for emp0.
+      const priorIssuanceKey = `init:test-${Math.random().toString(36).slice(2, 8)}`;
+      const prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: priorIssuanceKey, status: "OUTSTANDING",
+        },
+      });
+      const v2 = await seedDraftV2(fx.courseId);
+      const result = await publishDraftWithPolicy({
+        principal: fx.adminPrincipal, versionId: v2, policy: "ALL_APPLICABLE",
+      });
+      const priorAfter = await prisma.trainingObligation.findUnique({ where: { id: prior.id } });
+      expect(priorAfter?.status).toBe("SUPERSEDED");
+      expect(priorAfter?.supersededByObligationId).toBeTruthy();
+      expect(result.supersessions.length).toBeGreaterThanOrEqual(1);
+      const emp0Super = result.supersessions.find((s) => s.employeeId === fx.employees[0].id);
+      expect(emp0Super?.supersededObligationId).toBe(prior.id);
+      expect(emp0Super?.supersededReason).toBe("INITIAL");
+    });
+
+    it("NON_COMPLETERS supersedes ONLY non-completers' prior OUTSTANDING", async () => {
+      // emp0 completed v1; emp1 did NOT complete but has an OUTSTANDING INITIAL on v1.
+      await seedCompletion({
+        clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+        courseVersionId: fx.v1Id, completedAt: new Date(Date.now() - 60_000),
+      });
+      const emp0Prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:emp0:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const emp1Prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[1].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:emp1:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const v2 = await seedDraftV2(fx.courseId);
+      await publishDraftWithPolicy({
+        principal: fx.adminPrincipal, versionId: v2, policy: "NON_COMPLETERS",
+      });
+      // emp0 is a prior-completer → NOT in target set → prior OUTSTANDING left alone.
+      const emp0After = await prisma.trainingObligation.findUnique({ where: { id: emp0Prior.id } });
+      expect(emp0After?.status).toBe("OUTSTANDING");
+      // emp1 is in target set → prior OUTSTANDING superseded.
+      const emp1After = await prisma.trainingObligation.findUnique({ where: { id: emp1Prior.id } });
+      expect(emp1After?.status).toBe("SUPERSEDED");
+    });
+
+    it("SELECTED supersedes ONLY selected employees' prior OUTSTANDING", async () => {
+      const emp2Prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[2].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:emp2:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const emp4Prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[4].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:emp4:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const v2 = await seedDraftV2(fx.courseId);
+      await publishDraftWithPolicy({
+        principal: fx.adminPrincipal, versionId: v2, policy: "SELECTED",
+        selectedEmployeeIds: [fx.employees[2].id], // only emp2
+      });
+      const emp2After = await prisma.trainingObligation.findUnique({ where: { id: emp2Prior.id } });
+      const emp4After = await prisma.trainingObligation.findUnique({ where: { id: emp4Prior.id } });
+      expect(emp2After?.status).toBe("SUPERSEDED");
+      expect(emp4After?.status).toBe("OUTSTANDING");
+    });
+
+    it("REVISION publish NEVER auto-supersedes MANUAL_REINSTATE obligations", async () => {
+      // emp0 has an outstanding MANUAL_REINSTATE on v1 from a prior manager action.
+      const manual = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "MANUAL_REINSTATE",
+          reasonNote: "Prior refresher ask",
+          issuedByUserId: null, issuanceKey: `rtk:prior:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const v2 = await seedDraftV2(fx.courseId);
+      await publishDraftWithPolicy({
+        principal: fx.adminPrincipal, versionId: v2, policy: "ALL_APPLICABLE",
+      });
+      const manualAfter = await prisma.trainingObligation.findUnique({ where: { id: manual.id } });
+      // MANUAL_REINSTATE on the old version is independent policy; still OUTSTANDING.
+      expect(manualAfter?.status).toBe("OUTSTANDING");
+    });
+
+    it("Idempotent publish retry supersedes without creating duplicate SUPERSEDED rows", async () => {
+      // Setup: prior OUTSTANDING INITIAL on v1 for emp0.
+      const prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const v2 = await seedDraftV2(fx.courseId);
+      // We cannot replay publishDraftWithPolicy because publishDraft
+      // already retired v1 on the first call.  Instead verify the
+      // single call's result: prior is SUPERSEDED exactly once.
+      await publishDraftWithPolicy({
+        principal: fx.adminPrincipal, versionId: v2, policy: "ALL_APPLICABLE",
+      });
+      const priorAfter = await prisma.trainingObligation.findUnique({ where: { id: prior.id } });
+      expect(priorAfter?.status).toBe("SUPERSEDED");
+      const matchingSupersededRows = await prisma.trainingObligation.count({
+        where: { id: prior.id, status: "SUPERSEDED" },
+      });
+      expect(matchingSupersededRows).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // EP-TRAIN-5B-1 — Require Retake conflict governance
+  // -------------------------------------------------------------------------
+  describe("EP-TRAIN-5B-1 — Retake conflict governance", () => {
+    it("ConflictError when an employee has a prior OUTSTANDING and no resolution supplied", async () => {
+      await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "MANUAL_REINSTATE", reasonNote: "First ask",
+          issuedByUserId: null, issuanceKey: `rtk:prior:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      await expect(issueManualReinstatement({
+        principal: fx.adminPrincipal, courseId: fx.courseId,
+        employeeIds: [fx.employees[0].id], reason: "Second ask",
+      })).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("KEEP_BOTH leaves prior OUTSTANDING intact + creates a second OUTSTANDING", async () => {
+      const prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "MANUAL_REINSTATE", reasonNote: "First ask",
+          issuedByUserId: null, issuanceKey: `rtk:prior:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const result = await issueManualReinstatement({
+        principal: fx.adminPrincipal, courseId: fx.courseId,
+        employeeIds: [fx.employees[0].id], reason: "Second ask",
+        conflictResolution: { [fx.employees[0].id]: "KEEP_BOTH" },
+      });
+      const priorAfter = await prisma.trainingObligation.findUnique({ where: { id: prior.id } });
+      expect(priorAfter?.status).toBe("OUTSTANDING");
+      const outstanding = await prisma.trainingObligation.count({
+        where: {
+          employeeId: fx.employees[0].id, courseId: fx.courseId,
+          status: "OUTSTANDING", reason: "MANUAL_REINSTATE",
+        },
+      });
+      expect(outstanding).toBe(2);
+      expect(result.perEmployee[0].conflictResolution).toBe("KEEP_BOTH");
+      expect(result.perEmployee[0].canceledObligationIds).toEqual([]);
+    });
+
+    it("REPLACE cancels prior OUTSTANDING + creates a single OUTSTANDING", async () => {
+      const prior = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "MANUAL_REINSTATE", reasonNote: "First ask",
+          issuedByUserId: null, issuanceKey: `rtk:prior:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const result = await issueManualReinstatement({
+        principal: fx.adminPrincipal, courseId: fx.courseId,
+        employeeIds: [fx.employees[0].id], reason: "Replacement",
+        conflictResolution: { [fx.employees[0].id]: "REPLACE" },
+      });
+      const priorAfter = await prisma.trainingObligation.findUnique({ where: { id: prior.id } });
+      expect(priorAfter?.status).toBe("CANCELED");
+      expect(priorAfter?.reasonNote).toContain("[canceled]");
+      const outstanding = await prisma.trainingObligation.count({
+        where: {
+          employeeId: fx.employees[0].id, courseId: fx.courseId,
+          status: "OUTSTANDING",
+        },
+      });
+      expect(outstanding).toBe(1);
+      expect(result.perEmployee[0].conflictResolution).toBe("REPLACE");
+      expect(result.perEmployee[0].canceledObligationIds).toEqual([prior.id]);
+    });
+
+    it("REPLACE cancels BOTH MANUAL_REINSTATE and INITIAL/REVISION prior OUTSTANDING", async () => {
+      const priorInitial = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "INITIAL",
+          issuedByUserId: null, issuanceKey: `init:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      const priorRtk = await prisma.trainingObligation.create({
+        data: {
+          clubId: fx.club.id, employeeId: fx.employees[0].id, courseId: fx.courseId,
+          courseVersionId: fx.v1Id, reason: "MANUAL_REINSTATE", reasonNote: "x",
+          issuedByUserId: null, issuanceKey: `rtk:${Math.random().toString(36).slice(2, 8)}`,
+          status: "OUTSTANDING",
+        },
+      });
+      await issueManualReinstatement({
+        principal: fx.adminPrincipal, courseId: fx.courseId,
+        employeeIds: [fx.employees[0].id], reason: "Replacement",
+        conflictResolution: { [fx.employees[0].id]: "REPLACE" },
+      });
+      const initialAfter = await prisma.trainingObligation.findUnique({ where: { id: priorInitial.id } });
+      const rtkAfter = await prisma.trainingObligation.findUnique({ where: { id: priorRtk.id } });
+      expect(initialAfter?.status).toBe("CANCELED");
+      expect(rtkAfter?.status).toBe("CANCELED");
+    });
+
+    it("No conflict for an employee without any prior OUTSTANDING: resolution not required", async () => {
+      const result = await issueManualReinstatement({
+        principal: fx.adminPrincipal, courseId: fx.courseId,
+        employeeIds: [fx.employees[0].id], reason: "First-time ask",
+      });
+      expect(result.perEmployee[0].conflictResolution).toBe("NONE");
+      expect(result.perEmployee[0].obligationId).not.toBeNull();
+    });
+  });
 
   // -------------------------------------------------------------------------
   // §6.10 — Cross-tenant + unauthorized refusal

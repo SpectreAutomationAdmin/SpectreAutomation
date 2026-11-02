@@ -35,13 +35,15 @@
 
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../prisma";
-import { NotFoundError, ValidationError } from "../../errors";
+import { ConflictError, NotFoundError, ValidationError } from "../../errors";
 import { assertTenantOwned } from "../../services/tenant";
 import { requirePermission, type Principal } from "../../rbac";
 import { audit } from "../../audit";
 import { publishDraft } from "./courses";
 import {
   issueObligation,
+  cancelObligation,
+  supersedeObligation,
   composeIssuanceKey,
   type ObligationRecord,
 } from "./obligations";
@@ -82,7 +84,23 @@ export interface PublishWithPolicyResult {
   affectedEmployeeIds: string[];
   obligationIds: string[];
   skippedEmployeeIds: Array<{ employeeId: string; reason: string }>;
+  /** EP-TRAIN-5B-1 (2026-11-02) -- obligations auto-superseded during
+   *  this publish.  Each entry: the newly-issued REVISION obligation
+   *  that replaced an older OUTSTANDING INITIAL or REVISION for the
+   *  SAME course + same employee.  MANUAL_REINSTATE obligations are
+   *  NEVER auto-superseded (independent policy per directive §1). */
+  supersessions: Array<{
+    employeeId: string;
+    supersededObligationId: string;
+    supersededReason: "INITIAL" | "REVISION";
+    supersededByObligationId: string;
+  }>;
 }
+
+/** EP-TRAIN-5B-1 (2026-11-02) -- per-employee conflict resolution for
+ *  Require Retake when the manager has been shown that this employee
+ *  already has an OUTSTANDING obligation on the course. */
+export type RetakeConflictResolution = "KEEP_BOTH" | "REPLACE";
 
 export interface ManualReinstatementResult {
   eventId: string;
@@ -91,8 +109,20 @@ export interface ManualReinstatementResult {
   obligationIds: string[];
   perEmployee: Array<{
     employeeId: string;
-    obligationId: string;
+    /** null when the manager chose to skip this employee (not provided
+     *  a conflict resolution AND the service is treating the absence
+     *  as "CANCEL for this employee" — never happens in strict mode). */
+    obligationId: string | null;
     priorOutstandingObligationIds: string[];
+    /** EP-TRAIN-5B-1 -- what the service did with any prior OUTSTANDING
+     *  for this employee on this course. */
+    conflictResolution: RetakeConflictResolution | "NONE";
+    /** EP-TRAIN-5B-1 -- obligation ids CANCELED during this call when
+     *  the manager chose REPLACE for this employee.  MANUAL_REINSTATE
+     *  obligations may be replaced; REVISION / INITIAL obligations may
+     *  ALSO be replaced by a manual retake per the conflict policy
+     *  (the manager explicitly asked to supersede them). */
+    canceledObligationIds: string[];
   }>;
 }
 
@@ -308,6 +338,7 @@ export async function publishDraftWithPolicy(args: {
     affectedEmployeeIds: [],
     obligationIds: [],
     skippedEmployeeIds: [],
+    supersessions: [],
   };
 
   if (!priorPublished) {
@@ -327,28 +358,86 @@ export async function publishDraftWithPolicy(args: {
 
   // Issue one REVISION obligation per target.  issuanceKey per
   // (employee, version) within this event -> idempotent on retry.
+  //
+  // EP-TRAIN-5B-1 (2026-11-02) -- for EACH affected employee, after
+  // the new REVISION obligation is created, SUPERSEDE any OUTSTANDING
+  // INITIAL / REVISION obligations the same employee holds for OLDER
+  // versions of the SAME course.  Rationale: the manager has
+  // explicitly asserted "complete the new version" for this employee;
+  // an outstanding requirement on a retired v1 would leave the
+  // employee with contradictory obligations.  MANUAL_REINSTATE
+  // obligations are left alone (per directive §1 — independent
+  // policy; the manager can cancel them separately via Require Retake
+  // if truly obsolete).
+  //
+  // The pair (issue + supersede) runs inside a prisma $transaction so
+  // the employee is never visible with "new requirement issued AND
+  // old requirement still outstanding" mid-flight.  A per-employee tx
+  // failure is collected into `skippedEmployeeIds`; it does NOT abort
+  // the whole publish (that would leave the publish retire/activate
+  // state torn away from obligation state).
   const obligationIds: string[] = [];
   const skipped: Array<{ employeeId: string; reason: string }> = [];
+  const supersessions: PublishWithPolicyResult["supersessions"] = [];
   for (const employeeId of targetEmployeeIds) {
     try {
-      const issuanceKey = composeIssuanceKey("REVISION", `${eventId}:${employeeId}`);
-      const ob = await issueObligation({
-        clubId: draft.course.clubId,
-        employeeId,
-        courseId: draft.course.id,
-        courseVersionId: args.versionId,
-        reason: "REVISION",
-        issuedByUserId: args.principal.id,
-        issuanceKey,
-        dueAt: args.dueAt ?? null,
+      await prisma.$transaction(async (tx) => {
+        const issuanceKey = composeIssuanceKey("REVISION", `${eventId}:${employeeId}`);
+        const ob = await issueObligation({
+          clubId: draft.course.clubId,
+          employeeId,
+          courseId: draft.course.id,
+          courseVersionId: args.versionId,
+          reason: "REVISION",
+          issuedByUserId: args.principal.id,
+          issuanceKey,
+          dueAt: args.dueAt ?? null,
+          tx,
+        });
+        obligationIds.push(ob.id);
+        // Look up OUTSTANDING INITIAL / REVISION obligations for OLDER
+        // versions of this course for the same employee.  Filter in TS
+        // rather than SQL to keep the test harness simple + the query
+        // targeted to the (clubId, employeeId, courseId, status) index.
+        const priors = await tx.trainingObligation.findMany({
+          where: {
+            clubId: draft.course.clubId,
+            employeeId,
+            courseId: draft.course.id,
+            status: "OUTSTANDING",
+            reason: { in: ["INITIAL", "REVISION"] },
+            NOT: { id: ob.id },
+            // Only OLDER versions of this course.  The new REVISION
+            // itself is excluded via `NOT: { id: ob.id }` AND via
+            // version comparison.
+            courseVersion: { version: { lt: draft.version } },
+          },
+          select: { id: true, reason: true, courseVersionId: true },
+        });
+        for (const prior of priors) {
+          await supersedeObligation({
+            obligationId: prior.id,
+            supersededByObligationId: ob.id,
+            tx,
+          });
+          supersessions.push({
+            employeeId,
+            supersededObligationId: prior.id,
+            supersededReason: prior.reason as "INITIAL" | "REVISION",
+            supersededByObligationId: ob.id,
+          });
+        }
       });
-      obligationIds.push(ob.id);
     } catch (err) {
-      // A per-employee issue failure (e.g. race with employee archive)
-      // is collected and reported; it does NOT abort the whole
-      // publish.  The DB publish state has already been committed by
-      // publishDraft above; we optimise for making the obligation
-      // issuance resumable rather than rolling back the publish.
+      // A per-employee tx failure (issue + supersede) is collected and
+      // reported; it does NOT abort the whole publish.  The publish
+      // state has already been committed by publishDraft above.  The
+      // composite UNIQUE on issuanceKey + the OUTSTANDING guard on
+      // supersedeObligation together mean a repeat invocation with
+      // the same `eventId` + same `employeeId` is idempotent: the
+      // issue returns the existing REVISION row; the supersede either
+      // picks up any still-OUTSTANDING priors (if the first attempt
+      // partially succeeded) or is a no-op.
       skipped.push({
         employeeId,
         reason: err instanceof Error ? err.message : String(err),
@@ -360,6 +449,7 @@ export async function publishDraftWithPolicy(args: {
   );
   result.obligationIds = obligationIds;
   result.skippedEmployeeIds = skipped;
+  result.supersessions = supersessions;
 
   await audit(args.principal, {
     action: "hr.training.revision.publish",
@@ -374,6 +464,7 @@ export async function publishDraftWithPolicy(args: {
       affectedCount: result.affectedEmployeeIds.length,
       obligationCount: obligationIds.length,
       skippedCount: skipped.length,
+      supersededObligationCount: supersessions.length,
     },
   });
   return result;
@@ -427,6 +518,22 @@ export async function issueManualReinstatement(args: {
   employeeIds: readonly string[];
   reason: string;
   dueAt?: Date | null;
+  /** EP-TRAIN-5B-1 (2026-11-02) — per-employee conflict decision for
+   *  employees who already have an OUTSTANDING obligation on this
+   *  course.  Required when such a conflict exists; absent is
+   *  rejected with a ConflictError that names the employee(s) + prior
+   *  obligations so the UI MUST re-prompt the manager before retrying.
+   *
+   *  KEEP_BOTH:   issue the new MANUAL_REINSTATE; leave prior
+   *               OUTSTANDING intact (two coexisting requirements
+   *               satisfied FIFO per EP-TRAIN-5A-1 §4).
+   *   REPLACE:    cancel every prior OUTSTANDING obligation for this
+   *               employee on this course (reasonNote appended with
+   *               "[canceled] Replaced by retake request <eventId>"),
+   *               then issue the new MANUAL_REINSTATE.
+   *
+   *  Entries for employees with NO conflict are ignored. */
+  conflictResolution?: Readonly<Record<string, RetakeConflictResolution>>;
 }): Promise<ManualReinstatementResult> {
   const course = await loadCourseWithPublishedVersion(args.courseId);
   if (!course) throw new NotFoundError("TrainingCourse", args.courseId);
@@ -464,41 +571,98 @@ export async function issueManualReinstatement(args: {
   }
 
   const eventId = randomUUID();
+
+  // EP-TRAIN-5B-1 (2026-11-02) -- conflict detection pass.  Snapshot
+  // every requested employee's existing OUTSTANDING obligations for
+  // this course.  Any employee with >0 prior OUTSTANDING MUST have a
+  // resolution choice supplied; absence is a hard refusal (ConflictError)
+  // so the UI is forced to re-prompt the manager rather than silently
+  // creating overlapping requirements.
+  const priorByEmployee = new Map<string, Array<{ id: string; reason: string; reasonNote: string | null }>>();
+  const priorRows = await prisma.trainingObligation.findMany({
+    where: {
+      clubId: course.clubId, courseId: course.id,
+      employeeId: { in: requested },
+      status: "OUTSTANDING",
+    },
+    select: { id: true, employeeId: true, reason: true, reasonNote: true },
+  });
+  for (const row of priorRows) {
+    const arr = priorByEmployee.get(row.employeeId) ?? [];
+    arr.push({ id: row.id, reason: row.reason, reasonNote: row.reasonNote });
+    priorByEmployee.set(row.employeeId, arr);
+  }
+  const unresolved = requested.filter((id) =>
+    (priorByEmployee.get(id) ?? []).length > 0
+    && !(args.conflictResolution && args.conflictResolution[id]),
+  );
+  if (unresolved.length > 0) {
+    throw new ConflictError(
+      `Conflict: ${unresolved.length} employee(s) already have outstanding requirements on this course. ` +
+      `Supply conflictResolution ("KEEP_BOTH" or "REPLACE") per employee before retrying.`,
+    );
+  }
+
   const obligationIds: string[] = [];
   const perEmployee: ManualReinstatementResult["perEmployee"] = [];
   for (const employeeId of requested) {
-    // Snapshot the employee's prior OUTSTANDING obligations for this
-    // course -- the API includes these so the UI can show "replacing
-    // / in addition to" semantics.  We do NOT auto-cancel or auto-
-    // supersede; the directive mandates explicit confirmation + the
-    // conflict policy in docs/ep-train-5a1-completion-and-issuance.md
-    // §4 keeps multiple MANUAL_REINSTATE OUTSTANDING coexisting when
-    // the manager confirmed independent events.
-    const prior = await prisma.trainingObligation.findMany({
-      where: {
-        clubId: course.clubId, employeeId, courseId: course.id,
-        status: "OUTSTANDING",
-      },
-      select: { id: true },
-    });
-    const issuanceKey = composeIssuanceKey("MANUAL_REINSTATE", `${eventId}:${employeeId}`);
-    const ob = await issueObligation({
-      clubId: course.clubId,
-      employeeId,
-      courseId: course.id,
-      courseVersionId: published.id,
-      reason: "MANUAL_REINSTATE",
-      reasonNote: reasonTrim,
-      issuedByUserId: args.principal.id,
-      issuanceKey,
-      dueAt: args.dueAt ?? null,
-    });
-    obligationIds.push(ob.id);
-    perEmployee.push({
-      employeeId,
-      obligationId: ob.id,
-      priorOutstandingObligationIds: prior.map((p) => p.id),
-    });
+    const priors = priorByEmployee.get(employeeId) ?? [];
+    const resolution = (priors.length > 0 && args.conflictResolution
+      ? args.conflictResolution[employeeId]
+      : "NONE") as RetakeConflictResolution | "NONE";
+    const canceledIds: string[] = [];
+
+    // Run cancel-prior + issue-new inside one tx per employee so the
+    // employee is never visible with "prior canceled AND new not yet
+    // issued" mid-flight.
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        if (resolution === "REPLACE") {
+          for (const prior of priors) {
+            await cancelObligation({
+              obligationId: prior.id,
+              cancelReason: `Replaced by retake request ${eventId}`,
+              tx,
+            });
+            canceledIds.push(prior.id);
+          }
+        }
+        const issuanceKey = composeIssuanceKey("MANUAL_REINSTATE", `${eventId}:${employeeId}`);
+        const ob = await issueObligation({
+          clubId: course.clubId,
+          employeeId,
+          courseId: course.id,
+          courseVersionId: published.id,
+          reason: "MANUAL_REINSTATE",
+          reasonNote: reasonTrim,
+          issuedByUserId: args.principal.id,
+          issuanceKey,
+          dueAt: args.dueAt ?? null,
+          tx,
+        });
+        return ob;
+      });
+      obligationIds.push(result.id);
+      perEmployee.push({
+        employeeId,
+        obligationId: result.id,
+        priorOutstandingObligationIds: priors.map((p) => p.id),
+        conflictResolution: resolution,
+        canceledObligationIds: canceledIds,
+      });
+    } catch (err) {
+      // A per-employee failure is reported but does NOT abort the whole
+      // call; the UI shows which employees succeeded.  The
+      // composite UNIQUE on (eventId, employeeId) issuanceKey means a
+      // retry with the same payload is idempotent.
+      perEmployee.push({
+        employeeId,
+        obligationId: null,
+        priorOutstandingObligationIds: priors.map((p) => p.id),
+        conflictResolution: resolution,
+        canceledObligationIds: canceledIds,
+      });
+    }
   }
 
   await audit(args.principal, {
@@ -512,6 +676,12 @@ export async function issueManualReinstatement(args: {
       employeeCount: perEmployee.length,
       reason: reasonTrim,
       dueAt: args.dueAt?.toISOString() ?? null,
+      // EP-TRAIN-5B-1 — conflict-resolution breakdown so audit shows
+      // how each per-employee conflict was handled.
+      keptBothCount: perEmployee.filter((p) => p.conflictResolution === "KEEP_BOTH").length,
+      replacedCount: perEmployee.filter((p) => p.conflictResolution === "REPLACE").length,
+      canceledPriorObligationCount: perEmployee.reduce((n, p) => n + p.canceledObligationIds.length, 0),
+      issueFailedCount: perEmployee.filter((p) => p.obligationId === null).length,
     },
   });
 
