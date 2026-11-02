@@ -389,7 +389,17 @@ export async function startNewDraft(
   const course = await prisma.trainingCourse.findUnique({
     where: { id: courseId },
     include: {
-      versions: { orderBy: { version: "desc" }, take: 1, include: { questions: { include: { options: true } } } },
+      versions: {
+        orderBy: { version: "desc" },
+        take: 1,
+        include: {
+          questions: { include: { options: true } },
+          // EP-TRAIN-5D-3 (2026-11-02) -- checkpoints were missing from
+          // the clone; must be loaded with the source so the new DRAFT
+          // can rebuild them + remap the question.checkpointId FK.
+          checkpoints: true,
+        },
+      },
     },
   });
   if (!course) throw new NotFoundError(COURSE_ENTITY, courseId);
@@ -446,6 +456,38 @@ export async function startNewDraft(
         required: source?.required ?? true,
       },
     });
+    // EP-TRAIN-5D-3 (2026-11-02) -- the pre-5D-3 clone silently dropped
+    // (1) every TrainingCheckpoint row, (2) the question.checkpointId
+    // FK, and (3) the question.questionType field.  Three distinct
+    // defects discovered in EP-TRAIN-5D-2 §5 Rec 4.
+    //
+    // Clone order: checkpoints first (build the source->draft id map),
+    // then questions (translate the FK + preserve questionType), then
+    // options.  Each source id is remapped to a brand-new cuid; the
+    // source version remains byte-identical (never mutated).  The new
+    // DRAFT's rows reference ONLY draft ids -- no cross-version FK.
+    const checkpointIdMap = new Map<string, string>();
+    if (source) {
+      // Checkpoints are already loaded with the source include.
+      // The ordering doesn't matter for correctness; sorting by
+      // displayOrder keeps the admin's view consistent.
+      const sortedCheckpoints = [...source.checkpoints].sort(
+        (a, b) => a.displayOrder - b.displayOrder,
+      );
+      for (const cp of sortedCheckpoints) {
+        const clonedCp = await tx.trainingCheckpoint.create({
+          data: {
+            courseVersionId: draft.id,
+            atSecond: cp.atSecond,
+            label: cp.label,
+            requiredToProceed: cp.requiredToProceed,
+            maxRetries: cp.maxRetries,
+            displayOrder: cp.displayOrder,
+          },
+        });
+        checkpointIdMap.set(cp.id, clonedCp.id);
+      }
+    }
     if (source && source.questions) {
       for (const q of source.questions) {
         const clonedQ = await tx.trainingQuestion.create({
@@ -454,6 +496,15 @@ export async function startNewDraft(
             prompt: q.prompt,
             displayOrder: q.displayOrder,
             active: q.active,
+            // EP-TRAIN-5D-3 -- preserve the checkpoint binding by
+            // translating the source checkpointId via the map above.
+            // A source question with no binding (checkpointId=null)
+            // remains a final-assessment question on the draft.
+            checkpointId: q.checkpointId ? checkpointIdMap.get(q.checkpointId) ?? null : null,
+            // EP-TRAIN-5D-3 -- preserve the authored question type;
+            // omitting this previously silently downgraded every
+            // cloned question to the schema default "SINGLE_CHOICE".
+            questionType: q.questionType,
           },
         });
         for (const o of q.options) {
