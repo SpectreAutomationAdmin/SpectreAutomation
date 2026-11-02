@@ -38,6 +38,12 @@ import {
   resolveEmployeeSchedulingEligibility,
 } from "@/lib/hr/training/applicability";
 import { getPlayerState } from "@/lib/hr/training/attempts";
+// EP-TRAIN-5C-3 (2026-11-02) -- obligation-aware state for the course
+// page.  resolveActiveObligationForSession returns null when no
+// OUTSTANDING obligation exists on (employee, courseVersion), so pre-
+// 5B employees + employees on prod (where TrainingObligation is 0 rows
+// pending 5C-4) see byte-for-byte the pre-5C-3 EP-UX-2D behavior.
+import { resolveActiveObligationForSession } from "@/lib/hr/training/training-session";
 import { isLikelyStagingFixtureText } from "@/lib/hr/training/employee-recommendations";
 import { prisma } from "@/lib/prisma";
 import CoursePlayer from "./CoursePlayer";
@@ -107,7 +113,7 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion, playerState, eligibility] = await Promise.all([
+  const [progress, attempts, completion, playerState, eligibility, activeObligation] = await Promise.all([
     getProgress(principal, versionId),
     getEmployeeAttemptHistory(principal, versionId),
     // EP-TRAIN-5A-1 (2026-11-01) -- the (employeeId, courseVersionId)
@@ -126,12 +132,32 @@ export default async function EmployeeCoursePage({
     // uses.  Only tenant-scoped, applicable, uncompleted, required
     // courses appear.
     resolveEmployeeSchedulingEligibility(principal.employeeId),
+    // EP-TRAIN-5C-3 — FIFO oldest OUTSTANDING obligation on
+    // (employee, courseVersion).  Null when none; drives the new
+    // "Updated Training Required" / "Retake Required" / fresh-attempt
+    // state.  Pre-5C-4 production prisma has 0 obligations ->
+    // every real employee gets null -> UI unchanged.
+    resolveActiveObligationForSession({
+      employeeId: principal.employeeId,
+      courseVersionId: versionId,
+    }),
   ]);
   const initialClearedCheckpointIds = playerState.checkpoints.filter((c) => c.cleared).map((c) => c.id);
 
   const submittedAttempts = attempts.filter((a) => a.submittedAt !== null);
+  // EP-TRAIN-5C-3 — when an active OUTSTANDING obligation exists, the
+  // course is NOT "already completed" from the employee's current
+  // compliance perspective (even if a historical completion row
+  // exists).  Historical rows remain visible in Your Result + the
+  // Training History display; this flag drives the player state only.
+  const treatAsCurrentlyCompleted = activeObligation
+    // An obligation satisfied mid-render (race) can also satisfy the
+    // "already complete" short-circuit so the UI doesn't offer a new
+    // attempt against a session that just resolved.
+    ? false
+    : completion !== null;
   const canRetake =
-    view.version.retakesAllowed && !completion && submittedAttempts.length > 0;
+    view.version.retakesAllowed && !treatAsCurrentlyCompleted && submittedAttempts.length > 0;
   const hasBlockingSubmittedAttempt =
     !view.version.retakesAllowed && submittedAttempts.some((a) => !a.passed);
 
@@ -149,12 +175,26 @@ export default async function EmployeeCoursePage({
   // EP-UX-2 — classify course state for the hero chip row + the
   // right-side status panel.  Server-authoritative: `completion` row
   // is the only source of "completed" (EP-TRAIN-4E rule).
-  const state: "completed" | "in-progress" | "not-started" =
-    completion !== null
-      ? "completed"
-      : initialProgress.farthestSecond > 0 || submittedAttempts.length > 0
-        ? "in-progress"
-        : "not-started";
+  //
+  // EP-TRAIN-5C-3 — when an active OUTSTANDING obligation exists it
+  // takes precedence over any historical completion row.  The state
+  // becomes "updated-required" (REVISION) / "retake-required"
+  // (MANUAL_REINSTATE) / "initial-required" (INITIAL / fallback) or
+  // "in-progress" when the retake session has already advanced.
+  const state: "completed" | "in-progress" | "not-started" | "updated-required" | "retake-required" | "initial-required" =
+    activeObligation
+      ? (initialProgress.farthestSecond > 0 || submittedAttempts.some((a) => a.submittedAt !== null && (a as unknown as { obligationId?: string | null }).obligationId === activeObligation.id)
+          ? "in-progress"
+          : activeObligation.reason === "REVISION"
+            ? "updated-required"
+            : activeObligation.reason === "MANUAL_REINSTATE"
+              ? "retake-required"
+              : "initial-required")
+      : completion !== null
+        ? "completed"
+        : initialProgress.farthestSecond > 0 || submittedAttempts.length > 0
+          ? "in-progress"
+          : "not-started";
 
   const durationLabel = formatDuration(view.version.videoDurationSec);
   const typeLabel = courseTypeLabel(view);
@@ -270,7 +310,7 @@ export default async function EmployeeCoursePage({
             questions={view.questions}
             checkpoints={view.checkpoints}
             initialClearedCheckpointIds={initialClearedCheckpointIds}
-            alreadyCompleted={completion !== null}
+            alreadyCompleted={treatAsCurrentlyCompleted}
             canRetake={canRetake}
             blockingSubmittedAttempt={hasBlockingSubmittedAttempt}
             submittedAttempts={submittedAttempts.map((a) => ({
@@ -346,6 +386,7 @@ export default async function EmployeeCoursePage({
             attemptCount={submittedAttempts.length}
             passingScore={view.version.passingScore}
             thresholdPercent={VIDEO_COMPLETION_THRESHOLD_PERCENT}
+            activeObligation={activeObligation}
           />
           <RequiredTrainingRail
             courses={outstandingRequired}
@@ -525,7 +566,7 @@ function RequiredCourseCard({ course, index }: { course: OutstandingItem; index:
 // Panels + reusable bits
 // ---------------------------------------------------------------------------
 
-function StatePill({ state }: { state: "completed" | "in-progress" | "not-started" }) {
+function StatePill({ state }: { state: "completed" | "in-progress" | "not-started" | "updated-required" | "retake-required" | "initial-required" }) {
   if (state === "completed") {
     return (
       <span
@@ -546,6 +587,39 @@ function StatePill({ state }: { state: "completed" | "in-progress" | "not-starte
       </span>
     );
   }
+  // EP-TRAIN-5C-3 — obligation-aware labels.  Same amber palette as
+  // Not Started / In Progress -- the EP-UX-2D visual system is
+  // preserved; the LABEL is what the employee reads.
+  if (state === "updated-required") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold"
+        data-testid="portal-course-state-pill"
+      >
+        Updated Training Required
+      </span>
+    );
+  }
+  if (state === "retake-required") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold"
+        data-testid="portal-course-state-pill"
+      >
+        Retake Required
+      </span>
+    );
+  }
+  if (state === "initial-required") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200 px-2.5 py-0.5 text-xs font-semibold"
+        data-testid="portal-course-state-pill"
+      >
+        Not Started
+      </span>
+    );
+  }
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200 px-2.5 py-0.5 text-xs font-semibold"
@@ -563,14 +637,112 @@ function TrainingStatusPanel({
   attemptCount,
   passingScore,
   thresholdPercent,
+  activeObligation,
 }: {
-  state: "completed" | "in-progress" | "not-started";
+  state: "completed" | "in-progress" | "not-started" | "updated-required" | "retake-required" | "initial-required";
   completion: { id: string; completedAt: Date; score: number } | null;
   progressPercent: number;
   attemptCount: number;
   passingScore: number;
   thresholdPercent: number;
+  // EP-TRAIN-5C-3 — the active obligation (if any) that drives the
+  // retake / updated-training messaging.  Null when the pre-5C-3
+  // legacy state applies.
+  activeObligation: {
+    id: string;
+    reason: "INITIAL" | "REVISION" | "MANUAL_REINSTATE" | "RECERTIFICATION";
+    issuedAt: Date;
+    dueAt: Date | null;
+    reasonNote: string | null;
+  } | null;
 }) {
+  // EP-TRAIN-5C-3 — "Updated Training Required" variant.
+  if (state === "updated-required" && activeObligation) {
+    return (
+      <aside
+        className="h-fit rounded-xl border border-amber-200 bg-amber-50 p-6"
+        data-testid="portal-course-status-panel"
+        data-variant="updated-required"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+            <CalendarIcon />
+          </div>
+          <h2 className="font-serif text-xl text-club-ink">Updated Training Required</h2>
+        </div>
+        <p className="mt-3 text-sm text-stone-700 leading-relaxed">
+          An updated version of this training is required. Your previous
+          completion remains on record.
+        </p>
+        {activeObligation.dueAt && (
+          <p className="mt-2 text-xs text-stone-600" data-testid="portal-course-status-due">
+            Please complete by {formatCompleted(activeObligation.dueAt)}.
+          </p>
+        )}
+        <div className="my-5 h-px bg-amber-200" />
+        {completion && (
+          <>
+            <MetricRow icon={<RibbonIcon />} label="Previous score" value={`${completion.score}%`} />
+            <MetricRow icon={<CalendarIcon />} label="Previously completed" value={formatCompleted(completion.completedAt)} />
+          </>
+        )}
+        <a
+          href="#course-video"
+          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-club-green-800 hover:bg-club-green-900 text-white text-sm font-semibold px-4 py-2.5"
+          data-testid="portal-course-start"
+        >
+          <PlayIcon /> Start Training
+        </a>
+      </aside>
+    );
+  }
+  // EP-TRAIN-5C-3 — "Retake Required" variant.
+  if (state === "retake-required" && activeObligation) {
+    return (
+      <aside
+        className="h-fit rounded-xl border border-amber-200 bg-amber-50 p-6"
+        data-testid="portal-course-status-panel"
+        data-variant="retake-required"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+            <CalendarIcon />
+          </div>
+          <h2 className="font-serif text-xl text-club-ink">Retake Required</h2>
+        </div>
+        <p className="mt-3 text-sm text-stone-700 leading-relaxed">
+          Your club has requested that you repeat this training. Your previous
+          completion remains in your training history.
+        </p>
+        {activeObligation.reasonNote && (
+          <p className="mt-2 text-xs text-stone-600 italic" data-testid="portal-course-status-reason">
+            {activeObligation.reasonNote.length > 140
+              ? `${activeObligation.reasonNote.slice(0, 140).trim()}…`
+              : activeObligation.reasonNote}
+          </p>
+        )}
+        {activeObligation.dueAt && (
+          <p className="mt-2 text-xs text-stone-600" data-testid="portal-course-status-due">
+            Please complete by {formatCompleted(activeObligation.dueAt)}.
+          </p>
+        )}
+        <div className="my-5 h-px bg-amber-200" />
+        {completion && (
+          <>
+            <MetricRow icon={<RibbonIcon />} label="Previous score" value={`${completion.score}%`} />
+            <MetricRow icon={<CalendarIcon />} label="Previously completed" value={formatCompleted(completion.completedAt)} />
+          </>
+        )}
+        <a
+          href="#course-video"
+          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-club-green-800 hover:bg-club-green-900 text-white text-sm font-semibold px-4 py-2.5"
+          data-testid="portal-course-start"
+        >
+          <PlayIcon /> Start Training
+        </a>
+      </aside>
+    );
+  }
   if (state === "completed" && completion) {
     return (
       <aside
@@ -772,11 +944,38 @@ function YourResultPanel({
   attempts,
   passingScore,
 }: {
-  state: "completed" | "in-progress" | "not-started";
+  state: "completed" | "in-progress" | "not-started" | "updated-required" | "retake-required" | "initial-required";
   completion: { id: string; completedAt: Date; score: number } | null;
   attempts: AttemptSummary[];
   passingScore: number;
 }) {
+  // EP-TRAIN-5C-3 — when a retake / updated-training obligation is
+  // active, Your Result still shows the historical completion the
+  // employee EARNED, but with a clear "current requirement outstanding"
+  // caption so the latest-historical-result is not confused with the
+  // active obligation's status.
+  if ((state === "updated-required" || state === "retake-required") && completion) {
+    return (
+      <div className="space-y-6 max-w-3xl" data-testid="portal-course-your-result-with-outstanding">
+        <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-5">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center">
+              <CalendarIcon />
+            </div>
+            <div>
+              <div className="font-semibold text-amber-900">
+                {state === "updated-required" ? "Updated training required" : "Retake required"}
+              </div>
+              <div className="text-sm text-amber-900/90">
+                Your previous completion from {formatCompleted(completion.completedAt)} ({completion.score}%)
+                remains on record. A new completion is required to satisfy the current requirement.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (state === "completed" && completion) {
     return (
       <div className="space-y-6 max-w-3xl">

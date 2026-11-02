@@ -30,6 +30,11 @@ import { resolveEmployeeSchedulingEligibility } from "@/lib/hr/training/applicab
 import { prisma } from "@/lib/prisma";
 import TrainingTabs from "@/components/employee/safety-training/TrainingTabs";
 import CircularProgress from "@/components/employee/safety-training/CircularProgress";
+// EP-TRAIN-5C-3 (2026-11-02) -- obligation-aware overlay on the
+// dashboard.  Reads OUTSTANDING TrainingObligation rows for the
+// authenticated employee.  Pre-5C-4 production prisma has 0
+// obligations so this query returns [] for every real employee.
+import { resolveEmployeeTrainingCompliance } from "@/lib/hr/training/compliance-resolver";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,6 +69,16 @@ export default async function EmployeePortalSafetyTrainingPage() {
 
   // Resolver — ONE call, same contract as the HR-2C B3 layout.
   const eligibility = await resolveEmployeeSchedulingEligibility(principal.employeeId);
+  // EP-TRAIN-5C-3 — obligation-aware per-course state overlay.  When
+  // no OUTSTANDING obligations exist for this employee the resolver
+  // reports every course as either INITIAL_REQUIRED / COMPLIANT /
+  // NO_REQUIREMENT (byte-for-byte pre-5C-3 behavior).  When
+  // obligations exist (from 5B workflows), UPDATED_REQUIRED /
+  // RETAKE_REQUIRED / MULTIPLE_OUTSTANDING courses surface the new
+  // labels + the dashboard metrics distinguish compliance from
+  // historical completion.
+  const compliance = await resolveEmployeeTrainingCompliance(principal.employeeId);
+  const complianceByCourseId = new Map(compliance.courses.map((c) => [c.courseId, c]));
   const club = await prisma.club.findUnique({
     where: { id: principal.clubId },
     select: { name: true },
@@ -71,14 +86,47 @@ export default async function EmployeePortalSafetyTrainingPage() {
   const clubName = club?.name ?? "Your Club";
 
   // Summary metrics — directive §4 Card 1.
+  //
+  // EP-TRAIN-5C-3 (2026-11-02) -- metric derivation now distinguishes
+  // CURRENT COMPLIANCE from HISTORICAL COMPLETION.  A course with a
+  // historical completion AND an OUTSTANDING obligation is NOT counted
+  // as currently compliant (directive §4: "Do not count multiple
+  // historical completions as multiple currently compliant courses"
+  // / "Do not report 100% compliance while an outstanding retake
+  // requirement exists").
   const requiredApplicable = eligibility.applicable.filter((a) => a.version.required);
   const assignedRequiredCount = requiredApplicable.length;
-  const completedRequiredCount = requiredApplicable.filter((a) => a.completed).length;
-  const outstandingRequiredCount = eligibility.outstandingTraining.length;
+  // A course is "currently compliant" iff it has a completion AND no
+  // OUTSTANDING obligation (compliance.courses[*].state === "COMPLIANT").
+  const complianceStateByCourseId = new Map(compliance.courses.map((c) => [c.courseId, c.state]));
+  const currentlyCompliantCount = requiredApplicable.filter((a) => {
+    const state = complianceStateByCourseId.get(a.courseId);
+    // Pre-5C-3 fallback: no entry in compliance (shouldn't happen since
+    // the resolver covers every applicable course) treats .completed
+    // as compliant.
+    if (state === undefined) return a.completed;
+    return state === "COMPLIANT";
+  }).length;
+  const completedRequiredCount = currentlyCompliantCount;
+  // "Outstanding" = sum of actionable requirements per the obligation-
+  // aware resolver, which includes INITIAL_REQUIRED / UPDATED_REQUIRED
+  // / RETAKE_REQUIRED / IN_PROGRESS / MULTIPLE_OUTSTANDING.  For
+  // courses the obligation-aware resolver doesn't touch (shouldn't
+  // happen in practice), fall back to the pre-5C-3 outstandingTraining
+  // count.
+  const outstandingRequiredCount = requiredApplicable.filter((a) => {
+    const state = complianceStateByCourseId.get(a.courseId);
+    if (state === undefined) return !a.completed;
+    return state === "INITIAL_REQUIRED"
+      || state === "UPDATED_REQUIRED"
+      || state === "RETAKE_REQUIRED"
+      || state === "IN_PROGRESS"
+      || state === "MULTIPLE_OUTSTANDING";
+  }).length;
   const completedPercent = assignedRequiredCount === 0
     ? 0
     : Math.round((completedRequiredCount / assignedRequiredCount) * 100);
-  const allCompleted = assignedRequiredCount > 0 && completedRequiredCount === assignedRequiredCount;
+  const allCompleted = assignedRequiredCount > 0 && outstandingRequiredCount === 0;
 
   // Full completed list — includes optional + required completions,
   // ordered by completedAt DESC.
@@ -99,10 +147,47 @@ export default async function EmployeePortalSafetyTrainingPage() {
     : [];
   const scoreByVersionId = new Map(completionRows.map((r) => [r.courseVersionId, r.score]));
 
-  // Outstanding required courses — these drive the Required Training section.
+  // Outstanding required courses — these drive the Required Training
+  // section.
+  //
+  // EP-TRAIN-5C-3 — now includes courses that have a HISTORICAL
+  // completion but an OUTSTANDING obligation (REVISION or
+  // MANUAL_REINSTATE).  The per-course `obligationLabel` tells the
+  // dashboard card which badge to render ("Updated Training Required"
+  // / "Retake Required" / default "Required").
   const outstandingRequired = eligibility.applicable
-    .filter((a) => a.version.required && !a.completed)
+    .filter((a) => {
+      if (!a.version.required) return false;
+      const state = complianceStateByCourseId.get(a.courseId);
+      if (state === undefined) return !a.completed;
+      return state === "INITIAL_REQUIRED"
+        || state === "UPDATED_REQUIRED"
+        || state === "RETAKE_REQUIRED"
+        || state === "IN_PROGRESS"
+        || state === "MULTIPLE_OUTSTANDING";
+    })
     .sort((x, y) => x.title.localeCompare(y.title));
+  // Per-course obligation annotation for the dashboard card renderer.
+  const obligationStateByCourseId = new Map<string, {
+    label: "Updated Training Required" | "Retake Required" | "Required" | "In Progress" | "Additional Retake Required";
+    multiple: boolean;
+  }>();
+  for (const a of outstandingRequired) {
+    const state = complianceStateByCourseId.get(a.courseId);
+    const compliance = complianceByCourseId.get(a.courseId);
+    const multiple = (compliance?.outstandingObligationCount ?? 0) > 1;
+    if (state === "UPDATED_REQUIRED") {
+      obligationStateByCourseId.set(a.courseId, { label: "Updated Training Required", multiple });
+    } else if (state === "RETAKE_REQUIRED") {
+      obligationStateByCourseId.set(a.courseId, { label: "Retake Required", multiple });
+    } else if (state === "IN_PROGRESS") {
+      obligationStateByCourseId.set(a.courseId, { label: "In Progress", multiple });
+    } else if (state === "MULTIPLE_OUTSTANDING") {
+      obligationStateByCourseId.set(a.courseId, { label: "Additional Retake Required", multiple: true });
+    } else {
+      obligationStateByCourseId.set(a.courseId, { label: "Required", multiple });
+    }
+  }
 
   const noAssignments = eligibility.applicable.length === 0;
 
@@ -239,6 +324,7 @@ export default async function EmployeePortalSafetyTrainingPage() {
                 clubName={clubName}
                 outstandingCount={outstandingRequiredCount}
                 outstandingRequired={outstandingRequired}
+                obligationStateByCourseId={obligationStateByCourseId}
                 completedRows={completedRows}
                 noAssignments={noAssignments}
               />
@@ -276,12 +362,17 @@ function MyTrainingPanel({
   clubName,
   outstandingCount,
   outstandingRequired,
+  obligationStateByCourseId,
   completedRows,
   noAssignments,
 }: {
   clubName: string;
   outstandingCount: number;
   outstandingRequired: Applicable[];
+  // EP-TRAIN-5C-3 — per-course obligation annotation drives the badge
+  // on each Required Training card.  Unmapped courses show no extra
+  // badge (pre-5C-3 behavior).
+  obligationStateByCourseId: Map<string, { label: string; multiple: boolean }>;
   completedRows: CompletedRow[];
   noAssignments: boolean;
 }) {
@@ -315,30 +406,58 @@ function MyTrainingPanel({
             <AllCaughtUpBanner />
           ) : (
             <ul className="space-y-3" data-testid="portal-safety-training-required-list">
-              {outstandingRequired.map((a) => (
-                <li key={a.courseId}>
-                  <Link
-                    href={`/employee/safety-training/${encodeURIComponent(a.version.id)}`}
-                    className="group block rounded-lg border border-stone-200 bg-white px-5 py-4 hover:border-stone-300 hover:bg-stone-50 transition-colors"
-                    data-testid={`portal-safety-training-course-${a.courseId}`}
-                  >
-                    <div className="flex items-baseline justify-between gap-4">
-                      <div className="min-w-0">
-                        <div className="font-semibold text-club-ink truncate">{a.title}</div>
-                        <div className="mt-1 text-xs text-stone-500">
-                          {courseTypeLabel(a)}
-                          {a.version.videoDurationSec && a.version.videoDurationSec > 0 ? (
-                            <> · {formatDurationShort(a.version.videoDurationSec)}</>
-                          ) : null}
+              {outstandingRequired.map((a) => {
+                const obState = obligationStateByCourseId.get(a.courseId);
+                // "Required" is the default pre-5C-3 label; only
+                // non-default obligation labels get rendered as a chip
+                // so the dashboard visually matches EP-UX-2D for
+                // pre-5C-3 employees (no OUTSTANDING obligations).
+                const showObligationChip = obState && obState.label !== "Required";
+                return (
+                  <li key={a.courseId}>
+                    <Link
+                      href={`/employee/safety-training/${encodeURIComponent(a.version.id)}`}
+                      className="group block rounded-lg border border-stone-200 bg-white px-5 py-4 hover:border-stone-300 hover:bg-stone-50 transition-colors"
+                      data-testid={`portal-safety-training-course-${a.courseId}`}
+                      data-obligation-label={obState?.label ?? "Required"}
+                      data-obligation-multiple={obState?.multiple ? "true" : "false"}
+                    >
+                      <div className="flex items-baseline justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-club-ink truncate">{a.title}</div>
+                          <div className="mt-1 flex items-center gap-2 flex-wrap text-xs text-stone-500">
+                            <span>
+                              {courseTypeLabel(a)}
+                              {a.version.videoDurationSec && a.version.videoDurationSec > 0 ? (
+                                <> · {formatDurationShort(a.version.videoDurationSec)}</>
+                              ) : null}
+                            </span>
+                            {showObligationChip && (
+                              <span
+                                className="inline-flex items-center rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 text-[10px] font-semibold"
+                                data-testid={`portal-safety-training-course-${a.courseId}-obligation-chip`}
+                              >
+                                {obState!.label}
+                              </span>
+                            )}
+                            {obState?.multiple && (
+                              <span
+                                className="inline-flex items-center rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 text-[10px] font-semibold"
+                                data-testid={`portal-safety-training-course-${a.courseId}-multiple-chip`}
+                              >
+                                Multiple completions required
+                              </span>
+                            )}
+                          </div>
                         </div>
+                        <span className="shrink-0 inline-flex items-center rounded-md bg-club-green-800 text-white text-xs font-semibold px-3 py-1.5 group-hover:bg-club-green-900 transition-colors">
+                          Start
+                        </span>
                       </div>
-                      <span className="shrink-0 inline-flex items-center rounded-md bg-club-green-800 text-white text-xs font-semibold px-3 py-1.5 group-hover:bg-club-green-900 transition-colors">
-                        Start
-                      </span>
-                    </div>
-                  </Link>
-                </li>
-              ))}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
