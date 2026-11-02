@@ -13,6 +13,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { startNewDraftAction, retireCourseAction } from "../_actions";
 import { getCourseComplianceRoster } from "@/lib/hr/training/compliance";
+import RequireRetakeDialog from "./RequireRetakeDialog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,9 +72,28 @@ export default async function CourseDetailPage({
           {canAuthor && !course.retiredAt && !openDraft && (
             <form action={startNewDraft}>
               <button type="submit" className="btn btn-secondary btn-sm" data-testid="training-start-new-draft">
-                Start new draft
+                {currentPublished ? "Revise training" : "Start new draft"}
               </button>
             </form>
+          )}
+          {/* EP-TRAIN-5B (2026-11-01) -- Require Retake administrative
+              action.  Only shown when the course has a currently
+              published version (there must be something to retake). */}
+          {canPublish && !course.retiredAt && currentPublished && (
+            <RequireRetakeDialog
+              courseId={course.id}
+              courseTitle={course.title}
+              roster={roster.map((r) => ({
+                id: r.employeeId,
+                displayName: r.preferredName?.trim() ? `${r.preferredName} ${r.lastName}` : `${r.firstName} ${r.lastName}`,
+                employeeNumber: r.employeeNumber,
+                statusLabel: r.status === "completed"
+                  ? `Completed ${r.completedAt ? r.completedAt.toLocaleDateString() : ""}`.trim()
+                  : r.status === "in_progress" ? "In progress"
+                  : r.status === "attempted_failed" ? "Not passed"
+                  : "Not started",
+              }))}
+            />
           )}
           {canPublish && !course.retiredAt && (
             <form action={retireAction}>

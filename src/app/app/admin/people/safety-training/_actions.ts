@@ -36,6 +36,12 @@ import {
   updateCheckpoint,
   deleteCheckpoint,
 } from "@/lib/hr/training/checkpoints";
+import {
+  publishDraftWithPolicy,
+  previewRetakeTargets,
+  issueManualReinstatement,
+  type RevisionPolicy,
+} from "@/lib/hr/training/revisions";
 
 function withErr(path: string, safeMessage: string): string {
   const sep = path.includes("?") ? "&" : "?";
@@ -530,6 +536,107 @@ export async function deleteCheckpointAction(
     if (isAppError(err)) {
       return { ok: false, error: err.safeMessage };
     }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-5B (2026-11-01) — Revise Training (publish-with-policy) +
+// Require Retake administrative workflows.
+// ---------------------------------------------------------------------------
+
+/** Publish a DRAFT with one of three policies.  Issues REVISION
+ *  obligations per the resolved target set.  v1 publishes record the
+ *  policy in audit but do not issue obligations (no prior to supersede). */
+export async function publishDraftWithPolicyAction(
+  courseId: string,
+  versionId: string,
+  formData: FormData,
+): Promise<{ ok: true; eventId: string; affectedCount: number; skippedCount: number } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  const policyRaw = (formData.get("policy") as string | null)?.trim() ?? "";
+  const validPolicies: RevisionPolicy[] = ["ALL_APPLICABLE", "NON_COMPLETERS", "SELECTED"];
+  if (!(validPolicies as string[]).includes(policyRaw)) {
+    return { ok: false, error: `Select a publication policy.` };
+  }
+  const policy = policyRaw as RevisionPolicy;
+  const selectedRaw = formData.getAll("selectedEmployeeId").map(String).filter(Boolean);
+  try {
+    const result = await publishDraftWithPolicy({
+      principal,
+      versionId,
+      policy,
+      selectedEmployeeIds: policy === "SELECTED" ? selectedRaw : undefined,
+    });
+    revalidatePath(`/app/admin/people/safety-training/${courseId}`);
+    revalidatePath(`/app/admin/people/safety-training`);
+    return {
+      ok: true,
+      eventId: result.eventId,
+      affectedCount: result.affectedEmployeeIds.length,
+      skippedCount: result.skippedEmployeeIds.length,
+    };
+  } catch (err) {
+    if (isAppError(err)) {
+      return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
+    }
+    throw err;
+  }
+}
+
+/** Read-only preview for the Require Retake confirmation dialog.
+ *  Returns per-employee latest completion + any OUTSTANDING
+ *  obligations currently in place, so the manager sees the full
+ *  conflict picture before confirming. */
+export async function previewRetakeAction(
+  courseId: string,
+  employeeIdsJson: string,
+): Promise<
+  | { ok: true; preview: Awaited<ReturnType<typeof previewRetakeTargets>> }
+  | { ok: false; error: string }
+> {
+  const principal = await requirePrincipal();
+  let employeeIds: string[] = [];
+  try {
+    const parsed = JSON.parse(employeeIdsJson);
+    if (Array.isArray(parsed)) employeeIds = parsed.filter((x): x is string => typeof x === "string");
+  } catch {
+    return { ok: false, error: "Invalid employee selection payload." };
+  }
+  try {
+    const preview = await previewRetakeTargets({ principal, courseId, employeeIds });
+    return { ok: true, preview };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
+    throw err;
+  }
+}
+
+/** Issue MANUAL_REINSTATE obligations for the selected employees
+ *  with a mandatory reason + optional due date.  One server-side
+ *  event id per confirmed submission -> idempotent against double-
+ *  click; a separate submission creates a separate authorized event
+ *  per EP-TRAIN-5A-1 semantics. */
+export async function requireRetakeAction(
+  courseId: string,
+  formData: FormData,
+): Promise<{ ok: true; eventId: string; obligationCount: number } | { ok: false; error: string }> {
+  const principal = await requirePrincipal();
+  const employeeIds = formData.getAll("employeeId").map(String).filter(Boolean);
+  const reason = ((formData.get("reason") as string | null) ?? "").trim();
+  const dueAtRaw = ((formData.get("dueAt") as string | null) ?? "").trim();
+  const dueAt = dueAtRaw ? new Date(dueAtRaw) : null;
+  if (dueAt && Number.isNaN(dueAt.getTime())) {
+    return { ok: false, error: "Due date is not a valid date." };
+  }
+  try {
+    const result = await issueManualReinstatement({
+      principal, courseId, employeeIds, reason, dueAt,
+    });
+    revalidatePath(`/app/admin/people/safety-training/${courseId}`);
+    return { ok: true, eventId: result.eventId, obligationCount: result.obligationIds.length };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: firstIssueMessage(err) ?? err.safeMessage };
     throw err;
   }
 }

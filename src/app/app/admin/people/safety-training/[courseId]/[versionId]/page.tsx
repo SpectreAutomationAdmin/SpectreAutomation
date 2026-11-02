@@ -38,6 +38,8 @@ import QuizEditor, { type TrainingQuestionType } from "./QuizEditor";
 import ApplicabilityPicker from "./ApplicabilityPicker";
 import PublishPanel from "./PublishPanel";
 import TimelineEditor from "./TimelineEditor";
+import PublishRevisionDialog from "./PublishRevisionDialog";
+import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,6 +111,56 @@ export default async function VersionEditorPage({
   const publishAction = publishDraftAction.bind(null, params.courseId, params.versionId);
   const isDraft = version.state === "DRAFT";
   const readOnly = !isDraft || !canAuthor;
+
+  // EP-TRAIN-5B (2026-11-01) -- a draft publish is a REVISION when a
+  // prior PUBLISHED version exists for the same course.  v1 publishes
+  // flow through the existing simple PublishPanel; revisions open the
+  // three-option confirmation dialog.
+  const priorPublished = isDraft
+    ? await prisma.trainingCourseVersion.findFirst({
+        where: { courseId: version.course.id, state: "PUBLISHED", NOT: { id: version.id } },
+        select: { id: true, version: true },
+      })
+    : null;
+  const isRevision = isDraft && priorPublished !== null;
+
+  // Resolve the applicable-employee list ONCE per page render so the
+  // revision dialog's "Selected employees" picker + counters have
+  // real data without a second round trip.  Mirrors the roster shape
+  // the course-detail page already derives from compliance.
+  let applicableEmployees: Array<{ id: string; displayName: string; employeeNumber: string; latestCompletionAt: Date | null }> = [];
+  let previousCompleterCount = 0;
+  if (isRevision && priorPublished && canPublish) {
+    const activeEmployees = await prisma.employee.findMany({
+      where: { clubId, employeeLifecycle: { in: ["ACTIVE", "PRE_HIRE", "LEAVE"] } },
+      select: { id: true, firstName: true, lastName: true, preferredName: true, employeeNumber: true },
+      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+    });
+    const applicable: typeof activeEmployees = [];
+    for (const emp of activeEmployees) {
+      const list = await resolveApplicableCourses(emp.id);
+      if (list.some((a) => a.courseId === version.course.id)) applicable.push(emp);
+    }
+    const completions = await prisma.trainingCompletion.findMany({
+      where: {
+        clubId, courseVersionId: priorPublished.id,
+        employeeId: { in: applicable.map((e) => e.id) },
+      },
+      orderBy: { completedAt: "desc" },
+      select: { employeeId: true, completedAt: true },
+    });
+    const latestByEmp = new Map<string, Date>();
+    for (const c of completions) {
+      if (!latestByEmp.has(c.employeeId)) latestByEmp.set(c.employeeId, c.completedAt);
+    }
+    previousCompleterCount = applicable.filter((e) => latestByEmp.has(e.id)).length;
+    applicableEmployees = applicable.map((e) => ({
+      id: e.id,
+      displayName: e.preferredName?.trim() ? `${e.preferredName} ${e.lastName}` : `${e.firstName} ${e.lastName}`,
+      employeeNumber: e.employeeNumber,
+      latestCompletionAt: latestByEmp.get(e.id) ?? null,
+    }));
+  }
 
   return (
     <div>
@@ -379,11 +431,33 @@ export default async function VersionEditorPage({
       {isDraft && (
         <section className="card card-body space-y-4 mt-8">
           <h2 className="section-title text-lg">Publish</h2>
-          <PublishPanel
-            readiness={readiness}
-            canPublish={canPublish}
-            publishAction={publishAction}
-          />
+          {isRevision && priorPublished && readiness.ready && canPublish ? (
+            // EP-TRAIN-5B (2026-11-01) -- revision publication opens the
+            // three-option confirmation dialog so the manager picks
+            // ALL / NON_COMPLETERS / SELECTED before issuing the
+            // requirement.
+            <div className="space-y-3" data-testid="training-publish-panel" data-ready="true" data-revision="true">
+              <p className="text-sm text-stone-700">
+                This is a revision of version {priorPublished.version}. Publishing
+                will retire the previous version and present three options for
+                how employees with prior completions should be treated.
+              </p>
+              <PublishRevisionDialog
+                courseId={version.course.id}
+                versionId={version.id}
+                versionNumber={version.version}
+                priorVersionNumber={priorPublished.version}
+                applicableEmployees={applicableEmployees}
+                previousCompleterCount={previousCompleterCount}
+              />
+            </div>
+          ) : (
+            <PublishPanel
+              readiness={readiness}
+              canPublish={canPublish}
+              publishAction={publishAction}
+            />
+          )}
         </section>
       )}
     </div>
