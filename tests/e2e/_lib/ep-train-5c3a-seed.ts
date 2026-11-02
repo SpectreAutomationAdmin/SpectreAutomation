@@ -202,10 +202,178 @@ process.exit(0);
   return JSON.parse(line.slice(line.indexOf("{")));
 }
 
+/** EP-TRAIN-5C-3C — seed a DRAFT Version 2 of the fixture course by
+ *  cloning v1's content (video, checkpoints, questions, options).
+ *  Does NOT publish — the test subsequently drives the real admin UI's
+ *  "Publish this version" dialog so publishDraftWithPolicy runs for
+ *  real (REVISION obligations issued, auto-supersession applied,
+ *  audit written, currentVersionId flipped — all through the real
+ *  server action).
+ *
+ *  Returns the new v2 id so the test can navigate to it. */
+export function seedDraftV2WithCheckpoints(fixture: IsolatedFixture): { v2Id: string; v2VersionNumber: number } {
+  const script = `
+import { createRequire } from "node:module";
+const req = createRequire("/app/.next/standalone/node_modules/@prisma/client/");
+const { PrismaClient } = req("@prisma/client");
+const p = new PrismaClient();
+const courseId = ${JSON.stringify(fixture.courseId)};
+const v1Id = ${JSON.stringify(fixture.courseVersionId)};
+const v1 = await p.trainingCourseVersion.findUnique({
+  where: { id: v1Id },
+  include: { questions: { include: { options: true } }, checkpoints: true },
+});
+const nextVersion = (await p.trainingCourseVersion.aggregate({ where: { courseId }, _max: { version: true } }))._max.version + 1;
+const v2 = await p.trainingCourseVersion.create({
+  data: {
+    courseId, version: nextVersion, state: "DRAFT",
+    title: v1.title + " (v" + nextVersion + ")",
+    description: v1.description,
+    passingScore: v1.passingScore, retakesAllowed: v1.retakesAllowed,
+    requiresKnowledgeTest: v1.requiresKnowledgeTest, required: v1.required,
+    appliesToAll: v1.appliesToAll,
+    appliesToDeptIds: v1.appliesToDeptIds, appliesToPositionIds: v1.appliesToPositionIds,
+    videoStorageKey: v1.videoStorageKey, videoSha256: v1.videoSha256,
+    videoMimeType: v1.videoMimeType, videoSizeBytes: v1.videoSizeBytes,
+    videoDurationSec: v1.videoDurationSec,
+  },
+});
+const cpIdMap = new Map();
+for (const cp of v1.checkpoints) {
+  const newCp = await p.trainingCheckpoint.create({
+    data: {
+      courseVersionId: v2.id, atSecond: cp.atSecond, label: cp.label,
+      requiredToProceed: cp.requiredToProceed, maxRetries: cp.maxRetries,
+      displayOrder: cp.displayOrder,
+    },
+  });
+  cpIdMap.set(cp.id, newCp.id);
+}
+for (const q of v1.questions) {
+  const newQ = await p.trainingQuestion.create({
+    data: {
+      courseVersionId: v2.id,
+      checkpointId: q.checkpointId ? cpIdMap.get(q.checkpointId) ?? null : null,
+      prompt: q.prompt, displayOrder: q.displayOrder,
+      active: q.active, questionType: q.questionType,
+    },
+  });
+  for (const o of q.options) {
+    await p.trainingAnswerOption.create({
+      data: { questionId: newQ.id, text: o.text, isCorrect: o.isCorrect, displayOrder: o.displayOrder },
+    });
+  }
+}
+console.log("SEEDED_DRAFT_V2 " + JSON.stringify({ v2Id: v2.id, v2VersionNumber: nextVersion }));
+await p.$disconnect();
+process.exit(0);
+`;
+  const stdout = runSshScript(script);
+  const line = stdout.split(/\r?\n/).find((l) => l.startsWith("SEEDED_DRAFT_V2 "));
+  if (!line) throw new Error(`seedDraftV2WithCheckpoints failed: ${stdout.slice(-500)}`);
+  return JSON.parse(line.slice(line.indexOf("{")));
+}
+
+/** Snapshot every TrainingObligation row for the fixture employee —
+ *  returns per-row {reason, status, courseVersionId} so the test can
+ *  assert supersession transitions + per-version routing. */
+export function snapshotObligationsForEmployee(
+  fixture: IsolatedFixture,
+): Array<{ id: string; reason: string; status: string; courseVersionId: string; issuedAt: string; satisfiedByCompletionId: string | null }> {
+  const script = `
+import { createRequire } from "node:module";
+const req = createRequire("/app/.next/standalone/node_modules/@prisma/client/");
+const { PrismaClient } = req("@prisma/client");
+const p = new PrismaClient();
+const rows = await p.trainingObligation.findMany({
+  where: { employeeId: ${JSON.stringify(fixture.employeeId)}, courseId: ${JSON.stringify(fixture.courseId)} },
+  orderBy: { issuedAt: "asc" },
+  select: { id: true, reason: true, status: true, courseVersionId: true, issuedAt: true, satisfiedByCompletionId: true },
+});
+console.log("OBLIGATIONS " + JSON.stringify(rows.map((r) => ({
+  id: r.id, reason: r.reason, status: r.status, courseVersionId: r.courseVersionId,
+  issuedAt: r.issuedAt.toISOString(), satisfiedByCompletionId: r.satisfiedByCompletionId,
+}))));
+await p.$disconnect();
+process.exit(0);
+`;
+  const stdout = runSshScript(script);
+  const line = stdout.split(/\r?\n/).find((l) => l.startsWith("OBLIGATIONS "));
+  if (!line) throw new Error(`snapshotObligationsForEmployee failed: ${stdout.slice(-400)}`);
+  return JSON.parse(line.slice(line.indexOf("[")));
+}
+
+/** EP-TRAIN-5C-3C — issue an OUTSTANDING MANUAL_REINSTATE obligation on
+ *  the same (employee, courseVersion) a second time with
+ *  conflictResolution=KEEP_BOTH.  Directly inserting a second obligation
+ *  skips the EP-TRAIN-5B `issueManualReinstatement` conflict guard — we
+ *  therefore emulate the service's exact DB effect: create another
+ *  OUTSTANDING row with a fresh issuanceKey.  (The service's semantics
+ *  for KEEP_BOTH are "insert alongside"; the only extra work the service
+ *  does on top of insert is the ConflictError throw when the caller
+ *  omits conflictResolution — not relevant to a direct test.)
+ *
+ *  Alternative implementations considered: driving the admin UI's
+ *  "Require Retake" dialog twice as the authenticated founder.  That
+ *  path is covered by the ADMIN-driven v2 publish flow in
+ *  ep-train-5c3c-admin-ui.ts for the REVISION scenario, where routing
+ *  through the UI is the only way to exercise auto-supersession.  For
+ *  MANUAL_REINSTATE the service writes exactly one row per call; direct
+ *  insert of a second OUTSTANDING row with a distinct issuanceKey is
+ *  the identical DB state. */
+export function seedSecondObligationKeepBoth(
+  fixture: IsolatedFixture,
+  opts: {
+    reasonNote?: string;
+    issuanceKeySuffix?: string;
+  } = {},
+): { obligationId: string } {
+  return seedObligation(fixture, {
+    reason: "MANUAL_REINSTATE",
+    reasonNote: opts.reasonNote ?? "KEEP_BOTH second obligation",
+    issuanceKeySuffix: opts.issuanceKeySuffix ?? "keep-both",
+  });
+}
+
+/** Returns the course's CURRENTLY PUBLISHED version id (after a v2
+ *  publish, the EP-TRAIN-3 fixture's `fixture.courseVersionId` becomes
+ *  stale — callers need the latest). */
+export function getCurrentPublishedVersionId(fixture: IsolatedFixture): string {
+  const script = `
+import { createRequire } from "node:module";
+const req = createRequire("/app/.next/standalone/node_modules/@prisma/client/");
+const { PrismaClient } = req("@prisma/client");
+const p = new PrismaClient();
+const course = await p.trainingCourse.findUnique({
+  where: { id: ${JSON.stringify(fixture.courseId)} },
+  select: { currentVersionId: true },
+});
+console.log("CURRENT_VERSION " + JSON.stringify({ versionId: course.currentVersionId }));
+await p.$disconnect();
+process.exit(0);
+`;
+  const stdout = runSshScript(script);
+  const line = stdout.split(/\r?\n/).find((l) => l.startsWith("CURRENT_VERSION "));
+  if (!line) throw new Error(`getCurrentPublishedVersionId failed: ${stdout.slice(-400)}`);
+  return JSON.parse(line.slice(line.indexOf("{"))).versionId;
+}
+
 /** Clean up every TrainingObligation row scoped to this fixture.
  *  teardownIsolatedFixture doesn't touch obligations because the
  *  EP-TRAIN-3 fixture harness pre-dates EP-TRAIN-5A-1; this helper
- *  wipes them before teardown so the delete chain remains clean. */
+ *  wipes them before teardown so the delete chain remains clean.
+ *
+ *  CRITICAL: TrainingProgress + TrainingAttempt have the obligation
+ *  FK onDelete: SetNull.  If a scenario has >1 obligation with its
+ *  own scoped progress row, deleting the obligations would null-ify
+ *  BOTH progress rows' obligationId → the partial-UNIQUE on
+ *  (employeeId, courseVersionId) WHERE obligationId IS NULL would
+ *  reject the second null.  Fix: null the FKs explicitly BEFORE the
+ *  obligations are deleted — but even that collides with the
+ *  partial-UNIQUE.  So we DELETE the obligation-scoped
+ *  TrainingProgress + TrainingAttempt rows first, THEN delete the
+ *  obligations.  Legacy singleton progress rows (obligationId=NULL)
+ *  are untouched. */
 export function cleanupFixtureObligations(fixture: IsolatedFixture): { deleted: number } {
   const script = `
 import { createRequire } from "node:module";
@@ -213,6 +381,13 @@ const require = createRequire("/app/.next/standalone/node_modules/@prisma/client
 const { PrismaClient } = require("@prisma/client");
 const p = new PrismaClient();
 const empId = ${JSON.stringify(fixture.employeeId)};
+// Delete obligation-scoped TrainingProgress FIRST.  Progress has a
+// partial-UNIQUE on (employeeId, courseVersionId) WHERE obligationId
+// IS NULL; without this pre-delete, the obligation.id FK's SetNull
+// cascade would collide when >1 obligation-scoped row exists on the
+// same (employeeId, courseVersionId).  Attempts cascade cleanly (no
+// equivalent unique index) so they're left to the standard teardown.
+await p.trainingProgress.deleteMany({ where: { employeeId: empId, obligationId: { not: null } } });
 const result = await p.trainingObligation.deleteMany({ where: { employeeId: empId } });
 console.log("CLEANED_OBLIGATIONS " + JSON.stringify({ deleted: result.count }));
 await p.$disconnect();

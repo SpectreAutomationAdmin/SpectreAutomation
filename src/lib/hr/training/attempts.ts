@@ -980,9 +980,28 @@ async function loadApplicablePublishedVersion(
 export async function getProgress(
   actor: EmployeePortalPrincipal,
   courseVersionId: string,
+  // EP-TRAIN-5C-3C (2026-11-02) — when an active obligation exists for
+  // this session, the course page MUST read the obligation-scoped
+  // progress row.  Without this, Keep Both employees (two OUTSTANDING
+  // MANUAL_REINSTATE obligations) would see the first obligation's
+  // satisfied progress row (farthestSecond=42) picked by findFirst and
+  // the second lifecycle would short-circuit "in-progress" state +
+  // seed the player at the end of the video — CP1 overlay never
+  // fires.  Callers that don't scope get the legacy singleton row
+  // (obligationId IS NULL), identical to pre-5C-2 behavior for
+  // employees with zero obligations.
+  //
+  // Semantics:
+  //   obligationId omitted:    legacy singleton row (obligationId IS NULL)
+  //   obligationId=string:     the obligation-scoped row
+  //   obligationId=null:       legacy singleton row (explicit)
+  opts: { obligationId?: string | null } = {},
 ): Promise<{ secondsWatched: number; farthestSecond: number; percentComplete: number; videoCompleted: boolean } | null> {
   const row = await prisma.trainingProgress.findFirst({
-    where: { employeeId: actor.employeeId, clubId: actor.clubId, courseVersionId },
+    where: {
+      employeeId: actor.employeeId, clubId: actor.clubId, courseVersionId,
+      obligationId: opts.obligationId ?? null,
+    },
     select: { secondsWatched: true, farthestSecond: true, percentComplete: true },
   });
   if (!row) return null;

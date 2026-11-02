@@ -113,8 +113,20 @@ export default async function EmployeeCoursePage({
     notFound();
   }
 
-  const [progress, attempts, completion, playerState, eligibility, activeObligation] = await Promise.all([
-    getProgress(principal, versionId),
+  // EP-TRAIN-5C-3C (2026-11-02) — resolve the active obligation FIRST
+  // so the progress query that follows can be scoped to the right
+  // row.  Without this, Keep Both employees (two OUTSTANDING
+  // MANUAL_REINSTATE obligations) see the first obligation's SATISFIED
+  // progress row (farthestSecond=42) picked by findFirst → second
+  // lifecycle short-circuits to "in-progress" state + seeds the player
+  // at the end of the video — CP1 overlay never fires.
+  const activeObligation = await resolveActiveObligationForSession({
+    employeeId: principal.employeeId,
+    courseVersionId: versionId,
+  });
+
+  const [progress, attempts, completion, playerState, eligibility] = await Promise.all([
+    getProgress(principal, versionId, { obligationId: activeObligation?.id ?? null }),
     getEmployeeAttemptHistory(principal, versionId),
     // EP-TRAIN-5A-1 (2026-11-01) -- the (employeeId, courseVersionId)
     // UNIQUE is lifted so a MANUAL_REINSTATE / REVISION retake can
@@ -132,15 +144,6 @@ export default async function EmployeeCoursePage({
     // uses.  Only tenant-scoped, applicable, uncompleted, required
     // courses appear.
     resolveEmployeeSchedulingEligibility(principal.employeeId),
-    // EP-TRAIN-5C-3 — FIFO oldest OUTSTANDING obligation on
-    // (employee, courseVersion).  Null when none; drives the new
-    // "Updated Training Required" / "Retake Required" / fresh-attempt
-    // state.  Pre-5C-4 production prisma has 0 obligations ->
-    // every real employee gets null -> UI unchanged.
-    resolveActiveObligationForSession({
-      employeeId: principal.employeeId,
-      courseVersionId: versionId,
-    }),
   ]);
   const initialClearedCheckpointIds = playerState.checkpoints.filter((c) => c.cleared).map((c) => c.id);
 
