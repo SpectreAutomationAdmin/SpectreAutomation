@@ -164,30 +164,33 @@ test.describe("EP-TRAIN-5D-3 :: Revise Training clone integrity", () => {
         expect(v2Cp.maxRetries).toBe(match!.maxRetries);
       }
 
-      // §3.2 All v1 questions cloned with questionType preserved.
+      // §3.2 All v1 questions cloned with questionType + prompt preserved.
+      // Match by prompt (unique in the fixture); the EP-TRAIN-3 Slice 3
+      // fixture creates questions across multiple checkpoint groups,
+      // each with its own `displayOrder` origin, so displayOrder is
+      // NOT globally unique and can't be used as a Map key.
       expect(v2.questions.length).toBe(v1Snapshot.questions.length);
-      const v1QuestionsByOrder = new Map(v1Snapshot.questions.map((q) => [q.displayOrder, q]));
+      const v1QuestionsByPrompt = new Map(v1Snapshot.questions.map((q) => [q.prompt, q]));
       for (const v2Q of v2.questions) {
-        const v1Q = v1QuestionsByOrder.get(v2Q.displayOrder)!;
-        expect(v2Q.questionType).toBe(v1Q.questionType);
-        expect(v2Q.prompt).toBe(v1Q.prompt);
+        const v1Q = v1QuestionsByPrompt.get(v2Q.prompt);
+        expect(v1Q, `v2 question prompt "${v2Q.prompt}" should match a v1 question`).toBeDefined();
+        expect(v2Q.questionType).toBe(v1Q!.questionType);
       }
 
       // §3.3 question.checkpointId remapped (no cross-version leak).
       const v2CheckpointIdSet = new Set(v2.checkpoints.map((c) => c.id));
       const v1CheckpointIdSet = new Set(v1Snapshot.checkpoints.map((c) => c.id));
       for (const v2Q of v2.questions) {
+        const v1Q = v1QuestionsByPrompt.get(v2Q.prompt)!;
         if (v2Q.checkpointId !== null) {
           // Must be a v2 checkpoint id, never a v1 id.
           expect(v2CheckpointIdSet.has(v2Q.checkpointId)).toBe(true);
           expect(v1CheckpointIdSet.has(v2Q.checkpointId)).toBe(false);
           // The corresponding v1 question MUST also have been
           // checkpoint-bound (preserving binding semantics).
-          const v1Q = v1QuestionsByOrder.get(v2Q.displayOrder)!;
           expect(v1Q.checkpointId).not.toBeNull();
         } else {
           // Final-assessment questions stay unbound.
-          const v1Q = v1QuestionsByOrder.get(v2Q.displayOrder)!;
           expect(v1Q.checkpointId).toBeNull();
         }
       }
