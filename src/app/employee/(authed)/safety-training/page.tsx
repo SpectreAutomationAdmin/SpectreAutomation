@@ -169,7 +169,7 @@ export default async function EmployeePortalSafetyTrainingPage() {
     .sort((x, y) => x.title.localeCompare(y.title));
   // Per-course obligation annotation for the dashboard card renderer.
   const obligationStateByCourseId = new Map<string, {
-    label: "Updated Training Required" | "Retake Required" | "Required" | "In Progress" | "Additional Retake Required";
+    label: "Updated Training Required" | "Retake Required" | "Required" | "Initial Training Required" | "In Progress" | "Additional Retake Required";
     multiple: boolean;
   }>();
   for (const a of outstandingRequired) {
@@ -184,6 +184,17 @@ export default async function EmployeePortalSafetyTrainingPage() {
       obligationStateByCourseId.set(a.courseId, { label: "In Progress", multiple });
     } else if (state === "MULTIPLE_OUTSTANDING") {
       obligationStateByCourseId.set(a.courseId, { label: "Additional Retake Required", multiple: true });
+    } else if (
+      // EP-TRAIN-5C-4B-α (2026-11-02) -- distinguish a persisted
+      // OUTSTANDING INITIAL obligation from an inferred INITIAL_REQUIRED
+      // state (no obligation row).  The resolver already filters to
+      // status=OUTSTANDING at the query level, and `activeObligation`
+      // is only non-null when such a row exists; checking
+      // reason==="INITIAL" guards against future state growth.
+      compliance?.activeObligation != null
+      && compliance.activeObligation.reason === "INITIAL"
+    ) {
+      obligationStateByCourseId.set(a.courseId, { label: "Initial Training Required", multiple });
     } else {
       obligationStateByCourseId.set(a.courseId, { label: "Required", multiple });
     }

@@ -614,12 +614,18 @@ function StatePill({ state }: { state: "completed" | "in-progress" | "not-starte
     );
   }
   if (state === "initial-required") {
+    // EP-TRAIN-5C-4B-α (2026-11-02) -- `initial-required` is only
+    // reached when a persisted OUTSTANDING INITIAL obligation exists
+    // for this course version (see the state computation at the top
+    // of this file; the inferred no-obligation case falls through to
+    // "not-started" instead).  Promote to the amber obligation-aware
+    // palette to match RETAKE_REQUIRED / UPDATED_REQUIRED precedent.
     return (
       <span
-        className="inline-flex items-center gap-1.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200 px-2.5 py-0.5 text-xs font-semibold"
+        className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold"
         data-testid="portal-course-state-pill"
       >
-        Not Started
+        Initial Training Required
       </span>
     );
   }
@@ -736,6 +742,52 @@ function TrainingStatusPanel({
             <MetricRow icon={<CalendarIcon />} label="Previously completed" value={formatCompleted(completion.completedAt)} />
           </>
         )}
+        <a
+          href="#course-video"
+          className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-club-green-800 hover:bg-club-green-900 text-white text-sm font-semibold px-4 py-2.5"
+          data-testid="portal-course-start"
+        >
+          <PlayIcon /> Start Training
+        </a>
+      </aside>
+    );
+  }
+  // EP-TRAIN-5C-4B-α (2026-11-02) — "Initial Training Required" variant.
+  // Only reached when a persisted OUTSTANDING INITIAL obligation exists
+  // (the inferred no-obligation case produces state="not-started", not
+  // "initial-required").  Mirrors the Retake / Updated panel pattern
+  // minus the "previous completion" metrics (an INITIAL obligation
+  // implies no completion exists).
+  if (state === "initial-required" && activeObligation) {
+    return (
+      <aside
+        className="h-fit rounded-xl border border-amber-200 bg-amber-50 p-6"
+        data-testid="portal-course-status-panel"
+        data-variant="initial-required"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-9 w-9 rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+            <CalendarIcon />
+          </div>
+          <h2 className="font-serif text-xl text-club-ink">Initial Training Required</h2>
+        </div>
+        <p className="mt-3 text-sm text-stone-700 leading-relaxed">
+          Your club requires you to complete this training. Start the
+          course to meet your current training requirement.
+        </p>
+        {activeObligation.reasonNote && (
+          <p className="mt-2 text-xs text-stone-600 italic" data-testid="portal-course-status-reason">
+            {activeObligation.reasonNote.length > 140
+              ? `${activeObligation.reasonNote.slice(0, 140).trim()}…`
+              : activeObligation.reasonNote}
+          </p>
+        )}
+        {activeObligation.dueAt && (
+          <p className="mt-2 text-xs text-stone-600" data-testid="portal-course-status-due">
+            Please complete by {formatCompleted(activeObligation.dueAt)}.
+          </p>
+        )}
+        <div className="my-5 h-px bg-amber-200" />
         <a
           href="#course-video"
           className="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-md bg-club-green-800 hover:bg-club-green-900 text-white text-sm font-semibold px-4 py-2.5"

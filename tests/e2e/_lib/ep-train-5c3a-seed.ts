@@ -106,12 +106,15 @@ process.exit(0);
   return JSON.parse(line.slice(line.indexOf("{")));
 }
 
-/** Seed an OUTSTANDING TrainingObligation on the fixture's current
- *  PUBLISHED course version.  `reason` drives the UI label. */
+/** Seed a TrainingObligation on the fixture's current PUBLISHED
+ *  course version.  `reason` drives the UI label; `status` lets the
+ *  5C-4B-α scenarios exercise SATISFIED / CANCELED / SUPERSEDED
+ *  variants that must NOT trigger the new obligation-aware UI. */
 export function seedObligation(
   fixture: IsolatedFixture,
   opts: {
     reason: "INITIAL" | "REVISION" | "MANUAL_REINSTATE";
+    status?: "OUTSTANDING" | "SATISFIED" | "CANCELED" | "SUPERSEDED";
     reasonNote?: string;
     dueAt?: Date | null;
     issuanceKeySuffix?: string;
@@ -119,6 +122,7 @@ export function seedObligation(
 ): { obligationId: string } {
   const reasonNote = (opts.reasonNote ?? "").replace(/"/g, '\\"');
   const dueAtIso = opts.dueAt ? opts.dueAt.toISOString() : null;
+  const status = opts.status ?? "OUTSTANDING";
   const script = `
 import { createRequire } from "node:module";
 const require = createRequire("/app/.next/standalone/node_modules/@prisma/client/");
@@ -136,7 +140,7 @@ const obligation = await p.trainingObligation.create({
     issuedByUserId: null,
     issuedAt: new Date(),
     dueAt: ${dueAtIso ? `new Date("${dueAtIso}")` : "null"},
-    status: "OUTSTANDING",
+    status: ${JSON.stringify(status)},
     issuanceKey: "test-5c3a:" + ${JSON.stringify(opts.reason)} + ":" + ${JSON.stringify(opts.issuanceKeySuffix ?? "")} + ":" + Math.random().toString(36).slice(2, 10),
   },
 });
