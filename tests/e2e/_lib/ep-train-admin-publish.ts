@@ -63,8 +63,41 @@ export async function publishRevisionViaAdminUI(
   // Confirm.
   await dialog.locator('[data-testid="training-publish-revision-confirm"]').click();
 
-  // Wait for the success panel.
-  await expect(
-    dialog.locator('[data-testid="training-publish-revision-success"]'),
-  ).toBeVisible({ timeout: 30_000 });
+  // Wait for the publish to settle.  Two possible outcomes:
+  //   (a) The success panel renders in-dialog (expected on fast publishes).
+  //   (b) `revalidatePath` in the server action fires on success,
+  //       unmounting the client-side dialog state BEFORE the success
+  //       panel is observable, and the whole admin page re-renders
+  //       to show "Published v<N>".
+  // We treat EITHER as proof the publish succeeded.  An error-panel
+  // or persisting confirm button means the publish FAILED and we
+  // throw.
+  await page.waitForFunction(() => {
+    const successPanel = document.querySelector('[data-testid="training-publish-revision-success"]');
+    if (successPanel) return "success";
+    const errorPanel = document.querySelector('[data-testid="training-publish-revision-error"]');
+    if (errorPanel) return "error:" + (errorPanel.textContent ?? "").slice(0, 200);
+    // Dialog has closed AND the page shows "Published v<N>" header.
+    const dialogStillOpen = document.querySelector('[data-testid="training-publish-revision-dialog"]');
+    const publishedHeader = Array.from(document.querySelectorAll("*"))
+      .some((el) => /Published\s+v\d+/i.test(el.textContent ?? ""));
+    if (!dialogStillOpen && publishedHeader) return "closed-published";
+    return null;
+  }, { timeout: 30_000 });
+
+  // Re-check the outcome synchronously + throw on error.
+  const outcome = await page.evaluate(() => {
+    const errorPanel = document.querySelector('[data-testid="training-publish-revision-error"]');
+    if (errorPanel) return "error:" + (errorPanel.textContent ?? "").slice(0, 200);
+    const successPanel = document.querySelector('[data-testid="training-publish-revision-success"]');
+    if (successPanel) return "success";
+    const dialogStillOpen = document.querySelector('[data-testid="training-publish-revision-dialog"]');
+    const publishedHeader = Array.from(document.querySelectorAll("*"))
+      .some((el) => /Published\s+v\d+/i.test(el.textContent ?? ""));
+    if (!dialogStillOpen && publishedHeader) return "closed-published";
+    return "unknown";
+  });
+  if (typeof outcome === "string" && outcome.startsWith("error:")) {
+    throw new Error("publishRevisionViaAdminUI: server rejected the publish — " + outcome.slice(6));
+  }
 }

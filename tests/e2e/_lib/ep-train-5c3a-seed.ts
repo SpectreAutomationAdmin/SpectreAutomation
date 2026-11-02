@@ -29,16 +29,31 @@ const FLY_APP = "spectre-staging";
 
 function runSshScript(script: string, env: Record<string, string> = {}): string {
   const b64 = Buffer.from(script).toString("base64");
-  const tmp = `/tmp/ep5c3a-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}.mjs`;
   const envExports = Object.entries(env)
     .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
     .join(" ");
-  const remoteCmd = `/bin/sh -c "echo ${b64} | base64 -d > ${tmp} && cd /app && ${envExports} node ${tmp}; rc=$?; rm -f ${tmp}; exit $rc"`;
-  return execFileSync(
-    FLYCTL,
-    ["ssh", "console", "--app", FLY_APP, "-C", remoteCmd],
-    { encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
-  );
+  // Retry once on transient Fly control-plane errors (SSH tunnel
+  // build failures: "can't build tunnel for ...: ... unexpected EOF").
+  // These are infrastructure noise, not application bugs.  Fresh tmp
+  // path per attempt so no partial-write leftover is read.
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const tmp = `/tmp/ep5c3a-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}.mjs`;
+    const remoteCmd = `/bin/sh -c "echo ${b64} | base64 -d > ${tmp} && cd /app && ${envExports} node ${tmp}; rc=$?; rm -f ${tmp}; exit $rc"`;
+    try {
+      return execFileSync(
+        FLYCTL,
+        ["ssh", "console", "--app", FLY_APP, "-C", remoteCmd],
+        { encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024 },
+      );
+    } catch (e) {
+      const msg = String((e as { stderr?: unknown; message?: unknown }).stderr ?? (e as { message?: unknown }).message ?? e);
+      const isTransient = /can't build tunnel|unexpected EOF|context deadline exceeded|dial tcp/i.test(msg);
+      lastErr = e;
+      if (!isTransient || attempt === 2) throw e;
+    }
+  }
+  throw lastErr;
 }
 
 /** Seed a passing historical completion against the current PUBLISHED

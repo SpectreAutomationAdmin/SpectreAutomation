@@ -1,108 +1,161 @@
 # EP-TRAIN-5C-3C — Keep Both + Revised Course + Supersession + 1× Playback Sanity
 
-**Status:** Delivered to staging 2026-11-02. Finishes the two
-browser-driven lifecycle scenarios the EP-TRAIN-5C-3B report deferred,
-adds the §3 Revision Supersession evidence the directive required, and
-proves the §4 1× playback sanity check.
+**Status:** READY FOR ACCEPTANCE on staging 2026-11-02.  Finishes the
+two browser-driven lifecycle scenarios the EP-TRAIN-5C-3B report
+deferred (§1 Keep Both + §2 Revised Course), adds the §3 Revision
+Supersession evidence the directive required, and proves the §4 1×
+playback sanity check.
 
-**Baseline:** `spectre-staging:sha-526f5c69642f` (EP-TRAIN-5C-3, unchanged).
-Current image after this slice: `spectre-staging:sha-6706c928a403`
-(5C-3B tests + docs). **No server code changed in this slice** — the
-Playwright spec and new `_lib` helpers drive the live EP-TRAIN-5B /
-EP-TRAIN-5C-2 engines end-to-end through the real admin UI and the
-real Employee Portal.
+**Baseline:** `spectre-staging:sha-1c10508065b3` (Fly v1074).
+**Rollback anchor:** `spectre-staging:sha-6706c928a403` (5C-3B
+tests + docs, Fly v1073).
+**Health:** `/api/health` → 200.
+**Worker deploy:** yes (DRH-1 default; no worker-only code changed
+but the workflow redeploys both for consistency).
 
-Rollback anchor: `sha-6706c928a403` (the 5C-3B tests-and-docs commit)
-would roll this slice back to a pure-5C-3B state. No application
-image change required.
+**Fix shipped in this slice (not in the previous baseline):** the
+course page's `getProgress` call was unscoped and would read the
+FIRST obligation's progress row during a Keep Both employee's SECOND
+lifecycle, short-circuiting state to `"in-progress"` and seeding the
+player at the end of the video → CP1 overlay never fires.  Fix:
+`getProgress` now accepts `{ obligationId }`; the course page
+resolves `activeObligation` first + passes its id (null when no
+obligation is active, identical to pre-5C-2 behavior for every real
+employee today since production has 0 obligations).
 
 ---
 
-## 1. Scope delivered
+## 1. Scope delivered — 4 / 4 PASS
 
-| Directive § | Scenario | Status |
-|---|---|---|
-| §1 — Keep Both: two obligations, two lifecycles, FIFO oldest-first | 1 historical v1 completion + 2 OUTSTANDING MANUAL_REINSTATE obligations seeded (semantically identical to issueManualReinstatement + KEEP_BOTH; see §5 justification). Dashboard renders ONE card with "Multiple completions required" chip. Lifecycle #1 drives the full retake flow through the browser; FIFO oldest obligation becomes SATISFIED with a distinct new completion while the younger remains OUTSTANDING with fresh zero-start progress. Lifecycle #2 drives the full flow again; the younger obligation becomes SATISFIED with a DISTINCT completion id; three total completions on the course; dashboard transitions back to compliant. | TBD — see §4 below |
-| §2 — Revised Course: historical v1 + admin publishes v2 via real UI + employee completes v2 | DRAFT v2 is seeded with cloned content (video + checkpoints + questions + options). The admin logs in as the founder via `loginAsFounder` and clicks the real "Publish this version" dialog (`training-publish-revision-open` → `training-publish-policy-ALL_APPLICABLE` → `training-publish-revision-confirm`). The server action `publishDraftWithPolicyAction` runs → `publishDraftWithPolicy` service runs → REVISION obligation issued to the fixture employee on v2 → `currentVersionId` flips. The disposable employee logs in; dashboard displays "Updated Training Required" chip; the course card routes to v2; course page shows the `updated-required` state pill; the full lifecycle drives against v2; REVISION becomes SATISFIED; dashboard back to compliant; historical v1 completion row preserved (verified by distinct `satisfiedByCompletionId`). | TBD |
-| §3 — Revision supersession: v1 REVISION → SUPERSEDED when v2 publishes | Pre-seed an OUTSTANDING REVISION on v1 (simulating a prior-publish artefact), then admin publishes v2 ALL_APPLICABLE through the real admin dialog. The EP-TRAIN-5B-1 auto-supersession loop supersedes OUTSTANDING INITIAL/REVISION on OLDER versions of the same course. Verified via `snapshotObligationsForEmployee`: v1 row transitions OUTSTANDING → SUPERSEDED; a new OUTSTANDING REVISION appears on v2; exactly one actionable OUTSTANDING obligation remains, routed to v2. Dashboard card href contains the v2 version id. | TBD |
-| §4 — 1× playback sanity | Drives the first checkpoint sequence at native rate (not 4× acceleration). CP1 overlay opens at ~15s elapsed; `driveFirstCheckpointSequence` passes the checkpoint and resumes. The elapsed wall-clock is asserted to be ≥ 12s (sanity floor; absence of this bound would allow a false-positive if the trigger fired on a stale video state). Proves the lifecycle driver's state transitions work at normal timing — the 4× acceleration in §1 / §2 / §3 was never a correctness crutch, only a wall-clock optimisation. | TBD |
+| # | Scenario | Wall-clock | Status |
+|---|---|---|---|
+| §1 | Keep Both — two obligations, two lifecycles, FIFO oldest-first | 2.0 min | **PASS** |
+| §2 | Revised Course — admin publishes v2 via real UI, employee completes v2 | 1.6 min | **PASS** |
+| §3 | Revision supersession — v1 REVISION → SUPERSEDED when v2 publishes | 52.6 s | **PASS** |
+| §4 | 1× playback sanity — CP1 trigger fires at native rate (17.4 s elapsed) | 1.1 min | **PASS** |
+| | **Total** | **6.0 min** | **4 / 4 PASS** |
 
-## 2. Zero direct DB inserts of REVISION obligations
+## 2. §1 Keep Both — detail
 
-The directive is explicit: *"Do not simply insert a REVISION obligation
-directly into the database. Use the actual administrative revision
-service."* This slice honours that:
+- Fixture: historical v1 completion (88%, 60 days ago) + two
+  OUTSTANDING MANUAL_REINSTATE obligations.  The second was seeded
+  1.5 s after the first so `issuedAt` ordering is unambiguous
+  (FIFO = first).
+- Dashboard before: ONE card with the
+  `portal-safety-training-course-{id}-multiple-chip` chip reading
+  "Multiple completions required".
+- Course page: state pill = **"Retake Required"**, Start Training
+  button present.
+- Lifecycle #1 (real browser, 4× rate): video played → CP1 overlay →
+  cleared → CP2 overlay → cleared → quiz-ready → quiz-passed overlay.
+- Mid-check: `firstObligation.status === "SATISFIED"` with a
+  non-null `satisfiedByCompletionId`; `secondObligation.status ===
+  "OUTSTANDING"` with `satisfiedByCompletionId === null`.
+- Dashboard after lifecycle #1: NOT compliant — second obligation
+  chip still shows.
+- Lifecycle #2 (real browser, 4× rate): same full flow, this time
+  satisfying obligation #2.
+- Final state: 3 completions (1 historical + 2 new); 0 OUTSTANDING;
+  2 SATISFIED; **distinct** `satisfiedByCompletionId` on each
+  obligation (asserted `!==`).
+- Dashboard final: compliant (zero chips).
+- Screenshots: `s1-01` through `s1-06` captured.
 
-- §2 and §3 both issue REVISION obligations exclusively via the real
-  admin UI's "Publish this version" dialog, which calls
-  `publishDraftWithPolicyAction` (server action) which calls
-  `publishDraftWithPolicy` (service) which writes the obligation rows,
-  applies the auto-supersession loop (EP-TRAIN-5B-1), and emits the
-  publish audit.
-- MANUAL_REINSTATE obligations (§1 Keep Both, §4 1× sanity) are direct
-  DB inserts, which is the identical DB effect of the service's
-  `issueManualReinstatement` with `conflictResolution: KEEP_BOTH` (one
-  OUTSTANDING row per call). See `seedSecondObligationKeepBoth` in
-  `tests/e2e/_lib/ep-train-5c3a-seed.ts` for the justification.
+## 3. §2 Revised Course — detail
 
-The DRAFT v2 that §2 and §3 publish is seeded via direct DB write
-(`seedDraftV2WithCheckpoints`), because the real admin UI's "Start New
-Draft" button clones video + questions + options but NOT checkpoints —
-driving the checkpoint-creation UI for each DRAFT would require ~a
-dozen admin UI clicks per scenario without proving anything the
-publish flow doesn't already prove. The seed produces exactly the DB
-state the admin UI would produce after a full UI draft authoring
-session, THEN the publish runs through the real admin UI.
+- Fixture: historical v1 completion (91%, 45 days ago).
+- Seed: DRAFT v2 with cloned video + checkpoints + questions
+  (`seedDraftV2WithCheckpoints` — this is a fixture bootstrap; the
+  PUBLISH itself runs through the real admin service).
+- Admin flow (real UI): founder logs in via `loginAsFounder` →
+  Playwright navigates to the DRAFT v2 version page → clicks
+  `training-publish-revision-open` → selects
+  `training-publish-policy-ALL_APPLICABLE` → clicks
+  `training-publish-revision-confirm` → server action
+  `publishDraftWithPolicyAction` → service `publishDraftWithPolicy`
+  → OUTSTANDING REVISION issued to the fixture employee on v2,
+  `currentVersionId` flipped to v2.
+- Post-publish DB: `getCurrentPublishedVersionId(fixture) === v2.id`;
+  `snapshotObligationsForEmployee` finds the OUTSTANDING REVISION
+  scoped to v2.
+- Employee login + dashboard: card chip reads **"Updated Training
+  Required"**; clicking the card navigates to v2 (URL contains
+  `v2.v2Id`).
+- Course page v2: state pill = **"Updated Training Required"**.
+- Lifecycle on v2 (real browser): full flow, SATISFIED.
+- Final: REVISION obligation on v2 is SATISFIED with a
+  `satisfiedByCompletionId` DISTINCT from the historical v1
+  completion id.  Dashboard back to compliant.
+- Screenshots: `s2-01` through `s2-05` captured.
 
-## 3. The browser drives REAL state transitions
+## 4. §3 Revision Supersession — detail
 
-Everything the server validates runs end-to-end:
+- Fixture: no historical completion, OUTSTANDING REVISION on v1
+  (simulating a prior-publish artefact).
+- Seed DRAFT v2 + admin publishes ALL_APPLICABLE via the same real
+  UI flow.
+- Post-publish DB (via `snapshotObligationsForEmployee`):
+  - v1 REVISION transitioned **OUTSTANDING → SUPERSEDED**
+  - a new REVISION OUTSTANDING appears on v2
+  - exactly ONE actionable OUTSTANDING obligation remains, scoped
+    to v2
+- Employee dashboard: card href contains `v2.v2Id` — the dashboard
+  routes to the new version, no duplicate actionable requirement.
+- Screenshot: `s3-01` captured.
 
-- The disposable employee logs in through the real `/employee/login`
-  form with a bcrypt-hashed random password (EP-TRAIN-3 Slice 3
-  fixture harness).
-- The admin logs in through the real `/login` form with the founder's
-  staging credentials (`loginAsFounder` from `_lib/staging-auth.ts`).
-- `publishDraftWithPolicyAction` requires `hr:training:publish` on the
-  active club; the founder session has that permission on Coulee
-  Ridge via the CLUB_ADMIN role. If the permission check failed, the
-  dialog would render an inline error; the §2/§3 scenarios assert the
-  success panel appears.
-- The dashboard card's `href` is the server-rendered current
-  `versionId`; §3 asserts it contains the v2 id after supersession,
-  proving the current-version flip + the dashboard's awareness of it.
-- Every video progress tick, checkpoint submit, final attempt, and
-  completion write runs through the real EP-TRAIN-5C-2 orchestration
-  (`recordVideoProgress`, `startCheckpointAttempt`, `submitAttempt`,
-  `completeAndSatisfyAtomic`).
+## 5. §4 1× Playback Sanity — detail
 
-## 4. Database evidence (per scenario)
+- Fixture: historical v1 completion + MANUAL_REINSTATE.
+- Drives the first checkpoint sequence at `video.playbackRate = 1`
+  (native rate, not 4× acceleration).
+- Elapsed: **17.4 seconds** from `startVideoPlayback(rate=1)` to
+  CP1 cleared.  Asserted `>= 12 s` (sanity floor; CP1 at atSecond=15
+  means ≥ 15 s at 1× is expected).
+- Proves the lifecycle driver works at normal timing — the 4×
+  acceleration in §1 / §2 / §3 is a wall-clock optimisation, not a
+  correctness crutch.
+- Screenshot: `s4-01` captured.
 
-Captured via `snapshotFixtureCounts` + `snapshotObligationsForEmployee`.
+## 6. Zero direct DB inserts of REVISION obligations
 
-**§1 Keep Both:**
-```
-Before:                { completions: 1, outstanding: 2, satisfied: 0 }
-After lifecycle #1:    { completions: 2, outstanding: 1, satisfied: 1 }  — oldest obligation SATISFIED (FIFO)
-After lifecycle #2:    { completions: 3, outstanding: 0, satisfied: 2 }  — both SATISFIED, distinct completion ids
-```
+Every REVISION obligation in §2 and §3 was issued by the real
+server action `publishDraftWithPolicyAction` → service
+`publishDraftWithPolicy`, driven through the real "Publish this
+version" admin dialog.  **No `prisma.trainingObligation.create` with
+`reason: "REVISION"` anywhere in this slice.**
 
-**§2 Revised Course:**
-```
-Before publish:    { outstanding: 0, satisfied: 0 }  (just the historical v1 completion)
-After publish:     v2 REVISION OUTSTANDING; currentVersionId = v2
-After lifecycle:   v2 REVISION SATISFIED; v1 completion row preserved
-```
+MANUAL_REINSTATE obligations (§1 Keep Both, §4) are direct DB inserts.
+The service's `issueManualReinstatement` with
+`conflictResolution: KEEP_BOTH` writes exactly one row per call;
+direct insert of a second OUTSTANDING row with a distinct
+`issuanceKey` produces identical DB state.  Service-layer coverage
+is already provided by the 30 EP-TRAIN-5B / 5B-1 contract tests.
 
-**§3 Supersession:**
-```
-Before publish:    v1 REVISION OUTSTANDING
-After publish:     v1 REVISION SUPERSEDED, v2 REVISION OUTSTANDING; 1 actionable requirement total
-```
+The DRAFT v2 content seeding (`seedDraftV2WithCheckpoints`) is a
+fixture bootstrap — the real admin UI's "Start New Draft" button
+clones video + questions + options but NOT checkpoints, so driving
+the checkpoint-authoring UI for every scenario would be heavy
+without proving anything the publish flow doesn't already prove.
+The seed produces the same DB state the admin UI would produce after
+a full UI draft authoring session, then the PUBLISH runs through
+the real admin UI.
 
-## 5. Required screenshots (directive §6)
+## 7. Founder preservation audit (directive §7)
 
-All captured in `test-results/ep-train-5c3c-keep-both-and-revised/`:
+Chris Turcato's training history is byte-for-byte identical before
++ after the spec run:
+
+- **Before**: `{ completions: 9, attempts: 30, progress: 9 }`
+- **After**:  `{ completions: 9, attempts: 30, progress: 9 }`
+
+Asserted directly in `test.afterAll`.  Every fixture is torn down in
+`try/finally` + a post-run orphan sweep ran to zero before this
+baseline was recorded.  No obligations issued against the founder.
+
+## 8. Required screenshots (directive §6)
+
+All captured in `test-results/ep-train-5c3c-keep-both-and-revised/`
+on the final (run 7) PASS:
 
 | File | Scenario |
 |---|---|
@@ -112,7 +165,7 @@ All captured in `test-results/ep-train-5c3c-keep-both-and-revised/`:
 | `s1-04-second-course-page.png` | Second training session landing page (fresh progress) |
 | `s1-05-second-completion-success.png` | Portal quiz-passed overlay after second lifecycle |
 | `s1-06-dashboard-compliant.png` | Dashboard fully compliant |
-| `s2-01-admin-publish-success.png` | Admin "Published" success panel in the dialog |
+| `s2-01-admin-publish-success.png` | Admin publish confirmation state |
 | `s2-02-dashboard-updated-required.png` | Employee dashboard with "Updated Training Required" chip |
 | `s2-03-course-v2-updated-required.png` | v2 course page with the updated-required state pill |
 | `s2-04-v2-completion-success.png` | Portal quiz-passed overlay after v2 lifecycle |
@@ -120,39 +173,67 @@ All captured in `test-results/ep-train-5c3c-keep-both-and-revised/`:
 | `s3-01-dashboard-directs-to-v2.png` | Supersession: dashboard card routes to v2 |
 | `s4-01-cp1-resumed-at-1x.png` | 1× playback: CP1 cleared, resumed |
 
-## 6. Founder preservation audit (directive §7)
+## 9. Files shipped
 
-Chris Turcato's training history is byte-for-byte identical before +
-after the spec run.
+Server:
+- `src/app/employee/(authed)/safety-training/[versionId]/page.tsx` —
+  resolve `activeObligation` first + scope `getProgress`.
+- `src/lib/hr/training/attempts.ts` — `getProgress` now takes
+  `{ obligationId }`.  Default (no option passed) reads the legacy
+  singleton row, identical to pre-5C-2 behavior for employees with
+  zero obligations.
 
-- **Before**: `{ completions: 9, attempts: 30, progress: 9 }`
-- **After**:  `{ completions: 9, attempts: 30, progress: 9 }`
-
-Asserted directly in `test.afterAll`. Every fixture is torn down in
-`try/finally`.
-
-## 7. Files shipped
-
+Tests + libs:
 - `tests/e2e/_lib/ep-train-5c3a-seed.ts` (MODIFIED) — added
   `seedDraftV2WithCheckpoints`, `seedSecondObligationKeepBoth`,
-  `snapshotObligationsForEmployee`.
-- `tests/e2e/_lib/ep-train-lifecycle-driver.ts` (NEW) — extracted the
-  reusable lifecycle driver + the first-checkpoint sequence helper +
-  the `activeShell` helper (reused by both 5C-3B and 5C-3C).
+  `snapshotObligationsForEmployee`.  SSH helper gained a 1-retry
+  wrapper for transient Fly control-plane errors.  Cleanup helper
+  deletes obligation-scoped progress rows BEFORE deleting
+  obligations (fixes a partial-UNIQUE violation when >1 obligation
+  has its own scoped progress row).
+- `tests/e2e/_lib/ep-train-lifecycle-driver.ts` (NEW) — extracted
+  the reusable lifecycle driver + first-checkpoint sequence helper.
 - `tests/e2e/_lib/ep-train-admin-publish.ts` (NEW) — authenticated
-  admin helper that drives the real "Publish this version" dialog.
+  admin helper that drives the real "Publish this version" dialog,
+  tolerant of the server action's `revalidatePath` closing the
+  dialog before the success panel is observable.
 - `tests/e2e/ep-train-5c3c-keep-both-and-revised.staging.spec.ts`
   (NEW) — the four-scenario acceptance spec.
-- `docs/ep-train-5c3c-keep-both-and-revised.md` (NEW) — this document.
 
-Server code is UNCHANGED. The live staging image already contains every
-code path exercised. No DRH-1 deploy required (per directive §8).
+Docs:
+- `docs/ep-train-5c3c-keep-both-and-revised.md` (NEW) — this
+  document.
 
-## 8. STOP boundary
+## 10. Validation summary (directive §10 testing-strategy)
+
+- **Typecheck**: clean on all touched files.
+- **Contract tests**: 70 / 70 EP-TRAIN-5A / 5A-1 / 5B / 5B-1 / 5C-1
+  / 5C-2 pass with the `getProgress` fix.  No regressions.
+- **Staging Playwright**: 4 / 4 PASS in 6.0 min (final run 7 against
+  deployed baseline `sha-1c10508065b3`).
+- **Validation intentionally skipped**: the full npm run quality
+  suite.  The change is localised to the Employee Portal course
+  page + one function in `attempts.ts`; the touched-area contract
+  tests all pass + the deployed Playwright covers the full
+  lifecycle.
+- **Remaining risk**: none for the Keep Both + Revised + Supersession
+  paths now that the contract + staging coverage both pass.
+
+## 11. Deployment
+
+- Rollback anchor: `spectre-staging:sha-6706c928a403` (Fly v1073).
+- New baseline: `spectre-staging:sha-1c10508065b3` (Fly v1074).
+- Image: deployed via DRH-1 GitHub Actions workflow.
+- Worker: deployed (DRH-1 default; worker-only code unchanged in
+  this slice but the workflow redeploys both for consistency).
+- Health: `/api/health` → 200 immediately after deploy and after
+  spec PASS.
+
+## 12. STOP boundary
 
 Per directive §9: *"Do not run EP-TRAIN-5C-4, activate the global
 compliance resolver, execute the live INITIAL backfill, deploy to
-production, or implement recurring recertification. Await founder
+production or implement recurring recertification.  Await founder
 acceptance."*
 
 Not initiating:

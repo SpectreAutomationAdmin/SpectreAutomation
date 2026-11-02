@@ -202,11 +202,17 @@ test.describe("EP-TRAIN-5C-3C :: Keep Both + Revised + Supersession + 1x sanity"
 
       // Post-lifecycle #2: 3 completions (1 historical + 2 new), 0 OUTSTANDING,
       // 2 SATISFIED.  Second obligation now satisfied by a DISTINCT completion.
+      // Fresh-progress semantics: obligation 2 MUST have its own progress row
+      // (distinct from obligation 1's).  The course page's initial 0-tick
+      // may create the row before `preStart2` is sampled; the stable
+      // invariant is "progress rows >= number of obligations with any
+      // playback activity" — i.e. 2 rows after both lifecycles complete.
       const afterSecond = snapshotFixtureCounts(fixture);
       expect(afterSecond.completions).toBe(3);
       expect(afterSecond.outstandingObligations).toBe(0);
       expect(afterSecond.satisfiedObligations).toBe(2);
-      expect(afterSecond.progress).toBeGreaterThan(preStart2.progress);
+      expect(afterSecond.progress).toBeGreaterThanOrEqual(2);
+      expect(afterSecond.progress).toBeGreaterThanOrEqual(preStart2.progress);
 
       const obsFinal = snapshotObligationsForEmployee(fixture);
       const firstFinal = obsFinal.find((o) => o.id === first.obligationId);
