@@ -43,10 +43,14 @@
 //         works.
 
 import { useState } from "react";
-import {
-  validateTrainingQuestion,
-  type PipelineResult,
-  type TrainingQuestionDraftLiteV1,
+// EP-TRAIN-6D-4F (2026-11-04) — type-only imports from the AI-generation
+// module to avoid pulling `node:crypto` into the client bundle. The
+// validator is NEVER called in the browser; the fixture page's server
+// component pre-computes every fixture's validation and passes the
+// results in via `initialValidations`.
+import type {
+  PipelineResult,
+  TrainingQuestionDraftLiteV1,
 } from "@/lib/training/ai-generation";
 import { evaluateApproval, type ValidationStatus } from "./approval-guard";
 import { FIXTURES, COURSE_CONTEXT, type Fixture, type FixtureRevalidationOutcome } from "./fixtures";
@@ -108,26 +112,29 @@ export interface ReviewWorkspaceProps {
   /** Force a non-happy-path state for screenshot capture / documentation.
    *  Overrides any `initial` selection when set. */
   readonly demoState?: DemoState;
+  /** EP-TRAIN-6D-4F — pre-computed initial validations keyed by fixture
+   *  label. The fixture page's server component invokes the validator
+   *  (which imports `node:crypto`) once per fixture at request time and
+   *  passes the results here. When absent (e.g. a Storybook-style
+   *  preview harness), every fixture starts with `null` validation. */
+  readonly initialValidations?: Readonly<Record<string, PipelineResult>>;
 }
 
-export default function ReviewWorkspace({ initial, demoState }: ReviewWorkspaceProps = {}) {
-  // Initialise local state. Every fixture gets its initial validation
-  // computed once at mount; subsequent edits mark it stale.
+export default function ReviewWorkspace({ initial, demoState, initialValidations }: ReviewWorkspaceProps = {}) {
+  // Initialise local state. Each fixture gets its server-computed
+  // validation from `initialValidations`; subsequent edits mark it
+  // stale.
   const [selectedLabel, setSelectedLabel] = useState<string>(
     initial?.selectedLabel ?? FIXTURES[0]?.label ?? "",
   );
   const [reviewStates, setReviewStates] = useState<Record<string, ReviewState>>(() => {
     const out: Record<string, ReviewState> = {};
     for (const f of FIXTURES) {
-      const initRes = validateTrainingQuestion({
-        draft: f.draft,
-        grounding: f.grounding,
-        authorization: f.authorization,
-      });
+      const initRes = initialValidations?.[f.label] ?? null;
       out[f.label] = {
         disposition: "pending",
         latestValidation: initRes,
-        validationStatus: "complete",
+        validationStatus: initRes ? "complete" : "pending",
       };
     }
     if (initial?.reviewStates) {

@@ -13,6 +13,11 @@
 import { redirect } from "next/navigation";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import ReviewWorkspace from "@/components/ai-training/ReviewWorkspace";
+// EP-TRAIN-6D-4F — pre-compute each fixture's validation on the server
+// so the client bundle never pulls in the Node-only `node:crypto`
+// dependency that the validator chain uses for content-hashing.
+import { validateTrainingQuestion, type PipelineResult } from "@/lib/training/ai-generation";
+import { FIXTURES } from "@/components/ai-training/fixtures";
 
 export const metadata = {
   title: "AI-assisted training · manager review",
@@ -21,5 +26,18 @@ export const metadata = {
 export default async function AiTrainingReviewPage() {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
-  return <ReviewWorkspace />;
+
+  // Compute every fixture's validation once per request on the server.
+  // `validateTrainingQuestion` reaches `node:crypto` which cannot be
+  // bundled for client components.
+  const initialValidations: Record<string, PipelineResult> = {};
+  for (const f of FIXTURES) {
+    initialValidations[f.label] = validateTrainingQuestion({
+      draft: f.draft,
+      grounding: f.grounding,
+      authorization: f.authorization,
+    });
+  }
+
+  return <ReviewWorkspace initialValidations={initialValidations} />;
 }
