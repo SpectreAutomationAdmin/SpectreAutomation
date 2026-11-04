@@ -577,6 +577,15 @@ model Club {
   // SIGNUP-2 Phase 2H (2026-10-26) — post-activation lifecycle
   // transition log (suspension + reinstatement + remediation).
   lifecycleTransitions TenantLifecycleTransition[]
+
+  // EP-TRAIN-6D-4B (2026-11-04) — AI training review persistence
+  // (Postgres mirror added by 6D-4E preflight).
+  aiGenerationRuns          TrainingQuestionAiGenerationRun[]
+  aiQuestionDrafts          TrainingQuestionAiDraft[]
+  aiQuestionValidations     TrainingQuestionAiValidation[]
+  aiQuestionReviews         TrainingQuestionAiReview[]
+  aiQuestionStateTransitions TrainingQuestionAiStateTransition[]
+  aiQuestionOperationKeys   TrainingQuestionAiOperationKey[]
 }
 
 // ---------------------------------------------------------------------
@@ -794,6 +803,11 @@ model User {
   // sentinel for Users created by a Phase 2G job whose
   // authorisation was invalidated.  Null = normal user.
   provisioningCancelledAt DateTime?
+
+  // EP-TRAIN-6D-4B (2026-11-04) — AI review workflow
+  // (Postgres mirror added by 6D-4E preflight).
+  aiTrainingQuestionReviews       TrainingQuestionAiReview[]
+  aiTrainingQuestionStateChanges  TrainingQuestionAiStateTransition[]
 }
 
 // -------------------------------------------------------------------
@@ -12830,6 +12844,11 @@ model TrainingCourse {
   // but ALSO carry a courseId for scalable per-course rollups.
   obligations TrainingObligation[]
 
+  // EP-TRAIN-6D-4B (2026-11-04) — AI review (Postgres mirror added
+  // by 6D-4E preflight).
+  aiGenerationRuns TrainingQuestionAiGenerationRun[]
+  aiQuestionDrafts TrainingQuestionAiDraft[]
+
   @@unique([clubId, code])
   @@index([clubId])
   @@index([clubId, category])
@@ -12877,6 +12896,11 @@ model TrainingCourseVersion {
   checkpoints TrainingCheckpoint[]
   // EP-TRAIN-5A (2026-11-01) -- obligations keyed to this exact version.
   obligations TrainingObligation[]
+
+  // EP-TRAIN-6D-4B (2026-11-04) — AI review (Postgres mirror added
+  // by 6D-4E preflight).
+  aiGenerationRuns TrainingQuestionAiGenerationRun[]
+  aiQuestionDrafts TrainingQuestionAiDraft[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -16096,4 +16120,262 @@ model BillingCancellationRequest {
   @@index([stripeSubscriptionId])
   @@index([actualEffectiveAt])
   @@index([syntheticTestOnly])
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// EP-TRAIN-6D-4B (2026-11-04) — AI Training Review Persistence.
+// Postgres mirror appended by EP-TRAIN-6D-4E preflight (2026-11-04).
+// Keep in sync with prisma/schema.prisma (SQLite source of truth).
+// ═══════════════════════════════════════════════════════════════════
+
+model TrainingQuestionAiGenerationRun {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+  courseId                      String
+  course                        TrainingCourse @relation(fields: [courseId], references: [id])
+  courseVersionId               String
+  courseVersion                 TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  // Immutable binding to the exact authorisation + model
+  pilotAuthorizationId          String
+  pilotAuthorizationFingerprint String
+  sourceVideoSha256             String
+  resolvedTranscriptBuildId     String
+  groundingProjectionSha256     String
+
+  // Model provenance (NO secrets — only identifiers)
+  modelName                     String   // e.g. "qwen-2.5-7b-instruct-awq"
+  modelBackend                  String   // e.g. "vllm-0.6.3.post1"
+  modelFormatEnforcer           String   // e.g. "lm-format-enforcer"
+  modalAppIdentity              String?  // e.g. "spectre-training-generate"
+
+  // Runtime metadata
+  requestedByUserId             String?  // null when system-initiated
+  requestedAt                   DateTime @default(now())
+  completedAt                   DateTime?
+  executionStatus               String   @default("REQUESTED") // REQUESTED | COMPLETED | FAILED | CANCELLED
+  executionErrorCode            String?
+  executionErrorMessage         String?
+
+  // Metering (no cost dollars; just counters)
+  inferenceMs                   Int?
+  promptTokenCount              Int?
+  outputTokenCount              Int?
+  gpuSeconds                    Decimal?
+
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  drafts                        TrainingQuestionAiDraft[]
+
+  @@index([clubId, requestedAt])
+  @@index([clubId, courseVersionId, requestedAt])
+  @@index([executionStatus])
+  @@index([pilotAuthorizationId])
+}
+
+model TrainingQuestionAiDraft {
+  id                            String   @id @default(cuid())
+
+  // Tenant scope — always present (never inferred)
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+  courseId                      String
+  course                        TrainingCourse @relation(fields: [courseId], references: [id])
+  courseVersionId               String
+  courseVersion                 TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  generationRunId               String?
+  generationRun                 TrainingQuestionAiGenerationRun? @relation(fields: [generationRunId], references: [id])
+
+  // Immutable content body (canonical JSON of TrainingQuestionDraftLiteV1)
+  draftJson                     String
+  // SHA-256 (hex, 64 chars) of the canonical draft body
+  contentHash                   String
+
+  // Source-material binding (defence-in-depth vs the generationRun)
+  sourceVideoSha256             String
+  resolvedTranscriptBuildId     String
+  groundingProjectionSha256     String
+  pilotAuthorizationId          String
+  pilotAuthorizationFingerprint String
+
+  // Lifecycle
+  state                         String   @default("GENERATED")
+  stateChangedAt                DateTime @default(now())
+  stateChangedByUserId          String?
+
+  // Optimistic concurrency token — incremented on every write
+  recordVersion                 Int      @default(0)
+
+  // Supersedes link: when an edit creates a new draft, this points at
+  // the superseded (archived) draft.
+  supersedesDraftId             String?
+
+  generatedAt                   DateTime
+  generatedByUserId             String?
+
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  validations                   TrainingQuestionAiValidation[]
+  reviews                       TrainingQuestionAiReview[]
+  stateTransitions              TrainingQuestionAiStateTransition[]
+  operationKeys                 TrainingQuestionAiOperationKey[]
+
+  // Uniqueness: within a (club, courseVersion) a given contentHash
+  // can only exist ONCE. Duplicate persistence attempts collapse.
+  @@unique([clubId, courseVersionId, contentHash])
+
+  @@index([clubId, courseVersionId, state])
+  @@index([clubId, state, generatedAt])
+  @@index([clubId, generatedByUserId])
+  @@index([supersedesDraftId])
+}
+
+model TrainingQuestionAiValidation {
+  id                            String   @id @default(cuid())
+
+  // Tenant scope kept on the row so tenant-scoped queries never need
+  // to join through the parent draft.
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  // The content hash this validation was run against. Server approval
+  // guard refuses approval unless draftContentHash == draft.contentHash.
+  draftContentHash              String
+
+  // Validator provenance
+  validatorVersion              String   // e.g. "6c-10b" | "6c-10c"
+  validatorSource               String   // "integrated-pipeline" | "fixture"
+  validatorModuleShaHex         String?  // optional SHA of the validator source file at run time
+
+  // Result snapshot (JSON of PipelineResult)
+  verdict                       String   // GROUNDED | REQUIRES_HUMAN_VERIFICATION | REJECTED
+  stage                         String   // CONVERT | VALIDATE | EXCEPTION
+  errorsJson                    String   // JSON array; empty "[]" when none
+  warningsJson                  String
+  flagsJson                     String
+  proposalJson                  String?  // canonical TrainingQuestionProposalV1 on success; null on CONVERT / EXCEPTION
+  errorCodeHistogram            String?  // compact "{code:count,...}" for fast queries
+
+  runAt                         DateTime @default(now())
+  runByUserId                   String?  // null when system-initiated
+  runByJobId                    String?
+
+  createdAt                     DateTime @default(now())
+
+  reviewsDrivenBy               TrainingQuestionAiReview[] @relation("ValidationDrivingReview")
+
+  @@index([clubId, draftId, runAt])
+  @@index([draftId, draftContentHash, runAt])
+  @@index([clubId, verdict])
+  @@index([draftContentHash])
+}
+
+model TrainingQuestionAiReview {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id])
+
+  // Binding: the exact content version + validation row the reviewer
+  // was looking at when they made the decision.
+  draftContentHash              String
+  validationId                  String?
+  validation                    TrainingQuestionAiValidation? @relation("ValidationDrivingReview", fields: [validationId], references: [id])
+
+  disposition                   String   // APPROVED | REJECTED | REVALIDATION_REQUESTED | REGENERATION_REQUESTED
+
+  reviewerNote                  String?
+
+  reviewedByUserId              String
+  reviewedByUser                User     @relation(fields: [reviewedByUserId], references: [id])
+
+  reviewedAt                    DateTime @default(now())
+
+  createdAt                     DateTime @default(now())
+
+  @@index([clubId, draftId, reviewedAt])
+  @@index([clubId, reviewedByUserId, reviewedAt])
+  @@index([clubId, disposition])
+}
+
+model TrainingQuestionAiStateTransition {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  // Authoritative, append-only state history. Written in the SAME
+  // database transaction as the corresponding state change on
+  // TrainingQuestionAiDraft — writeStateTransition in
+  // src/lib/hr/training/ai-review/transactional-audit.ts.
+  fromState                     String?  // null on GENERATED entry
+  toState                       String
+  reasonCode                    String   // REVIEWER_APPROVED | VERDICT_REJECTED | EDIT_SAVED | REVALIDATION_FAILED | SUPERSEDED_BY_EDIT | ...
+  reasonDetail                  String?
+
+  byUserId                      String?
+  byUser                        User?    @relation(fields: [byUserId], references: [id])
+
+  recordVersionBefore           Int
+  recordVersionAfter            Int
+
+  reviewId                      String?
+  validationId                  String?
+
+  // Supplementary context (NO credentials, NO transcript bodies)
+  metaJson                      String?
+
+  occurredAt                    DateTime @default(now())
+
+  @@index([clubId, draftId, occurredAt])
+  @@index([clubId, occurredAt])
+  @@index([clubId, toState, occurredAt])
+}
+
+model TrainingQuestionAiOperationKey {
+  // Durable idempotency row — matches §2.5 of the approved governance
+  // decisions. Clients supply a request-local UUID; a replay within
+  // the TTL window returns the cached response. Database uniqueness
+  // (not an in-memory cache) is the authority.
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  // Compound uniqueness: (route, requestKey, reviewerUserId, draftId).
+  route                         String   // e.g. "POST /drafts/:id/review:APPROVE"
+  requestKey                    String   // client-generated UUID v4
+  reviewerUserId                String
+
+  // Replay payload — the response to return on duplicate requests.
+  responseHttpStatus            Int
+  responseBodyJson              String
+
+  // TTL: §2.5 24-hour window. Rows beyond expiresAt may be purged by
+  // a maintenance job (NOT implemented in this slice).
+  expiresAt                     DateTime
+
+  createdAt                     DateTime @default(now())
+
+  @@unique([route, requestKey, reviewerUserId, draftId])
+  @@index([clubId, expiresAt])
+  @@index([draftId])
 }
