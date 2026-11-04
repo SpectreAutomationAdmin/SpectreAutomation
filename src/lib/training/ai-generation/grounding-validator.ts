@@ -61,6 +61,8 @@ export const VALIDATOR_ERRORS = Object.freeze({
   UNSUPPORTED_FACTUAL_DURATION: "ERR_UNSUPPORTED_FACTUAL_DURATION",
   UNSUPPORTED_REGULATORY_BODY: "ERR_UNSUPPORTED_REGULATORY_BODY",
   UNSUPPORTED_INSURANCE_REFERENCE: "ERR_UNSUPPORTED_INSURANCE_REFERENCE",
+  // --- NEW in 6C-10C ---
+  UNSUPPORTED_NAMED_ENTITY_SUBJECT: "ERR_UNSUPPORTED_NAMED_ENTITY_SUBJECT",
 } as const);
 
 export const VALIDATOR_FLAGS = Object.freeze({
@@ -71,6 +73,8 @@ export const VALIDATOR_FLAGS = Object.freeze({
   AMBIGUOUS_CORRECT_ANSWER: "FLAG_AMBIGUOUS_CORRECT_ANSWER",
   UNSUPPORTED_QUANTITY: "FLAG_UNSUPPORTED_QUANTITY",
   AMBIGUOUS_FACTUAL_CLAIM: "FLAG_AMBIGUOUS_FACTUAL_CLAIM",
+  // --- NEW in 6C-10C ---
+  PRESCRIPTIVE_INSERTION: "FLAG_PRESCRIPTIVE_INSERTION",
 } as const);
 
 const STOP_WORDS = new Set([
@@ -106,6 +110,49 @@ export const INSURANCE_TERMS = [
   "insurance company", "insurance provider", "insurance carrier",
   "insurance policy", "liability insurance", "health insurance",
   "disability insurance", "workers comp insurance", "workers compensation insurance",
+] as const;
+
+// --- NEW in 6C-10C: Subject-attribution + prescriptive-insertion hit lists ---
+//
+// SPECIFIC_SUBJECT_ROLES are role words that, when used as the SUBJECT of a
+// workplace obligation ("Administrators are allowed to…"), limit the policy's
+// audience to a specific sub-group of staff. These are NOT generic terms like
+// "staff" or "employees" — those legitimately encompass everyone.
+//
+// A match fires ERR_UNSUPPORTED_NAMED_ENTITY_SUBJECT only when the role word
+// is followed by a predicate verb (not a possessive like "administrator's
+// instructions") AND the same role word does not appear in any cited passage.
+// That combination is the deterministic contradiction the hardening requires.
+export const SPECIFIC_SUBJECT_ROLES = [
+  "administrator", "manager", "supervisor", "director", "controller",
+  "ceo", "cfo", "coo", "owner", "foreman",
+] as const;
+
+const SUBJECT_PREDICATE_VERBS = [
+  "are", "is", "should", "must", "may", "can", "will", "need",
+  "have", "has", "do", "does", "allowed", "permitted", "required",
+  "ought", "shall", "cannot",
+] as const;
+
+// STRICT_MODALS are the obligation modals that, when present in authoritative
+// content WITHOUT any obligation language in the cited passages, indicate a
+// likely prescriptive invention (per directive A2, advisory-only — Q7 pattern).
+const STRICT_MODALS = [
+  "must", "should", "shall", "required", "mandatory", "prohibited",
+  "forbidden", "always", "never",
+] as const;
+
+// BROADER_OBLIGATION_LANGUAGE is the set of surface forms that still count as
+// "obligation-ish" language in cited passages. If any of these appears in the
+// cited passages, the authoritative strict modal is considered a supported
+// paraphrase (per directive A2: "Do not flag supported paraphrases merely
+// because they contain prescriptive words"), and the advisory does NOT fire.
+const BROADER_OBLIGATION_LANGUAGE = [
+  ...STRICT_MODALS,
+  "ought", "ought to", "need to", "have to", "has to", "please",
+  "make sure", "ensure", "obligated to", "banned",
+  "shouldn't", "mustn't", "won't", "cannot", "can't",
+  "best not to", "not to", "do not", "don't",
 ] as const;
 
 function fail(
@@ -376,6 +423,56 @@ function extractInsuranceReferences(text: string): Claim[] {
 }
 function insuranceReferenceSupported(claim: Claim, citedText: string): boolean {
   return citedText.toLowerCase().includes(claim.normalised);
+}
+
+// --- NEW in 6C-10C: subject-attribution detector ---
+
+interface SubjectClaim extends Claim { readonly role: string; readonly predicate: string; }
+
+function extractSpecificSubjects(text: string): SubjectClaim[] {
+  const rolesAlt = SPECIFIC_SUBJECT_ROLES.join("|");
+  const verbsAlt = SUBJECT_PREDICATE_VERBS.join("|");
+  // The `(?!'s)` negative lookahead is critical — it keeps possessive forms
+  // like "administrator's instructions" from being read as the SUBJECT of an
+  // obligation. The role word must be followed (optionally with pluralisation)
+  // by whitespace + a predicate verb.
+  const pattern = new RegExp(
+    `\\b(${rolesAlt})(?!['’]s)s?\\s+(${verbsAlt})\\b`,
+    "gi",
+  );
+  const out: SubjectClaim[] = [];
+  const lowered = String(text).toLowerCase();
+  for (const m of lowered.matchAll(pattern)) {
+    out.push({
+      raw: m[0], normalised: m[1], kind: "subject",
+      role: m[1], predicate: m[2],
+    });
+  }
+  return out;
+}
+function specificSubjectSupported(claim: SubjectClaim, citedLower: string): boolean {
+  // The role word must appear (singular or plural) somewhere in the cited
+  // text as a word token. Possessive forms (administrator's) still count as
+  // supporting evidence that the cited material mentions the role.
+  const re = new RegExp(`\\b${claim.role}s?\\b`);
+  return re.test(citedLower);
+}
+
+// --- NEW in 6C-10C: prescriptive-insertion advisory ---
+
+function hasAnyWord(text: string, words: readonly string[]): boolean {
+  const lower = text.toLowerCase();
+  for (const w of words) {
+    const escaped = w.replace(/\s+/g, "\\s+");
+    if (new RegExp(`\\b${escaped}\\b`).test(lower)) return true;
+  }
+  return false;
+}
+function hasStrictModal(text: string): boolean {
+  return hasAnyWord(text, STRICT_MODALS);
+}
+function hasAnyBroaderObligationLanguage(text: string): boolean {
+  return hasAnyWord(text, BROADER_OBLIGATION_LANGUAGE);
 }
 
 // ---------- Structural + citation + org + policy checks ----------
@@ -699,6 +796,32 @@ function validateFactualClaims(
         { reference: claim.normalised });
     }
   }
+
+  // --- NEW in 6C-10C: subject-attribution hard fail ---
+  //
+  // When authoritative content uses a SPECIFIC role word ("Administrators are
+  // allowed to…") as the subject of an obligation, the same role must appear
+  // in cited passages. Generic terms ("staff", "employees") are intentionally
+  // NOT in SPECIFIC_SUBJECT_ROLES and therefore never trigger this check.
+  for (const claim of extractSpecificSubjects(sections.authoritative)) {
+    if (!specificSubjectSupported(claim, citedLower)) {
+      fail(errors, VALIDATOR_ERRORS.UNSUPPORTED_NAMED_ENTITY_SUBJECT,
+        `authoritative section assigns obligation to specific role "${claim.role}" not present in any cited passage`,
+        { role: claim.role, raw: claim.raw, section: "authoritative" });
+    }
+  }
+
+  // --- NEW in 6C-10C: prescriptive-insertion advisory ---
+  //
+  // Fires ADVISORY ONLY (never hard) when the authoritative surface introduces
+  // strict obligation language ("must/should/shall/required/mandatory/…") and
+  // the cited passages contain NO obligation-adjacent language at all (strict
+  // or broader). Paraphrases where the cited passages carry a different
+  // obligation marker (e.g. "need to" vs "should") do NOT trigger — see
+  // BROADER_OBLIGATION_LANGUAGE.
+  if (hasStrictModal(sections.authoritative) && !hasAnyBroaderObligationLanguage(citedText)) {
+    flags.push(VALIDATOR_FLAGS.PRESCRIPTIVE_INSERTION);
+  }
 }
 
 // ---------- Main entry point ----------
@@ -775,4 +898,7 @@ export const _internal = {
   extractYears, extractMoney, extractPercentages, extractDurations,
   extractDates, extractQuantities, extractRegulatoryBodies,
   extractInsuranceReferences,
+  // 6C-10C additions
+  extractSpecificSubjects, specificSubjectSupported,
+  hasStrictModal, hasAnyBroaderObligationLanguage,
 };
