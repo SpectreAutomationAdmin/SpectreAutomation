@@ -298,6 +298,7 @@ export const PERMISSIONS = {
   "hr:training:compliance:read":   { name: "Read employee training compliance status",  category: "HR" },
   // EP-TRAIN-6D-4B (2026-11-04) — AI-assisted training review workflow.
   // Added to the catalogue only. NO role grants in this slice.
+  "hr:training:ai:read":               { name: "Read-only inspection of persisted AI training candidates (queue + detail + validation + evidence metadata)", category: "HR" },
   "hr:training:ai:generate":           { name: "Initiate AI-assisted generation of training-question candidates", category: "HR" },
   "hr:training:ai:review":             { name: "View the AI training review queue + source evidence; record rejection", category: "HR" },
   "hr:training:ai:edit":               { name: "Save a reviewer edit to an AI-drafted training question", category: "HR" },

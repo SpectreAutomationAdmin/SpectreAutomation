@@ -37,7 +37,8 @@ const INTERNAL_ALLOWLIST = new Set<string>([
   "/app/admin/governance",           // governance index — sub-pages are linked
   "/app/admin/compliance",           // compliance index (sub-pages used in audit packages)
   "/app/admin/notifications",        // sidebar lists analytics + email-health; index itself is just a list
-  "/app/admin/ai-training/review",   // EP-TRAIN-6D-1 fixture-driven preview; wired into nav only after live-inference workflow is authorised
+  "/app/admin/ai-training/review",           // EP-TRAIN-6D-1 fixture-driven preview; wired into nav only after live-inference workflow is authorised
+  "/app/admin/ai-training/review/persisted", // EP-TRAIN-6D-4D persisted-mode read-only review; linked from the fixture page, and wired into sidebar after review mutations are authorised
   "/app/admin/support",              // support index — /support/access is the operable surface
   "/app/admin/security/kms",         // KMS console — super-admin-only operational page
   "/app/admin/webhooks/[id]/rotation", // child of webhooks

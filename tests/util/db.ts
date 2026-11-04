@@ -552,6 +552,15 @@ export async function resetDb() {
     c.trainingAssignment.deleteMany(),
     c.trainingAnswerOption.deleteMany(),
     c.trainingQuestion.deleteMany(),
+    // EP-TRAIN-6D-4D (2026-11-04) — AI-review tables were added in
+    // 6D-4B but were missed by resetDb at that time. Clear them BEFORE
+    // trainingCourseVersion / trainingCourse so their FKs unblock.
+    c.trainingQuestionAiOperationKey.deleteMany(),
+    c.trainingQuestionAiStateTransition.deleteMany(),
+    c.trainingQuestionAiReview.deleteMany(),
+    c.trainingQuestionAiValidation.deleteMany(),
+    c.trainingQuestionAiDraft.deleteMany(),
+    c.trainingQuestionAiGenerationRun.deleteMany(),
     c.trainingCourseVersion.deleteMany(),
     c.trainingCourse.deleteMany(),
     c.employeePortalQuickLink.deleteMany(),

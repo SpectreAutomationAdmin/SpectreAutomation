@@ -288,12 +288,28 @@ function Header() {
               <span className="italic">{COURSE_CONTEXT.tenantLabel}</span>
             </div>
           </div>
-          <div className="text-right text-[11px] uppercase tracking-widest text-stone-500">
-            <div>Fixture mode</div>
-            <div className="mt-0.5 font-mono text-[10px] normal-case tracking-normal text-stone-400">
+          <div className="text-right">
+            <span className="inline-block text-[11px] uppercase tracking-widest rounded-full bg-amber-100 text-amber-900 border border-amber-200 px-3 py-1">
+              Fixture preview
+            </span>
+            <div className="mt-1 font-mono text-[10px] text-stone-400">
               build {COURSE_CONTEXT.resolvedTranscriptBuildId.slice(0, 12)}…
             </div>
+            <a
+              href="/app/admin/ai-training/review/persisted"
+              className={`mt-2 inline-block text-[11px] uppercase tracking-widest text-sky-800 hover:text-sky-900 underline ${FOCUS_RING}`}
+            >
+              Switch to persisted review →
+            </a>
           </div>
+        </div>
+        <div
+          role="note"
+          className="mt-3 rounded-md border border-amber-200 bg-amber-50/70 px-4 py-2 text-[12px] text-amber-900"
+        >
+          <span className="font-semibold uppercase tracking-widest text-[10px]">Mode notice:</span>{" "}
+          This is a <strong>fixture preview</strong>. All data is non-persistent
+          demonstration content. For persisted database records, use the persisted-review surface.
         </div>
       </div>
     </header>
