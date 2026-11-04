@@ -13,7 +13,29 @@ import type {
   GroundingProjection,
   PilotAuthorizationV1,
   TrainingQuestionDraftLiteV1,
+  PipelineResult,
+  ValidatorError,
 } from "@/lib/training/ai-generation";
+
+/**
+ * EP-TRAIN-6D-3 — predetermined revalidation outcome for the fixture
+ * mode. Returned verbatim when the reviewer clicks "Revalidate (fixture)"
+ * after editing. The point is to show the WORKFLOW — stale → re-run →
+ * fresh verdict — without pretending to invoke the live validator on
+ * arbitrary edited content.
+ *
+ * Each outcome describes the kind of hypothetical edit that would
+ * produce it. The UI labels this clearly as "fixture outcome" so the
+ * reviewer never thinks a real validation ran.
+ */
+export interface FixtureRevalidationOutcome {
+  /** Short label shown in the "Revalidate (fixture)" button + status line. */
+  readonly scenarioLabel: string;
+  /** What hypothetical edit this outcome corresponds to — displayed as context. */
+  readonly scenarioDescription: string;
+  /** Pre-determined pipeline result for this outcome. Shape matches a real `PipelineResult`. */
+  readonly result: PipelineResult;
+}
 
 export interface Fixture {
   readonly label: string;
@@ -31,6 +53,30 @@ export interface Fixture {
   };
   readonly sourceWindow: { startSec: number; endSec: number };
   readonly provenance: string;
+  /** Pre-determined outcome shown when the reviewer clicks "Revalidate (fixture)" after editing. */
+  readonly revalidationDemo: FixtureRevalidationOutcome;
+}
+
+// Helper — builds a PipelineResult shape without touching the live pipeline.
+function demoResult(opts: {
+  verdict: PipelineResult["verdict"];
+  errorCodes?: string[];
+  flags?: string[];
+}): PipelineResult {
+  const errors: ValidatorError[] = (opts.errorCodes ?? []).map((code) => ({
+    code,
+    message: `[fixture] ${code}`,
+    detail: {},
+  }));
+  return {
+    verdict: opts.verdict,
+    stage: "VALIDATE",
+    proposal: null,
+    propagatedSourceOrgFlags: [],
+    errors,
+    warnings: [],
+    flags: opts.flags ?? [],
+  };
 }
 
 function makePassage(opts: {
@@ -116,6 +162,11 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 7599, gpuSeconds: 7.599, estimatedCostUsd: 0.0058, promptTokenCount: 2001, outputTokenCount: 277 },
     sourceWindow: { startSec: 24.84, endSec: 55.08 },
     provenance: "EP-TRAIN-6C-9 pilot, fingerprint 0776d2c0…",
+    revalidationDemo: {
+      scenarioLabel: "Edit tightens the question; advisory remains",
+      scenarioDescription: "A reviewer rewords the question stem. The pipeline is expected to still flag unsupported connecting words as an advisory.",
+      result: demoResult({ verdict: "REQUIRES_HUMAN_VERIFICATION", flags: ["FLAG_UNSUPPORTED_ANSWER_WORDS"] }),
+    },
   },
   {
     label: "q2-scholarship-nov1-deadline",
@@ -142,6 +193,14 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 4570, gpuSeconds: 4.57, estimatedCostUsd: 0.0058, promptTokenCount: 2060, outputTokenCount: 173 },
     sourceWindow: { startSec: 55.08, endSec: 88.12 },
     provenance: "EP-TRAIN-6C-9 pilot, fingerprint 8a2d8c9b…",
+    revalidationDemo: {
+      scenarioLabel: "Edit strips the invented 2026 year; advisories remain",
+      scenarioDescription: "A reviewer removes 'November 1st, 2026' and keeps only the supported 'November 1st' deadline. The year hard-error clears; the source-org + unsupported-words advisories remain.",
+      result: demoResult({
+        verdict: "REQUIRES_HUMAN_VERIFICATION",
+        flags: ["SOURCE_ORG_MISMATCH", "FLAG_UNSUPPORTED_ANSWER_WORDS"],
+      }),
+    },
   },
   {
     label: "q3-safety-near-miss-reporting",
@@ -168,6 +227,14 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 6004, gpuSeconds: 6.004, estimatedCostUsd: 0.0058, promptTokenCount: 1944, outputTokenCount: 224 },
     sourceWindow: { startSec: 132.3, endSec: 155.0 },
     provenance: "EP-TRAIN-6C-9 pilot, fingerprint 4e3a92c1…",
+    revalidationDemo: {
+      scenarioLabel: "Edit replaces OSHA + insurance distractors; hard errors clear",
+      scenarioDescription: "A reviewer replaces the two policy-reading distractors (OSHA regulations, insurance company) with grounded alternatives. The three hard errors (ERR_CITATION_SEGMENT_UNAUTHORIZED, ERR_UNSUPPORTED_REGULATORY_BODY, ERR_UNSUPPORTED_INSURANCE_REFERENCE) all clear; verdict becomes REQUIRES_HUMAN_VERIFICATION. Approval becomes allowed.",
+      result: demoResult({
+        verdict: "REQUIRES_HUMAN_VERIFICATION",
+        flags: ["SOURCE_ORG_MISMATCH", "FLAG_UNSUPPORTED_ANSWER_WORDS"],
+      }),
+    },
   },
   {
     label: "q4-member-experience-framing",
@@ -190,6 +257,14 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 3166, gpuSeconds: 3.166, estimatedCostUsd: 0.0058, promptTokenCount: 1714, outputTokenCount: 112 },
     sourceWindow: { startSec: 0, endSec: 4.58 },
     provenance: "EP-TRAIN-6C-11 pilot, SHA 8b418f96…",
+    revalidationDemo: {
+      scenarioLabel: "Edit trims trailing qualifier; advisories unchanged",
+      scenarioDescription: "A reviewer removes the trailing 'according to the administrator's statement' qualifier. Verdict and advisories are expected to remain the same.",
+      result: demoResult({
+        verdict: "REQUIRES_HUMAN_VERIFICATION",
+        flags: ["SOURCE_ORG_MISMATCH", "FLAG_UNSUPPORTED_ANSWER_WORDS"],
+      }),
+    },
   },
   {
     label: "q5-no-phones-in-front-of-members",
@@ -213,6 +288,11 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 4353, gpuSeconds: 4.353, estimatedCostUsd: 0.0058, promptTokenCount: 1755, outputTokenCount: 162 },
     sourceWindow: { startSec: 4.58, endSec: 16.28 },
     provenance: "EP-TRAIN-6C-11 pilot, SHA 77cb58db…",
+    revalidationDemo: {
+      scenarioLabel: "Edit simplifies the convoluted stem; advisory remains",
+      scenarioDescription: "A reviewer rewrites the double-negative stem to a simple assertion. Verdict stays REQUIRES_HUMAN_VERIFICATION with the unsupported-words advisory.",
+      result: demoResult({ verdict: "REQUIRES_HUMAN_VERIFICATION", flags: ["FLAG_UNSUPPORTED_ANSWER_WORDS"] }),
+    },
   },
   {
     label: "q6-phone-call-discretion-back-room",
@@ -236,6 +316,11 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 3838, gpuSeconds: 3.838, estimatedCostUsd: 0.0058, promptTokenCount: 1746, outputTokenCount: 143 },
     sourceWindow: { startSec: 16.78, endSec: 24.84 },
     provenance: "EP-TRAIN-6C-11 pilot, SHA 5a5cac0e…",
+    revalidationDemo: {
+      scenarioLabel: "Edit replaces 'Administrators' with 'Staff members'; advisory remains",
+      scenarioDescription: "A reviewer corrects the 'Administrators' subject-attribution defect to 'Staff members'. The pipeline is expected to still flag unsupported connecting words.",
+      result: demoResult({ verdict: "REQUIRES_HUMAN_VERIFICATION", flags: ["FLAG_UNSUPPORTED_ANSWER_WORDS"] }),
+    },
   },
   {
     label: "q7-negativity-principle",
@@ -258,6 +343,11 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 4623, gpuSeconds: 4.623, estimatedCostUsd: 0.0058, promptTokenCount: 1651, outputTokenCount: 173 },
     sourceWindow: { startSec: 53.2, endSec: 54.78 },
     provenance: "EP-TRAIN-6C-11 pilot, SHA d0bc6c28…",
+    revalidationDemo: {
+      scenarioLabel: "Edit strips the invented prescriptive clause; advisory remains",
+      scenarioDescription: "A reviewer removes the invented 'should be applied in the workplace to maintain… reduce conflicts' prescriptive clause. Verdict stays REQUIRES_HUMAN_VERIFICATION with the unsupported-words advisory.",
+      result: demoResult({ verdict: "REQUIRES_HUMAN_VERIFICATION", flags: ["FLAG_UNSUPPORTED_ANSWER_WORDS"] }),
+    },
   },
   {
     label: "q8-parking-policy",
@@ -281,6 +371,11 @@ export const FIXTURES: readonly Fixture[] = [
     metrics: { inferenceMs: 5256, gpuSeconds: 5.256, estimatedCostUsd: 0.0058, promptTokenCount: 1696, outputTokenCount: 195 },
     sourceWindow: { startSec: 118.9, endSec: 131.4 },
     provenance: "EP-TRAIN-6C-11 pilot, SHA 3ad4adc3…",
+    revalidationDemo: {
+      scenarioLabel: "Edit tightens the question stem; advisory remains",
+      scenarioDescription: "A reviewer shortens the verbose 'What should staff members be reminded about…' stem. Verdict and advisories are expected to remain the same.",
+      result: demoResult({ verdict: "REQUIRES_HUMAN_VERIFICATION", flags: ["FLAG_UNSUPPORTED_ANSWER_WORDS"] }),
+    },
   },
 ];
 
