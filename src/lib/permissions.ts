@@ -296,6 +296,15 @@ export const PERMISSIONS = {
   "hr:training:publish":           { name: "Publish / retire training course versions", category: "HR" },
   "hr:training:assign":            { name: "Explicitly assign a training course to an employee", category: "HR" },
   "hr:training:compliance:read":   { name: "Read employee training compliance status",  category: "HR" },
+  // EP-TRAIN-6D-4B (2026-11-04) — AI-assisted training review workflow.
+  // Added to the catalogue only. NO role grants in this slice.
+  "hr:training:ai:generate":           { name: "Initiate AI-assisted generation of training-question candidates", category: "HR" },
+  "hr:training:ai:review":             { name: "View the AI training review queue + source evidence; record rejection", category: "HR" },
+  "hr:training:ai:edit":               { name: "Save a reviewer edit to an AI-drafted training question", category: "HR" },
+  "hr:training:ai:revalidate":         { name: "Request revalidation of an AI training draft after edit or failure", category: "HR" },
+  "hr:training:ai:approve":            { name: "Promote a human-reviewed AI training draft to APPROVED_DRAFT", category: "HR" },
+  "hr:training:ai:remediate-rejected": { name: "Authorise a remediation chain on a rejected AI training draft (least-privilege escape hatch)", category: "HR" },
+  "hr:training:ai:archive":            { name: "Archive a terminal AI training draft after the retention window", category: "HR" },
 
   // SIGNUP-2 Phase 2D (2026-10-25) -- Operator signup verification.
   // Granted ONLY to SUPER_ADMIN at launch per founder decision 1.
