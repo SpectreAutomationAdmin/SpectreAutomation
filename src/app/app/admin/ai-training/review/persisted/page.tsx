@@ -39,6 +39,10 @@ import {
   resolveCandidateEvidence,
   type CandidateEvidence,
 } from "@/lib/hr/training/ai-review/evidence-reader";
+import {
+  resolveVerifiedAnswer,
+  type VerifiedAnswerResolution,
+} from "@/lib/hr/training/ai-review/verified-answer-reader";
 import PersistedReviewWorkspace from "@/components/ai-training/PersistedReviewWorkspace";
 
 export const metadata = {
@@ -175,8 +179,12 @@ export default async function PersistedAiTrainingReviewPage(
   // existing props contract remains unchanged for callers that don't
   // yet consume `evidence`.
   let evidence: CandidateEvidence | null = null;
+  let verifiedAnswer: VerifiedAnswerResolution | null = null;
   if (selectedDetail) {
-    evidence = await resolveCandidateEvidence(principal, clubId, selectedDetail.draftId);
+    [evidence, verifiedAnswer] = await Promise.all([
+      resolveCandidateEvidence(principal, clubId, selectedDetail.draftId),
+      resolveVerifiedAnswer(principal, clubId, selectedDetail.draftId),
+    ]);
   }
   const sourceContext = evidence
     ? {
@@ -199,6 +207,7 @@ export default async function PersistedAiTrainingReviewPage(
       isEmptyQueue={queue.length === 0}
       sourceContext={sourceContext}
       evidence={evidence}
+      verifiedAnswer={verifiedAnswer}
     />
   );
 }

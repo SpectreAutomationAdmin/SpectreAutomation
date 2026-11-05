@@ -42,6 +42,11 @@ import type {
   CitedSegmentResolution,
   AuthenticEvidence,
 } from "@/lib/hr/training/ai-review/evidence-reader";
+import type {
+  VerifiedAnswerResolution,
+  VerifiedAnswer,
+  IntegrityWarning,
+} from "@/lib/hr/training/ai-review/verified-answer-reader";
 
 const FOCUS_RING =
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-stone-600";
@@ -276,6 +281,13 @@ export interface PersistedReviewWorkspaceProps {
    *    - `kind: "evidence-integrity-failure"` — fail-closed banner
    *  Null when no candidate is selected. */
   readonly evidence?: CandidateEvidence | null;
+  /** EP-TRAIN-6D-4N — verified-answer resolution with integrity
+   *  checks. One of:
+   *    - `kind: "verified"` — emerald "Verified correct · {reviewer}"
+   *    - `kind: "unverified"` — neutral "Model-selected · unverified"
+   *    - `kind: "integrity-warning"` — neutral + inline warning
+   *  Null when no candidate is selected. */
+  readonly verifiedAnswer?: VerifiedAnswerResolution | null;
 }
 
 export default function PersistedReviewWorkspace(props: PersistedReviewWorkspaceProps) {
@@ -328,6 +340,7 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
               <DetailBody
                 detail={props.selectedDetail}
                 onAttemptMutation={() => setShowMutationHint(true)}
+                verifiedAnswer={props.verifiedAnswer ?? null}
               />
             ) : (
               <NoSelection />
@@ -491,10 +504,16 @@ function toneForState(s: LifecycleState): StatusTone {
 function DetailBody({
   detail,
   onAttemptMutation: _onAttemptMutation,
+  verifiedAnswer,
 }: {
   detail: CandidateDetail;
   onAttemptMutation: () => void;
+  verifiedAnswer: VerifiedAnswerResolution | null;
 }) {
+  const verified: VerifiedAnswer | null =
+    verifiedAnswer?.kind === "verified" ? verifiedAnswer : null;
+  const integrityWarning: IntegrityWarning | null =
+    verifiedAnswer?.kind === "integrity-warning" ? verifiedAnswer : null;
   const status = computeStatus(detail);
   const isSingleAnswer =
     detail.draft.questionType === "SINGLE_CHOICE" || detail.draft.questionType === "TRUE_FALSE";
@@ -548,49 +567,101 @@ function DetailBody({
           {detail.draft.questionText}
         </p>
 
-        {/* EP-TRAIN-6D-4M (2026-11-05) — authoritative "Correct" is
-            reserved for human-verified answers, written only through
-            the future 4N approval route. Until that governance chain
-            lands, NO option renders with emerald correctness styling —
-            including the AI's self-asserted `isCorrect: true`. Instead
-            we mark the model-selected option(s) with a neutral
-            "Model-selected — unverified" chip so reviewers understand
-            that the selection is a prediction, not a verified fact.
+        {/* EP-TRAIN-6D-4N (2026-11-05) — authoritative "Correct" is
+            reserved for a human-reviewer decision that passed EVERY
+            gate:
+              1. verifiedAnswer.kind === "verified" (not "integrity-
+                 warning" / "unverified") — proves the approved review
+                 bound to the current draft hash + validation, and the
+                 snapshot integrity checks all passed;
+              2. the option at that index is the ONLY one rendered
+                 with emerald styling.
+            Every other option — and every option on an unverified /
+            integrity-warning candidate — renders neutrally with the
+            "Model-selected · unverified" chip preserved on the
+            model's prediction.
 
-            Note: `isSingleAnswer` and `optionItemRole` keep the
-            existing ARIA shape for screen readers, but `aria-checked`
-            is now bound to `null` — "verified correct" is not a
-            property any current 4M code path can assert. */}
+            If `integrityWarning` is set, a banner above the options
+            surfaces the specific safe diagnostic + code without
+            promoting the stored snapshot to verified status. */}
+        {integrityWarning && (
+          <div
+            role="alert"
+            className="mt-6 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 leading-snug"
+          >
+            <div className="font-semibold uppercase tracking-widest text-[10px] text-amber-800">
+              Verified-answer integrity warning
+            </div>
+            <p className="mt-1">{integrityWarning.safeMessage}</p>
+            <div className="mt-1 font-mono text-[10px] text-amber-700">{integrityWarning.code}</div>
+          </div>
+        )}
         <div className="mt-6 text-[11px] uppercase tracking-widest text-stone-400 mb-2">
           Answer choices
         </div>
         <p className="mb-2 text-[12px] text-stone-600 leading-snug">
-          The options below are the <strong>model&rsquo;s prediction</strong>. Until a human reviewer approves this candidate, no answer here is a verified fact.
+          {verified ? (
+            <>
+              A reviewer has verified the correct answer below.
+              {verified.verifiedByUserName && (
+                <> Verified by <strong>{verified.verifiedByUserName}</strong>.</>
+              )}{" "}
+              The original model prediction is preserved for comparison.
+            </>
+          ) : (
+            <>
+              The options below are the <strong>model&rsquo;s prediction</strong>. Until a human reviewer approves this candidate, no answer here is a verified fact.
+            </>
+          )}
         </p>
-        <ol className="space-y-2" role={optionsRole} aria-label="Answer choices (model prediction — unverified)">
-          {detail.draft.options.map((o, i) => (
-            <li
-              key={i}
-              role={optionItemRole}
-              aria-checked={isSingleAnswer ? false : undefined}
-              className="flex items-start gap-3 rounded-md px-3 py-2.5 border bg-stone-50 border-stone-200"
-            >
-              <span
-                aria-hidden
-                className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium bg-stone-200 text-stone-600"
+        <ol
+          className="space-y-2"
+          role={optionsRole}
+          aria-label={verified ? "Answer choices (reviewer-verified)" : "Answer choices (model prediction — unverified)"}
+        >
+          {detail.draft.options.map((o, i) => {
+            const isVerifiedCorrect = verified !== null && verified.optionIndex === i;
+            return (
+              <li
+                key={i}
+                role={optionItemRole}
+                aria-checked={isSingleAnswer ? isVerifiedCorrect : undefined}
+                className={`flex items-start gap-3 rounded-md px-3 py-2.5 border ${
+                  isVerifiedCorrect
+                    ? "bg-emerald-50/60 border-emerald-200"
+                    : "bg-stone-50 border-stone-200"
+                }`}
               >
-                {String.fromCharCode(65 + i)}
-              </span>
-              <span className="text-stone-800 text-[15px] leading-relaxed">{o.text}</span>
-              {o.isCorrect && (
-                <span className="ml-auto text-[10px] uppercase tracking-widest text-stone-500 mt-1 whitespace-nowrap">
-                  <span aria-hidden>Model-selected · unverified</span>
-                  <span className="sr-only">Model-selected answer — unverified</span>
+                <span
+                  aria-hidden
+                  className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium ${
+                    isVerifiedCorrect ? "bg-emerald-600 text-white" : "bg-stone-200 text-stone-600"
+                  }`}
+                >
+                  {String.fromCharCode(65 + i)}
                 </span>
-              )}
-            </li>
-          ))}
+                <span className="text-stone-800 text-[15px] leading-relaxed">{o.text}</span>
+                {isVerifiedCorrect && (
+                  <span className="ml-auto text-[10px] uppercase tracking-widest text-emerald-700 mt-1 whitespace-nowrap">
+                    <span aria-hidden>Verified correct</span>
+                    <span className="sr-only">Reviewer-verified correct answer</span>
+                  </span>
+                )}
+                {!isVerifiedCorrect && o.isCorrect && (
+                  <span className="ml-auto text-[10px] uppercase tracking-widest text-stone-500 mt-1 whitespace-nowrap">
+                    <span aria-hidden>Model-selected · unverified</span>
+                    <span className="sr-only">Model-selected answer — unverified</span>
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ol>
+        {verified !== null && verified.optionIndex !== detail.draft.options.findIndex((o) => o.isCorrect) && detail.draft.options.some((o) => o.isCorrect) && (
+          <p className="mt-2 text-[11px] text-stone-600 leading-snug">
+            <span className="font-semibold">Note:</span> the reviewer verified a different answer than the model&rsquo;s original prediction. The model&rsquo;s selection is shown above as &ldquo;Model-selected · unverified&rdquo; for comparison.
+          </p>
+        )}
 
         <div className="mt-6 text-[11px] uppercase tracking-widest text-stone-400 mb-2">
           Model explanation
