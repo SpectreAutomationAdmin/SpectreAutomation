@@ -469,6 +469,16 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // HR-2C: full Safety & Training authority.
     "hr:training:read", "hr:training:write", "hr:training:publish",
     "hr:training:assign", "hr:training:compliance:read",
+    // EP-TRAIN-6D-4G (2026-11-04) — Read-only inspection of
+    // persisted AI training candidates. CLUB_ADMIN receives ONLY
+    // the read grant. The seven consequential AI grants
+    // (generate / edit / revalidate / approve / remediate-rejected /
+    // archive / review-for-rejection) are deliberately withheld
+    // here and remain SUPER_ADMIN-only until a separate authorised
+    // slice extends the grants. The directive explicitly refuses
+    // CONTROLLER / payroll / manager / employee grants for any AI
+    // permission.
+    "hr:training:ai:read",
     // PAY-1A (2026-09-26) — CLUB_ADMIN carries Payments admin authority
     // (bank-account management + authorize + cancel + read). Does NOT
     // hold payment:prepare — the SoD "authorizer never self-authorizes"
