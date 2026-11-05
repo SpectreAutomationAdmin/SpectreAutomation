@@ -31,6 +31,7 @@
 //     them as truncated hashes.
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type {
   CandidateDetail,
   CandidateQueueRow,
@@ -47,6 +48,12 @@ import type {
   VerifiedAnswer,
   IntegrityWarning,
 } from "@/lib/hr/training/ai-review/verified-answer-reader";
+import type {
+  ReviewerEligibility,
+  EligibilityReason,
+} from "@/lib/hr/training/ai-review/reviewer-eligibility";
+import { ELIGIBILITY_REASON_COPY } from "@/lib/hr/training/ai-review/reviewer-eligibility";
+import ApprovalDialog from "./ApprovalDialog";
 
 const FOCUS_RING =
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-stone-600";
@@ -288,6 +295,13 @@ export interface PersistedReviewWorkspaceProps {
    *    - `kind: "integrity-warning"` — neutral + inline warning
    *  Null when no candidate is selected. */
   readonly verifiedAnswer?: VerifiedAnswerResolution | null;
+  /** EP-TRAIN-6D-4P — server-derived reviewer eligibility. When
+   *  `canApprove` is true and the selected candidate's gate is
+   *  `eligible: true`, the workspace promotes the "Approve candidate"
+   *  button; otherwise the control remains disabled with a
+   *  reason-specific explanation. Null is treated as "no eligibility
+   *  computed" (fully read-only). */
+  readonly reviewerEligibility?: ReviewerEligibility | null;
 }
 
 export default function PersistedReviewWorkspace(props: PersistedReviewWorkspaceProps) {
@@ -297,9 +311,15 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
     return <EmptyState clubLabel={props.clubLabel} />;
   }
 
+  const canApprove = props.reviewerEligibility?.canApprove === true;
+
   return (
     <div className="min-h-screen bg-[#faf8f2]">
-      <PersistedHeader clubLabel={props.clubLabel} queueCount={props.totalCount} />
+      <PersistedHeader
+        clubLabel={props.clubLabel}
+        queueCount={props.totalCount}
+        canApprove={canApprove}
+      />
 
       <div className="mx-auto max-w-[1600px] px-6 py-6">
         <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)_380px] lg:gap-6">
@@ -357,10 +377,21 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
               </div>
             )}
 
-            <ReadOnlyControls
-              showMutationHint={showMutationHint}
-              onDismiss={() => setShowMutationHint(false)}
-            />
+            {props.selectedDetail && props.reviewerEligibility ? (
+              <ReviewerDecisionPanel
+                detail={props.selectedDetail}
+                eligibility={props.reviewerEligibility}
+                verifiedAnswer={props.verifiedAnswer ?? null}
+                onAttemptMutation={() => setShowMutationHint(true)}
+                showMutationHint={showMutationHint}
+                onDismissMutationHint={() => setShowMutationHint(false)}
+              />
+            ) : (
+              <ReadOnlyControls
+                showMutationHint={showMutationHint}
+                onDismiss={() => setShowMutationHint(false)}
+              />
+            )}
           </main>
 
           <aside className="hidden lg:block" aria-label="Source evidence">
@@ -382,7 +413,15 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
 
 // ---------- Header ----------
 
-function PersistedHeader({ clubLabel, queueCount }: { clubLabel: string; queueCount: number }) {
+function PersistedHeader({
+  clubLabel,
+  queueCount,
+  canApprove,
+}: {
+  clubLabel: string;
+  queueCount: number;
+  canApprove: boolean;
+}) {
   return (
     <header className="border-b border-stone-200 bg-white/70 backdrop-blur-sm">
       <div className="mx-auto max-w-[1600px] px-6 py-5">
@@ -396,7 +435,9 @@ function PersistedHeader({ clubLabel, queueCount }: { clubLabel: string; queueCo
             </h1>
             <div className="mt-1 text-sm text-stone-600">
               Persisted candidates <span className="mx-2 text-stone-300" aria-hidden>·</span>
-              <span className="italic">read-only</span>
+              <span className="italic">
+                {canApprove ? "reviewer workspace" : "read-only"}
+              </span>
             </div>
           </div>
           <div className="text-right">
@@ -413,9 +454,18 @@ function PersistedHeader({ clubLabel, queueCount }: { clubLabel: string; queueCo
           className="mt-3 rounded-md border border-sky-200 bg-sky-50/70 px-4 py-2 text-[12px] text-sky-900"
         >
           <span className="font-semibold uppercase tracking-widest text-[10px]">Mode notice:</span>{" "}
-          You are inspecting <strong>persisted records</strong>. Every mutation (approve, edit,
-          reject, revalidate, regenerate, publish) is disabled by design. Only a separately
-          authorised slice will enable review mutations.
+          {canApprove ? (
+            <>
+              You are inspecting <strong>persisted records</strong>. Reviewer approval is
+              enabled for eligible candidates. Edit, reject, revalidate, regenerate and publish
+              remain disabled in this slice.
+            </>
+          ) : (
+            <>
+              You are inspecting <strong>persisted records</strong>. Every mutation (approve, edit,
+              reject, revalidate, regenerate, publish) is disabled for your role.
+            </>
+          )}
         </div>
       </div>
     </header>
@@ -1160,6 +1210,191 @@ function EvidenceEmpty() {
   );
 }
 
+// ---------- Reviewer decision panel (EP-TRAIN-6D-4P) ----------
+//
+// Replaces ReadOnlyControls when a candidate is selected. Renders:
+//   - the Approve button (enabled only for canApprove + eligible drafts);
+//   - a reason-specific explanation beside the button when ineligible;
+//   - the still-disabled Edit / Reject / Revalidate / Regenerate stubs
+//     so the slice doesn't silently remove disabled controls users are
+//     already familiar with;
+//   - the workflow footer.
+//
+// The dialog is mounted here (not at page level) so the trigger + its
+// controlled state live in the same subtree.
+
+function ReviewerDecisionPanel({
+  detail,
+  eligibility,
+  verifiedAnswer,
+  onAttemptMutation,
+  showMutationHint,
+  onDismissMutationHint,
+}: {
+  detail: CandidateDetail;
+  eligibility: ReviewerEligibility | null;
+  verifiedAnswer: VerifiedAnswerResolution | null;
+  onAttemptMutation: () => void;
+  showMutationHint: boolean;
+  onDismissMutationHint: () => void;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const router = useRouter();
+
+  const canApprove = eligibility?.canApprove === true;
+  const draftGate = eligibility?.selectedDraftEligibility ?? null;
+  const draftEligible = draftGate?.eligible === true;
+  const reasons: readonly EligibilityReason[] = draftGate?.reasons ?? [];
+  const approveButtonEnabled = canApprove && draftEligible;
+
+  const disabledStubStyle =
+    "rounded-md bg-stone-200 text-stone-500 px-4 py-2 text-sm font-medium cursor-not-allowed";
+  const disabledTitle = "Not implemented in this slice.";
+
+  // Explanation for the Approve button's disabled state. Picks the
+  // first material reason (ordering in the eligibility service is
+  // stable).
+  let disabledExplanation: string | null = null;
+  if (!canApprove) {
+    disabledExplanation =
+      "Approval requires the AI-training approval permission. Your account has read access only.";
+  } else if (!draftEligible && reasons.length > 0) {
+    disabledExplanation = ELIGIBILITY_REASON_COPY[reasons[0]];
+  }
+
+  return (
+    <div className="rounded-lg bg-white shadow-sm border border-stone-200 overflow-hidden">
+      <div className="px-6 py-4 border-b border-stone-200">
+        <div className="text-[11px] uppercase tracking-widest text-stone-500">
+          Reviewer decision
+        </div>
+        <div className="mt-0.5 font-serif text-lg text-stone-900">
+          {canApprove
+            ? draftEligible
+              ? "Ready for reviewer verification"
+              : "Server-authoritative · not approvable"
+            : "Server-authoritative · read-only"}
+        </div>
+      </div>
+
+      {showMutationHint && (
+        <div
+          role="alert"
+          className="mx-6 mt-4 rounded-md border border-sky-300 bg-sky-50 px-4 py-3 text-[12px] text-sky-900"
+        >
+          <div className="font-semibold uppercase tracking-widest text-[10px]">
+            Mutation unavailable
+          </div>
+          <p className="mt-1">
+            Edit / Reject / Revalidate / Request regeneration are not implemented in this
+            slice. Only Approve is wired through to the server.
+          </p>
+          <button
+            onClick={onDismissMutationHint}
+            className={`mt-2 text-[11px] uppercase tracking-widest text-sky-800 hover:text-sky-900 underline`}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {disabledExplanation && (
+        <div
+          role="status"
+          className="mx-6 mt-4 rounded-md border border-stone-300 bg-stone-50 px-4 py-3 text-[12px] text-stone-800 leading-snug"
+          data-testid="approve-disabled-explanation"
+        >
+          <div className="font-semibold uppercase tracking-widest text-[10px] text-stone-600">
+            Approval unavailable
+          </div>
+          <p className="mt-1">{disabledExplanation}</p>
+          {!canApprove && (
+            <p className="mt-2 text-[11px] text-stone-500 italic">
+              Contact a Spectre administrator to request the HR training approval permission.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="px-6 py-4 flex gap-2 flex-wrap items-center">
+        <button
+          type="button"
+          onClick={() => {
+            if (approveButtonEnabled) setDialogOpen(true);
+          }}
+          disabled={!approveButtonEnabled}
+          aria-disabled={!approveButtonEnabled}
+          aria-haspopup={approveButtonEnabled ? "dialog" : undefined}
+          title={approveButtonEnabled ? undefined : disabledTitle}
+          data-testid="approve-candidate-button"
+          className={
+            approveButtonEnabled
+              ? `rounded-md bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 text-sm font-medium ${FOCUS_RING}`
+              : disabledStubStyle
+          }
+        >
+          Approve candidate
+        </button>
+
+        {["Edit question", "Reject", "Revalidate", "Request regeneration"].map((label) => (
+          <button
+            key={label}
+            type="button"
+            onClick={onAttemptMutation}
+            className={disabledStubStyle}
+            title={disabledTitle}
+            aria-disabled
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="px-6 py-3 border-t border-stone-200 bg-stone-50 text-[11px] text-stone-500">
+        <span className="uppercase tracking-widest">Workflow</span>
+        <span className="ml-2 font-medium text-stone-700">
+          Generated → Validation → Manager review → Approved draft
+        </span>
+        <span className="mx-2 text-stone-300" aria-hidden>·</span>
+        An approved draft remains an unpublished draft. Publication requires a separate
+        authorised step.
+      </div>
+
+      {verifiedAnswer?.kind === "verified" && (
+        <div className="px-6 py-3 border-t border-emerald-200 bg-emerald-50/60 text-[12px] text-emerald-900 leading-snug">
+          <span className="font-semibold uppercase tracking-widest text-[10px] text-emerald-800">
+            Verified correct
+          </span>{" "}
+          Option {String.fromCharCode(65 + verifiedAnswer.optionIndex)} was verified
+          {verifiedAnswer.verifiedByUserName ? (
+            <> by <strong>{verifiedAnswer.verifiedByUserName}</strong></>
+          ) : null}
+          {verifiedAnswer.verifiedAt ? (
+            <> on {new Date(verifiedAnswer.verifiedAt).toISOString().slice(0, 10)}</>
+          ) : null}
+          .
+        </div>
+      )}
+
+      {approveButtonEnabled && (
+        <ApprovalDialog
+          open={dialogOpen}
+          detail={detail}
+          reviewerUserId={eligibility?.reviewerUserId ?? ""}
+          reviewerDisplayName={eligibility?.reviewerDisplayName ?? ""}
+          onClose={() => setDialogOpen(false)}
+          onApproved={() => {
+            // Fresh server read — the authoritative verified-answer
+            // chip + the "APPROVED_DRAFT" state come from the next
+            // render, never from local state.
+            router.refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ---------- Read-only control bar ----------
 
 function ReadOnlyControls({
@@ -1236,7 +1471,7 @@ function ReadOnlyControls({
 function EmptyState({ clubLabel }: { clubLabel: string }) {
   return (
     <div className="min-h-screen bg-[#faf8f2]">
-      <PersistedHeader clubLabel={clubLabel} queueCount={0} />
+      <PersistedHeader clubLabel={clubLabel} queueCount={0} canApprove={false} />
       <div className="mx-auto max-w-[1600px] px-6 py-12">
         <div className="mx-auto max-w-xl rounded-lg border border-stone-200 bg-white p-8 text-stone-800 shadow-sm" role="status">
           <div className="text-[11px] uppercase tracking-widest">No persisted candidates</div>

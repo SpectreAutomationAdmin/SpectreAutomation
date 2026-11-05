@@ -43,6 +43,10 @@ import {
   resolveVerifiedAnswer,
   type VerifiedAnswerResolution,
 } from "@/lib/hr/training/ai-review/verified-answer-reader";
+import {
+  computeReviewerEligibility,
+  type ReviewerEligibility,
+} from "@/lib/hr/training/ai-review/reviewer-eligibility";
 import PersistedReviewWorkspace from "@/components/ai-training/PersistedReviewWorkspace";
 
 export const metadata = {
@@ -196,6 +200,27 @@ export default async function PersistedAiTrainingReviewPage(
       }
     : null;
 
+  // EP-TRAIN-6D-4P (2026-11-05) — server-derived reviewer eligibility.
+  //
+  // The client NEVER recomputes approvability. This boolean + the
+  // per-candidate reasons list are the only authority the browser
+  // consumes — the POST route still re-checks every 4B/4N gate, so a
+  // tampered client flag gains no privilege.
+  //
+  // CLUB_ADMIN carries `hr:training:ai:read` only; `canApprove` will
+  // be `false` and the Approve button renders disabled with a
+  // reason-specific explanation.
+  const reviewerDisplayName: string =
+    principal.name && principal.name.length > 0 ? principal.name : principal.email;
+  const reviewerEligibility: ReviewerEligibility = computeReviewerEligibility(
+    principal,
+    clubId,
+    selectedDetail,
+    evidence,
+    verifiedAnswer,
+    reviewerDisplayName,
+  );
+
   return (
     <PersistedReviewWorkspace
       queue={queue}
@@ -208,6 +233,7 @@ export default async function PersistedAiTrainingReviewPage(
       sourceContext={sourceContext}
       evidence={evidence}
       verifiedAnswer={verifiedAnswer}
+      reviewerEligibility={reviewerEligibility}
     />
   );
 }
