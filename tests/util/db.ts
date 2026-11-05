@@ -561,6 +561,15 @@ export async function resetDb() {
     c.trainingQuestionAiValidation.deleteMany(),
     c.trainingQuestionAiDraft.deleteMany(),
     c.trainingQuestionAiGenerationRun.deleteMany(),
+    // EP-TRAIN-6D-4K (2026-11-05) — immutable transcript evidence +
+    // grounding projections. Child → parent order:
+    //   TrainingTranscriptSegment → TrainingTranscriptBuild
+    //   TrainingGroundingProjection has a nullable FK into Draft but
+    //   drafts are cleared above; projections are deleted here before
+    //   TrainingCourseVersion to unblock their courseVersion FK.
+    c.trainingTranscriptSegment.deleteMany(),
+    c.trainingTranscriptBuild.deleteMany(),
+    c.trainingGroundingProjection.deleteMany(),
     c.trainingCourseVersion.deleteMany(),
     c.trainingCourse.deleteMany(),
     c.employeePortalQuickLink.deleteMany(),

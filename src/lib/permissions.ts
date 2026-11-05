@@ -307,6 +307,13 @@ export const PERMISSIONS = {
   "hr:training:ai:remediate-rejected": { name: "Authorise a remediation chain on a rejected AI training draft (least-privilege escape hatch)", category: "HR" },
   "hr:training:ai:archive":            { name: "Archive a terminal AI training draft after the retention window", category: "HR" },
 
+  // EP-TRAIN-6D-4L (2026-11-05) — Durable transcript + grounding-projection
+  // evidence ingestion. Added to the catalogue ONLY. NO role grants in this
+  // slice. The permission is reserved for a future narrowly-authorised
+  // ingestion identity (e.g. a signed-worker service principal) wired up
+  // in a separate, authorised slice.
+  "hr:training:transcription:write": { name: "Persist authoritative transcript + grounding-projection evidence rows (service principal only; no interactive user role should ever hold this)", category: "HR" },
+
   // SIGNUP-2 Phase 2D (2026-10-25) -- Operator signup verification.
   // Granted ONLY to SUPER_ADMIN at launch per founder decision 1.
   // Phase 2H can later split into finer-grained scopes with a
