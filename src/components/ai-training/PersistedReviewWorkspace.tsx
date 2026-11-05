@@ -30,13 +30,18 @@
 //     surfaces that provenance honestly rather than presenting
 //     them as truncated hashes.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   CandidateDetail,
   CandidateQueueRow,
   LifecycleState,
   Verdict,
 } from "@/lib/hr/training/ai-review/read-service";
+import type {
+  CandidateEvidence,
+  CitedSegmentResolution,
+  AuthenticEvidence,
+} from "@/lib/hr/training/ai-review/evidence-reader";
 
 const FOCUS_RING =
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-stone-600";
@@ -264,6 +269,13 @@ export interface PersistedReviewWorkspaceProps {
     readonly videoStorageKeyPresent: boolean;
     readonly videoDurationSec: number | null;
   } | null;
+  /** EP-TRAIN-6D-4M — authenticated evidence payload resolved by
+   *  `resolveCandidateEvidence`. One of:
+   *    - `kind: "authentic"` — authoritative segments + click-to-seek
+   *    - `kind: "historical-unavailable"` — 6D-4H candidate, unchanged
+   *    - `kind: "evidence-integrity-failure"` — fail-closed banner
+   *  Null when no candidate is selected. */
+  readonly evidence?: CandidateEvidence | null;
 }
 
 export default function PersistedReviewWorkspace(props: PersistedReviewWorkspaceProps) {
@@ -327,6 +339,7 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
                 <EvidencePanel
                   detail={props.selectedDetail}
                   sourceContext={props.sourceContext ?? null}
+                  evidence={props.evidence ?? null}
                 />
               </div>
             )}
@@ -342,6 +355,7 @@ export default function PersistedReviewWorkspace(props: PersistedReviewWorkspace
               <EvidencePanel
                 detail={props.selectedDetail}
                 sourceContext={props.sourceContext ?? null}
+                evidence={props.evidence ?? null}
               />
             ) : (
               <EvidenceEmpty />
@@ -534,34 +548,44 @@ function DetailBody({
           {detail.draft.questionText}
         </p>
 
+        {/* EP-TRAIN-6D-4M (2026-11-05) — authoritative "Correct" is
+            reserved for human-verified answers, written only through
+            the future 4N approval route. Until that governance chain
+            lands, NO option renders with emerald correctness styling —
+            including the AI's self-asserted `isCorrect: true`. Instead
+            we mark the model-selected option(s) with a neutral
+            "Model-selected — unverified" chip so reviewers understand
+            that the selection is a prediction, not a verified fact.
+
+            Note: `isSingleAnswer` and `optionItemRole` keep the
+            existing ARIA shape for screen readers, but `aria-checked`
+            is now bound to `null` — "verified correct" is not a
+            property any current 4M code path can assert. */}
         <div className="mt-6 text-[11px] uppercase tracking-widest text-stone-400 mb-2">
           Answer choices
         </div>
-        <ol className="space-y-2" role={optionsRole} aria-label="Answer choices">
+        <p className="mb-2 text-[12px] text-stone-600 leading-snug">
+          The options below are the <strong>model&rsquo;s prediction</strong>. Until a human reviewer approves this candidate, no answer here is a verified fact.
+        </p>
+        <ol className="space-y-2" role={optionsRole} aria-label="Answer choices (model prediction — unverified)">
           {detail.draft.options.map((o, i) => (
             <li
               key={i}
               role={optionItemRole}
-              aria-checked={isSingleAnswer ? o.isCorrect : undefined}
-              className={`flex items-start gap-3 rounded-md px-3 py-2.5 border ${
-                o.isCorrect
-                  ? "bg-emerald-50/60 border-emerald-200"
-                  : "bg-stone-50 border-stone-200"
-              }`}
+              aria-checked={isSingleAnswer ? false : undefined}
+              className="flex items-start gap-3 rounded-md px-3 py-2.5 border bg-stone-50 border-stone-200"
             >
               <span
                 aria-hidden
-                className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium ${
-                  o.isCorrect ? "bg-emerald-600 text-white" : "bg-stone-200 text-stone-600"
-                }`}
+                className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium bg-stone-200 text-stone-600"
               >
                 {String.fromCharCode(65 + i)}
               </span>
               <span className="text-stone-800 text-[15px] leading-relaxed">{o.text}</span>
               {o.isCorrect && (
-                <span className="ml-auto text-[10px] uppercase tracking-widest text-emerald-700 mt-1">
-                  <span aria-hidden>Correct</span>
-                  <span className="sr-only">Correct answer</span>
+                <span className="ml-auto text-[10px] uppercase tracking-widest text-stone-500 mt-1 whitespace-nowrap">
+                  <span aria-hidden>Model-selected · unverified</span>
+                  <span className="sr-only">Model-selected answer — unverified</span>
                 </span>
               )}
             </li>
@@ -610,17 +634,24 @@ function DetailBody({
 function EvidencePanel({
   detail,
   sourceContext,
+  evidence,
 }: {
   detail: CandidateDetail;
   sourceContext: PersistedReviewWorkspaceProps["sourceContext"] | null | undefined;
+  evidence: CandidateEvidence | null;
 }) {
   const v = detail.latestValidation;
   const flagSet = new Set<string>(v?.flags ?? []);
-  const hasSourceOrgMismatch = flagSet.has("SOURCE_ORG_MISMATCH");
+  const hasSourceOrgMismatch =
+    flagSet.has("SOURCE_ORG_MISMATCH") ||
+    (evidence?.kind === "authentic" && evidence.sourceOrgMismatchFlagsPresent);
   const hasRealGrounding = isRealSha256(detail.groundingProjectionSha256);
+  const isHistorical = evidence?.kind === "historical-unavailable";
+  const isIntegrityFailure = evidence?.kind === "evidence-integrity-failure";
+  const isAuthentic = evidence?.kind === "authentic";
   const groundingNote = hasRealGrounding
     ? null
-    : "This candidate was imported from a historical pilot where the grounding projection hash was not retained. The cited segments and validation remain authoritative; the grounding fingerprint is a fixture placeholder.";
+    : "This candidate was imported from a historical pilot where the grounding projection hash was not retained. Transcript text and timestamps are not available; the grounding fingerprint is a fixture placeholder.";
 
   return (
     <div className="sticky top-6 rounded-lg bg-white shadow-sm border border-stone-200 overflow-hidden">
@@ -690,40 +721,47 @@ function EvidencePanel({
         )}
       </div>
 
-      {/* Cited segments — authoritative, but transcript body is NOT
-          persisted on the AI-review schema. We say so explicitly. */}
+      {/* EP-TRAIN-6D-4M — authenticated cited transcript segments.
+          Branches on `evidence.kind`:
+            * authentic: text + startSec–endSec + optional ▶ seek
+            * historical-unavailable: segment numbers only + banner
+            * evidence-integrity-failure: fail-closed safe diagnostic
+            * null (no selection): legacy "not persisted" fallback */}
       <div className="px-4 py-3 border-b border-stone-200">
-        <div className="text-[11px] uppercase tracking-widest text-stone-500">
-          Cited transcript segments
-        </div>
-        <ul className="mt-1 flex flex-wrap gap-1 text-[11px]">
-          {detail.draft.sourceSegmentIds.length > 0 ? (
-            detail.draft.sourceSegmentIds.map((s) => (
-              <li
-                key={s}
-                className="rounded bg-[#f5f0e2] border border-[#d9cf9f] px-2 py-0.5 font-mono"
-              >
-                seg {s}
-              </li>
-            ))
-          ) : (
-            <li className="text-stone-500 italic">No segments cited.</li>
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="text-[11px] uppercase tracking-widest text-stone-500">
+            Cited transcript segments
+          </div>
+          {isHistorical && (
+            <span className="rounded bg-amber-50 text-amber-800 border border-amber-200 px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+              Historical evidence unavailable
+            </span>
           )}
-        </ul>
-        <div className="mt-2 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-600 leading-snug">
-          <span className="font-semibold uppercase tracking-widest text-[10px] text-stone-500">
-            Transcript body
-          </span>
-          <span className="block mt-0.5">
-            Not persisted on the AI-review schema in this slice. Reviewers must
-            consult the source video / resolved transcript directly (via the
-            separately-authorised media integration) to verify each cited segment
-            matches the question.
-          </span>
+          {isIntegrityFailure && (
+            <span className="rounded bg-rose-50 text-rose-800 border border-rose-200 px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+              Evidence integrity failure
+            </span>
+          )}
         </div>
-        <div className="mt-2 text-[11px] text-stone-500 italic">
-          Timestamps per cited segment are not persisted either.
-        </div>
+
+        {isIntegrityFailure && evidence ? (
+          <div
+            role="alert"
+            className="mt-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-[12px] text-rose-900 leading-snug"
+          >
+            {evidence.safeMessage}
+            <div className="mt-1 font-mono text-[10px] text-rose-700">{evidence.code}</div>
+          </div>
+        ) : isAuthentic && evidence ? (
+          <AuthenticCitedSegments
+            evidence={evidence}
+            detail={detail}
+          />
+        ) : (
+          <HistoricalCitedSegments
+            segmentIndices={detail.draft.sourceSegmentIds}
+          />
+        )}
       </div>
 
       {/* Validation errors — plain-language labels, raw code preserved for audit. */}
@@ -842,6 +880,203 @@ function EvidencePanel({
         )}
       </details>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// EP-TRAIN-6D-4M — evidence sub-components
+// ---------------------------------------------------------------------
+
+function formatSec(decimalString: string | null): string {
+  if (!decimalString) return "—";
+  const n = Number(decimalString);
+  if (!Number.isFinite(n)) return "—";
+  return n.toFixed(2) + "s";
+}
+
+function HistoricalCitedSegments({
+  segmentIndices,
+}: {
+  segmentIndices: readonly number[];
+}) {
+  return (
+    <>
+      <ul className="mt-1 flex flex-wrap gap-1 text-[11px]">
+        {segmentIndices.length > 0 ? (
+          segmentIndices.map((s) => (
+            <li
+              key={s}
+              className="rounded bg-[#f5f0e2] border border-[#d9cf9f] px-2 py-0.5 font-mono"
+            >
+              seg {s}
+            </li>
+          ))
+        ) : (
+          <li className="text-stone-500 italic">No segments cited.</li>
+        )}
+      </ul>
+      <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-[12px] text-amber-900 leading-snug">
+        <span className="font-semibold uppercase tracking-widest text-[10px] text-amber-800">
+          Historical evidence unavailable
+        </span>
+        <span className="block mt-0.5">
+          This candidate was imported from the EP-TRAIN-6C pilot. The authoritative
+          per-segment transcript text and timestamps were not durably persisted for
+          the pilot runs, so Spectre cannot display them here without fabricating
+          them. Reviewers must consult the original source video directly and must
+          not treat the segment numbers below as self-verifying.
+        </span>
+      </div>
+    </>
+  );
+}
+
+function AuthenticCitedSegments({
+  evidence,
+  detail,
+}: {
+  evidence: AuthenticEvidence;
+  detail: CandidateDetail;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [playerError, setPlayerError] = useState<string | null>(null);
+
+  const seek = (segment: CitedSegmentResolution) => {
+    if (!evidence.videoSeekEnabled) return;
+    if (segment.unavailableReason !== null) return;
+    if (segment.startSec === null) return;
+    const el = videoRef.current;
+    if (!el) return;
+    const n = Number(segment.startSec);
+    if (!Number.isFinite(n)) return;
+    try {
+      el.currentTime = n;
+      void el.play().catch((err: unknown) => {
+        setPlayerError(err instanceof Error ? err.message : "Playback could not start.");
+      });
+    } catch (err) {
+      setPlayerError(err instanceof Error ? err.message : "Playback could not start.");
+    }
+  };
+
+  const videoSrc = evidence.videoSeekEnabled
+    ? `/api/hr/training/versions/${encodeURIComponent(evidence.videoSourceVersionId)}/video`
+    : null;
+
+  return (
+    <>
+      {videoSrc && (
+        <div className="mt-2">
+          <video
+            ref={videoRef}
+            controls
+            preload="metadata"
+            className="w-full rounded border border-stone-200 bg-black"
+            src={videoSrc}
+            onError={() =>
+              setPlayerError(
+                "The authenticated video could not be loaded. Confirm you still have access to this course version.",
+              )
+            }
+          >
+            <track kind="captions" srcLang="en" label="English (captions unavailable)" />
+          </video>
+          {playerError && (
+            <div
+              role="alert"
+              className="mt-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-800 leading-snug"
+            >
+              {playerError}
+            </div>
+          )}
+        </div>
+      )}
+
+      <ul className="mt-3 space-y-2 text-[12px]">
+        {evidence.citedSegments.length === 0 && (
+          <li className="text-stone-500 italic">No segments cited.</li>
+        )}
+        {evidence.citedSegments.map((seg) => {
+          const resolved = seg.unavailableReason === null;
+          if (resolved) {
+            return (
+              <li
+                key={seg.segmentIndex}
+                className="rounded border border-stone-200 bg-white px-3 py-2"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-stone-500">
+                    seg {seg.segmentIndex} · {formatSec(seg.startSec)}–{formatSec(seg.endSec)}
+                  </span>
+                  {evidence.videoSeekEnabled && (
+                    <button
+                      type="button"
+                      onClick={() => seek(seg)}
+                      className={`text-[10px] uppercase tracking-widest text-stone-600 hover:text-stone-900 ${FOCUS_RING} rounded px-1.5 py-0.5`}
+                      aria-label={`Play source video from ${formatSec(seg.startSec)}`}
+                    >
+                      ▶ Play
+                    </button>
+                  )}
+                </div>
+                <p className="mt-1 text-stone-800 leading-snug">{seg.text}</p>
+                {(seg.pendingReview.length > 0 ||
+                  seg.sourceOrgMismatch.length > 0 ||
+                  seg.uncertaintyWarning) && (
+                  <div className="mt-1 text-[10px] text-amber-800 leading-snug">
+                    {seg.sourceOrgMismatch.length > 0 && (
+                      <span className="mr-2">source-org-mismatch</span>
+                    )}
+                    {seg.pendingReview.length > 0 && (
+                      <span className="mr-2">pending-review</span>
+                    )}
+                    {seg.uncertaintyWarning && <span>uncertainty: {seg.uncertaintyWarning}</span>}
+                  </div>
+                )}
+              </li>
+            );
+          }
+          // Unavailable branch — reason-specific copy.
+          let unavailableCopy = "Transcript body not available for this segment.";
+          if (seg.unavailableReason === "SEGMENT_EXCLUDED_BY_AUTHORISATION") {
+            unavailableCopy = "This segment is excluded by the pilot authorisation and cannot be used as trusted grounding.";
+          } else if (seg.unavailableReason === "SEGMENT_NOT_IN_AUTHORISED_PROJECTION") {
+            unavailableCopy = "This segment was cited by the model but is not in the authorised grounding projection.";
+          } else if (seg.unavailableReason === "SEGMENT_NOT_PERSISTED") {
+            unavailableCopy = "This segment is in the authorised projection but has no persisted transcript text.";
+          }
+          return (
+            <li
+              key={seg.segmentIndex}
+              className="rounded border border-rose-200 bg-rose-50 px-3 py-2"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-rose-700">
+                  seg {seg.segmentIndex}
+                </span>
+                <span className="text-[10px] uppercase tracking-widest text-rose-700">
+                  Unavailable
+                </span>
+              </div>
+              <p className="mt-1 text-[12px] text-rose-900 leading-snug">{unavailableCopy}</p>
+              <div className="mt-1 font-mono text-[10px] text-rose-700">{seg.unavailableReason}</div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-600 leading-snug">
+        <span className="font-semibold uppercase tracking-widest text-[10px] text-stone-500">
+          Transcription source
+        </span>
+        <span className="block mt-0.5">
+          {evidence.transcriber.transcriberName} {evidence.transcriber.transcriberVersion}
+          {" · "}
+          model {evidence.transcriber.transcriberModelName} {evidence.transcriber.transcriberModelVersion}
+          {detail.resolvedTranscriptBuildId ? "" : ""}
+        </span>
+      </div>
+    </>
   );
 }
 

@@ -35,6 +35,10 @@ import {
   type CandidateQueueRow,
   type CandidateDetail,
 } from "@/lib/hr/training/ai-review/read-service";
+import {
+  resolveCandidateEvidence,
+  type CandidateEvidence,
+} from "@/lib/hr/training/ai-review/evidence-reader";
 import PersistedReviewWorkspace from "@/components/ai-training/PersistedReviewWorkspace";
 
 export const metadata = {
@@ -145,44 +149,44 @@ export default async function PersistedAiTrainingReviewPage(
 
   const queue: readonly CandidateQueueRow[] = queuePage.rows;
 
-  // EP-TRAIN-6D-4I — enrich the selected detail with the reviewer-facing
-  // course + version context. These are the authoritative fields on the
-  // TrainingCourseVersion / TrainingCourse rows — they are NOT derived,
-  // guessed, or invented, and they come through the same tenant-scoped
-  // Prisma client the rest of this page uses. If the lookup misses, the
-  // workspace falls back to "unavailable" labels on the client.
-  let sourceContext: {
-    courseTitle: string | null;
-    versionTitle: string | null;
-    versionNumber: number | null;
-    videoStorageKeyPresent: boolean;
-    videoDurationSec: number | null;
-  } | null = null;
-
+  // EP-TRAIN-6D-4M (2026-11-05) — authenticated evidence resolution.
+  //
+  // `resolveCandidateEvidence` composes the 4K schema + 4L ingest helpers:
+  //   - For drafts with a non-null groundingProjectionId, it reconciles
+  //     the stored projection hash against the draft's scalar hash AND
+  //     a server-recomputed canonical hash, resolves every cited
+  //     segment to authoritative persisted transcript text + timestamps
+  //     (or surfaces per-segment "unavailable" reasons), and reports
+  //     whether click-to-seek is enabled.
+  //   - For historical 6D-4H candidates (null FK), it returns a
+  //     dedicated `historical-unavailable` payload — the UI renders the
+  //     accepted "Historical evidence unavailable" treatment without
+  //     fabricating segment bodies.
+  //   - For integrity failures (hash mismatch, missing build,
+  //     unresolvable citations), it returns a dedicated `evidence-
+  //     integrity-failure` payload — the UI surfaces a safe diagnostic
+  //     and withholds authoritative evidence.
+  //
+  // The reader is tenant-scoped at every lookup; cross-tenant drafts
+  // resolve as null and are mapped to a 404 same-shape downstream.
+  //
+  // The legacy `sourceContext` prop is still passed (derived from the
+  // evidence payload's `sourceMaterial` summary) so the workspace's
+  // existing props contract remains unchanged for callers that don't
+  // yet consume `evidence`.
+  let evidence: CandidateEvidence | null = null;
   if (selectedDetail) {
-    const version = await prisma.trainingCourseVersion.findUnique({
-      where: { id: selectedDetail.courseVersionId },
-      select: {
-        title: true,
-        version: true,
-        videoStorageKey: true,
-        videoDurationSec: true,
-        course: { select: { title: true, clubId: true } },
-      },
-    });
-    // Tenant assertion — a version resolved for a candidate the tenant
-    // can see must itself belong to the tenant. Belt-and-braces guard
-    // against a mis-joined row.
-    if (version && version.course?.clubId === clubId) {
-      sourceContext = {
-        courseTitle: version.course?.title ?? null,
-        versionTitle: version.title ?? null,
-        versionNumber: version.version ?? null,
-        videoStorageKeyPresent: Boolean(version.videoStorageKey),
-        videoDurationSec: version.videoDurationSec ?? null,
-      };
-    }
+    evidence = await resolveCandidateEvidence(principal, clubId, selectedDetail.draftId);
   }
+  const sourceContext = evidence
+    ? {
+        courseTitle: evidence.sourceMaterial.courseTitle,
+        versionTitle: evidence.sourceMaterial.versionTitle,
+        versionNumber: evidence.sourceMaterial.versionNumber,
+        videoStorageKeyPresent: evidence.sourceMaterial.videoStorageKeyPresent,
+        videoDurationSec: evidence.sourceMaterial.videoDurationSec,
+      }
+    : null;
 
   return (
     <PersistedReviewWorkspace
@@ -194,6 +198,7 @@ export default async function PersistedAiTrainingReviewPage(
       nextCursor={queuePage.nextCursor}
       isEmptyQueue={queue.length === 0}
       sourceContext={sourceContext}
+      evidence={evidence}
     />
   );
 }

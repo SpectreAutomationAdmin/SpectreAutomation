@@ -256,18 +256,74 @@ describe("ep-train-6d-4d · real-DB integration", () => {
     expect(detail!.reviews[0].disposition).toBe("APPROVED");
   });
 
-  it("without hr:training:ai:read, listCandidates throws FORBIDDEN", async () => {
+  // EP-TRAIN-6D-4M (2026-11-05) — per the directive's §7 "Existing
+  // RBAC regression correction": the accepted 4G policy grants
+  // CLUB_ADMIN hr:training:ai:read, which contradicted this test's
+  // original "CLUB_ADMIN is forbidden" expectation.
+  //
+  // Repair: use STAFF (which is NOT granted hr:training:ai:read) as
+  // the FORBIDDEN fixture + add positive + negative controls to
+  // confirm the 4G policy end-to-end.
+
+  it("without hr:training:ai:read, listCandidates throws FORBIDDEN (STAFF)", async () => {
     const clubA = await makeClub("Alpha Club 6D4D NP");
+    const staffA = await makeUser({
+      email: `staff-a-np-${Date.now()}@example.test`,
+      role: "STAFF",
+      clubId: clubA.id,
+    });
+
+    const p = await principalForUser(staffA.id, clubA.id);
+    await expect(listCandidates(p, clubA.id, {}))
+      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+  });
+
+  it("CLUB_ADMIN holds hr:training:ai:read per 4G policy; listCandidates SUCCEEDS", async () => {
+    const clubA = await makeClub("Alpha Club 6D4M CA");
     const adminA = await makeUser({
-      email: `admin-a-np-${Date.now()}@example.test`,
+      email: `admin-a-ca-${Date.now()}@example.test`,
       role: "CLUB_ADMIN",
       clubId: clubA.id,
     });
-    // Note: NO grantReadPermissionToRole call — default role grants
-    // don't include hr:training:ai:read.
 
     const p = await principalForUser(adminA.id, clubA.id);
-    await expect(listCandidates(p, clubA.id, {}))
-      .rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+    const result = await listCandidates(p, clubA.id, {});
+    expect(result.rows).toEqual([]);
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("CLUB_ADMIN's AI-read grant does NOT confer transcription-ingest / generate / edit / revalidate / approve / remediate / archive", async () => {
+    const clubA = await makeClub("Alpha Club 6D4M NEG");
+    const adminA = await makeUser({
+      email: `admin-a-neg-${Date.now()}@example.test`,
+      role: "CLUB_ADMIN",
+      clubId: clubA.id,
+    });
+
+    const p = await principalForUser(adminA.id, clubA.id);
+
+    // Negative controls — CLUB_ADMIN's 4G hr:training:ai:read grant
+    // does NOT also carry any of the SEVEN consequential AI-review
+    // permissions (generate / edit / revalidate / approve / remediate
+    // / archive) OR the 4L ingestion permission. These are deliberately
+    // withheld and remain SUPER_ADMIN-only until a separate authorised
+    // slice extends the grants.
+    //
+    // Note: hr:training:assign and hr:training:publish are legitimate
+    // CLUB_ADMIN grants for NON-AI training admin and are intentionally
+    // NOT in this refused list — they predate the AI workflow.
+    const { hasPermission } = await import("@/lib/rbac");
+    const refusedKeys = [
+      "hr:training:transcription:write", // 4L ingestion
+      "hr:training:ai:generate",          // generation
+      "hr:training:ai:edit",              // reviewer edit
+      "hr:training:ai:revalidate",        // revalidation
+      "hr:training:ai:approve",           // 4N approval
+      "hr:training:ai:remediate-rejected",// remediation
+      "hr:training:ai:archive",           // archive
+    ] as const;
+    for (const key of refusedKeys) {
+      expect(hasPermission(p, clubA.id, key)).toBe(false);
+    }
   });
 });
