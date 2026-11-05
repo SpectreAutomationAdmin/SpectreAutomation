@@ -584,6 +584,11 @@ model Club {
   aiQuestionReviews         TrainingQuestionAiReview[]
   aiQuestionStateTransitions TrainingQuestionAiStateTransition[]
   aiQuestionOperationKeys   TrainingQuestionAiOperationKey[]
+
+  // EP-TRAIN-6D-4K (2026-11-05) — immutable transcript + projection evidence.
+  trainingTranscriptBuilds       TrainingTranscriptBuild[]
+  trainingTranscriptSegments     TrainingTranscriptSegment[]
+  trainingGroundingProjections   TrainingGroundingProjection[]
 }
 
 // ---------------------------------------------------------------------
@@ -13090,6 +13095,8 @@ model TrainingCourseVersion {
   // EP-TRAIN-6D-4B (2026-11-04) -- AI review workflow.
   aiGenerationRuns TrainingQuestionAiGenerationRun[]
   aiQuestionDrafts TrainingQuestionAiDraft[]
+  // EP-TRAIN-6D-4K (2026-11-05) -- immutable grounding projection evidence.
+  trainingGroundingProjections TrainingGroundingProjection[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -16845,6 +16852,23 @@ model TrainingQuestionAiDraft {
   pilotAuthorizationId          String
   pilotAuthorizationFingerprint String
 
+  // EP-TRAIN-6D-4K (2026-11-05) — FK to the durable projection row the
+  // draft was generated against. Nullable until 4L backfills new rows;
+  // historical EP-TRAIN-6D-4H rows remain NULL forever (their projection
+  // hash is the "fixture-<label>" placeholder and no durable projection
+  // row exists for them). onDelete: Restrict — projections underlying
+  // reviewer-approved drafts cannot be silently deleted.
+  groundingProjectionId         String?
+  groundingProjection           TrainingGroundingProjection? @relation(fields: [groundingProjectionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  // EP-TRAIN-6D-4K (2026-11-05) — frozen canonical JSON of the options as
+  // the model emitted them: [{ text, isCorrect }, …]. Record of record
+  // for what the MODEL selected. Distinct from the human-verified answer
+  // (see TrainingQuestionAiValidation.verifiedCorrectAnswerSnapshotJson).
+  // Nullable: every historical EP-TRAIN-6D-4H row has NULL; new drafts
+  // written via the Modal path populate it at generation-time.
+  modelSelectedAnswerSnapshotJson String?
+
   // Lifecycle
   state                         String   @default("GENERATED")
   stateChangedAt                DateTime @default(now())
@@ -16912,6 +16936,23 @@ model TrainingQuestionAiValidation {
   runByJobId                    String?
 
   createdAt                     DateTime @default(now())
+
+  // EP-TRAIN-6D-4K (2026-11-05) — reviewer-asserted authoritative "correct"
+  // answer snapshot. Set ONLY by the approval route (4N), inside the
+  // same DB transaction that advances the draft to APPROVED_DRAFT. Null
+  // on every REJECTED / REQUIRES_HUMAN_REVIEW / GENERATED /
+  // EDITED_VALIDATION_STALE / VALIDATION_FAILED / ARCHIVED row — ARCHIVED
+  // is NOT automatic eligibility; eligibility is the presence of this
+  // snapshot, nothing else. Canonical JSON shape:
+  //   { "optionIndex": number, "optionText": string,
+  //     "verifiedByUserId": string, "verifiedAt": "ISO 8601",
+  //     "draftContentHash": string, "validationId": string }
+  // The duplicated draftContentHash + validationId bind the snapshot to
+  // the exact immutable draft + validation version. A later reviewer
+  // edit supersedes the draft via supersedesDraftId; the new draft's
+  // validations start with this column NULL and must earn their own
+  // approval.
+  verifiedCorrectAnswerSnapshotJson String?
 
   reviewsDrivenBy               TrainingQuestionAiReview[] @relation("ValidationDrivingReview")
 
@@ -17020,4 +17061,183 @@ model TrainingQuestionAiOperationKey {
   @@unique([route, requestKey, reviewerUserId, draftId])
   @@index([clubId, expiresAt])
   @@index([draftId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EP-TRAIN-6D-4K (2026-11-05) — Immutable transcript + projection
+// evidence foundation. Additive-only; four existing AI-review tables
+// unchanged.
+//
+// Design origin: EP-TRAIN-6D-4J architecture, with ONE preflight-
+// surfaced correction — transcription-run metadata (transcriber name /
+// model / version / config hash / produced-at) is lifted off the
+// segment row into a dedicated TrainingTranscriptBuild row. Rationale:
+// the founder directive (§4) requires "actual engine/model/version
+// metadata per run". Storing those values per segment allows drift
+// across segments of the same build that PostgreSQL cannot detect;
+// the three-table shape makes run-level identity single-sourced and
+// immutable. All other constraints from 6D-4J architecture are
+// preserved verbatim.
+// ═══════════════════════════════════════════════════════════════════
+
+// -------------------------------------------------------------------
+// TrainingTranscriptBuild
+// -------------------------------------------------------------------
+// One row per deterministic transcription run of a given source video
+// for a given tenant. Identified by resolvedTranscriptBuildId (the
+// content hash of the whole deterministic output). Immutable after
+// insert — a re-transcription produces a new resolvedTranscriptBuildId
+// and therefore a new row.
+model TrainingTranscriptBuild {
+  id                           String   @id @default(cuid())
+
+  // Tenant scope. Always present. Cross-tenant references are refused
+  // at the service layer; this column keeps every read scoped by shape.
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  // Source-material binding. sourceVideoSha256 matches the hash
+  // computed server-side at TrainingCourseVersion video upload
+  // (src/lib/hr/training/video.ts). A single video can back multiple
+  // course versions, so there is NO FK to TrainingCourseVersion here;
+  // the join runs through sourceVideoSha256.
+  sourceVideoSha256            String
+
+  // Deterministic build hash. SHA-256 of the canonical output of the
+  // transcription pass. Within (clubId, sourceVideoSha256) this value
+  // uniquely identifies the build.
+  resolvedTranscriptBuildId    String
+
+  // Transcriber provenance — the actual engine, model, and version
+  // used for this specific run. Per founder directive §4, these are
+  // recorded per run (not assumed from a global default).
+  transcriberName              String   // e.g. "faster-whisper"
+  transcriberVersion           String   // e.g. "1.0.3"
+  transcriberModelName         String   // e.g. "large-v3"
+  transcriberModelVersion      String   // stable identifier for the model artifact
+  transcriberConfigSha256      String   // hash of the deterministic config JSON
+
+  // When the transcription pass ran. Separate from createdAt (which is
+  // when the row was ingested into Spectre).
+  producedAt                   DateTime
+
+  createdAt                    DateTime @default(now())
+
+  segments                     TrainingTranscriptSegment[]
+
+  // Idempotency + uniqueness: the three-part key never repeats.
+  @@unique([clubId, sourceVideoSha256, resolvedTranscriptBuildId])
+
+  @@index([clubId, sourceVideoSha256])
+  @@index([clubId, producedAt])
+}
+
+// -------------------------------------------------------------------
+// TrainingTranscriptSegment
+// -------------------------------------------------------------------
+// One row per transcript segment of a given build. Immutable after
+// insert. Carries the per-segment text + start/end seconds + any
+// per-segment advisory flags. Referenced by GroundingProjection rows
+// via the (clubId, sourceVideoSha256, resolvedTranscriptBuildId,
+// segmentIndex) tuple; segmentIndex matches the index used by the
+// Lite draft's sourceSegmentIds[].
+model TrainingTranscriptSegment {
+  id                           String   @id @default(cuid())
+
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  // FK to the parent build. ON DELETE RESTRICT: segments outlive the
+  // training course version (video deletions are explicit).
+  transcriptBuildId            String
+  transcriptBuild              TrainingTranscriptBuild @relation(fields: [transcriptBuildId], references: [id])
+
+  // 0-based ordinal of the segment within the build. Must match the
+  // segmentIndex the generator cited.
+  segmentIndex                 Int
+
+  // The authoritative transcript body for this segment.
+  text                         String
+
+  // Timestamps in seconds with 3-decimal precision. endSec >= startSec
+  // AND startSec >= 0 enforced by CHECK constraint in the migration.
+  startSec                     Decimal
+  endSec                       Decimal
+
+  // Per-segment advisory flags, preserved verbatim from the
+  // transcription pass. Empty JSON array when none.
+  pendingReviewJson            String   @default("[]")
+  sourceOrgMismatchJson        String   @default("[]")
+  uncertaintyWarning           String?
+
+  createdAt                    DateTime @default(now())
+
+  // Idempotency: a given (club, build, index) exists at most once.
+  @@unique([clubId, transcriptBuildId, segmentIndex])
+
+  @@index([clubId, transcriptBuildId])
+}
+
+// -------------------------------------------------------------------
+// TrainingGroundingProjection
+// -------------------------------------------------------------------
+// One row per immutable grounding-projection subset that was authorised
+// for generation. The sha256 column is the canonical hash of the
+// projection body — the same value that is persisted on
+// TrainingQuestionAiDraft.groundingProjectionSha256 and
+// TrainingQuestionAiGenerationRun.groundingProjectionSha256.
+//
+// The service layer asserts equality between the FK target's sha256
+// and the draft's scalar hash at read time; a mismatch is a hard 500.
+model TrainingGroundingProjection {
+  id                           String   @id @default(cuid())
+
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  // Course-version ownership. Cross-course-version evidence binding is
+  // refused at the service layer; this FK makes the ownership explicit
+  // and enforces tenant+version scoping on every lookup.
+  courseVersionId              String
+  courseVersion                TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  // Canonical content hash — must equal the draft's
+  // groundingProjectionSha256 scalar on linked drafts.
+  sha256                       String
+
+  // Transcription-run binding. These two fields match the sibling
+  // TrainingTranscriptBuild row and are repeated here so the projection
+  // row is self-contained for provenance audits.
+  sourceVideoSha256            String
+  resolvedTranscriptBuildId    String
+
+  // Canonical JSON of the passages array (same shape as
+  // GroundingProjection.passages in src/lib/training/ai-generation/types.ts).
+  // Each passage lists sourceSegmentIds that join to
+  // TrainingTranscriptSegment via the (clubId, sourceVideoSha256,
+  // resolvedTranscriptBuildId, segmentIndex) tuple.
+  passagesJson                 String
+
+  // Canonical JSON of the excludedPassages array (pilot authorisation's
+  // excludedSegmentIds as applied to passages).
+  excludedPassagesJson         String   @default("[]")
+
+  // Flag presence summaries from the projection. Computed at ingest.
+  sourceOrgMismatchFlagsPresent Boolean @default(false)
+  pendingReviewPresent          Boolean @default(false)
+
+  // When transcription + projection prep ran upstream (NOT ingest-time;
+  // ingest-time is createdAt).
+  authoredAt                   DateTime
+
+  createdAt                    DateTime @default(now())
+
+  // Back-relation: drafts generated against this projection.
+  drafts                       TrainingQuestionAiDraft[]
+
+  // Idempotency: a given (club, courseVersion, sha256) exists once.
+  @@unique([clubId, courseVersionId, sha256])
+
+  @@index([clubId, courseVersionId])
+  @@index([clubId, sha256])
 }

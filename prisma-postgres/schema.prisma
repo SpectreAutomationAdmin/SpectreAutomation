@@ -586,6 +586,11 @@ model Club {
   aiQuestionReviews         TrainingQuestionAiReview[]
   aiQuestionStateTransitions TrainingQuestionAiStateTransition[]
   aiQuestionOperationKeys   TrainingQuestionAiOperationKey[]
+
+  // EP-TRAIN-6D-4K (2026-11-05) — immutable transcript + projection evidence.
+  trainingTranscriptBuilds       TrainingTranscriptBuild[]
+  trainingTranscriptSegments     TrainingTranscriptSegment[]
+  trainingGroundingProjections   TrainingGroundingProjection[]
 }
 
 // ---------------------------------------------------------------------
@@ -12901,6 +12906,8 @@ model TrainingCourseVersion {
   // by 6D-4E preflight).
   aiGenerationRuns TrainingQuestionAiGenerationRun[]
   aiQuestionDrafts TrainingQuestionAiDraft[]
+  // EP-TRAIN-6D-4K (2026-11-05) — immutable grounding projection evidence.
+  trainingGroundingProjections TrainingGroundingProjection[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -16203,6 +16210,20 @@ model TrainingQuestionAiDraft {
   pilotAuthorizationId          String
   pilotAuthorizationFingerprint String
 
+  // EP-TRAIN-6D-4K (2026-11-05) — FK to the durable projection row the
+  // draft was generated against. Nullable; historical EP-TRAIN-6D-4H
+  // rows remain NULL. onDelete: Restrict — projections underlying
+  // reviewer-approved drafts cannot be silently deleted.
+  groundingProjectionId         String?
+  groundingProjection           TrainingGroundingProjection? @relation(fields: [groundingProjectionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  // EP-TRAIN-6D-4K (2026-11-05) — frozen canonical JSON of the options
+  // as the model emitted them. Record of record for the MODEL-selected
+  // answer; distinct from human-verified correct (see
+  // TrainingQuestionAiValidation.verifiedCorrectAnswerSnapshotJson).
+  // Nullable; historical rows remain NULL.
+  modelSelectedAnswerSnapshotJson String?
+
   // Lifecycle
   state                         String   @default("GENERATED")
   stateChangedAt                DateTime @default(now())
@@ -16270,6 +16291,19 @@ model TrainingQuestionAiValidation {
   runByJobId                    String?
 
   createdAt                     DateTime @default(now())
+
+  // EP-TRAIN-6D-4K (2026-11-05) — reviewer-asserted authoritative
+  // "correct" answer snapshot. Set ONLY by the approval route (4N),
+  // inside the same DB transaction that advances the draft to
+  // APPROVED_DRAFT. Null on every REJECTED / REQUIRES_HUMAN_REVIEW /
+  // GENERATED / EDITED_VALIDATION_STALE / VALIDATION_FAILED /
+  // ARCHIVED row — ARCHIVED alone is NOT eligibility; the presence
+  // of this snapshot is the ONLY signal. Shape:
+  //   { optionIndex, optionText, verifiedByUserId, verifiedAt,
+  //     draftContentHash, validationId }.
+  // The duplicated draftContentHash + validationId bind the snapshot
+  // to the exact immutable draft + validation version.
+  verifiedCorrectAnswerSnapshotJson String?
 
   reviewsDrivenBy               TrainingQuestionAiReview[] @relation("ValidationDrivingReview")
 
@@ -16378,4 +16412,94 @@ model TrainingQuestionAiOperationKey {
   @@unique([route, requestKey, reviewerUserId, draftId])
   @@index([clubId, expiresAt])
   @@index([draftId])
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// EP-TRAIN-6D-4K (2026-11-05) — Postgres mirror of the three new
+// evidence tables defined in the SQLite schema at the same timestamp.
+//
+// Design origin: EP-TRAIN-6D-4J architecture, with ONE preflight-
+// surfaced correction — per-run transcriber metadata is lifted off
+// the segment into TrainingTranscriptBuild. See
+// PHASE-D-4K-SCHEMA-DESIGN.md §2 for the justification.
+// ═══════════════════════════════════════════════════════════════════
+
+model TrainingTranscriptBuild {
+  id                           String   @id @default(cuid())
+
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  sourceVideoSha256            String
+  resolvedTranscriptBuildId    String
+
+  transcriberName              String
+  transcriberVersion           String
+  transcriberModelName         String
+  transcriberModelVersion      String
+  transcriberConfigSha256      String
+
+  producedAt                   DateTime
+  createdAt                    DateTime @default(now())
+
+  segments                     TrainingTranscriptSegment[]
+
+  @@unique([clubId, sourceVideoSha256, resolvedTranscriptBuildId])
+  @@index([clubId, sourceVideoSha256])
+  @@index([clubId, producedAt])
+}
+
+model TrainingTranscriptSegment {
+  id                           String   @id @default(cuid())
+
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  transcriptBuildId            String
+  transcriptBuild              TrainingTranscriptBuild @relation(fields: [transcriptBuildId], references: [id])
+
+  segmentIndex                 Int
+
+  text                         String
+  startSec                     Decimal
+  endSec                       Decimal
+
+  pendingReviewJson            String   @default("[]")
+  sourceOrgMismatchJson        String   @default("[]")
+  uncertaintyWarning           String?
+
+  createdAt                    DateTime @default(now())
+
+  @@unique([clubId, transcriptBuildId, segmentIndex])
+  @@index([clubId, transcriptBuildId])
+}
+
+model TrainingGroundingProjection {
+  id                           String   @id @default(cuid())
+
+  clubId                       String
+  club                         Club     @relation(fields: [clubId], references: [id])
+
+  courseVersionId              String
+  courseVersion                TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  sha256                       String
+
+  sourceVideoSha256            String
+  resolvedTranscriptBuildId    String
+
+  passagesJson                 String
+  excludedPassagesJson         String   @default("[]")
+
+  sourceOrgMismatchFlagsPresent Boolean @default(false)
+  pendingReviewPresent          Boolean @default(false)
+
+  authoredAt                   DateTime
+  createdAt                    DateTime @default(now())
+
+  drafts                       TrainingQuestionAiDraft[]
+
+  @@unique([clubId, courseVersionId, sha256])
+  @@index([clubId, courseVersionId])
+  @@index([clubId, sha256])
 }
