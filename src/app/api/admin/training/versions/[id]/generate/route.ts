@@ -16,6 +16,7 @@ import {
   GenerationRejectedError,
 } from "@/lib/hr/training/generation/generation-service";
 import { buildBaselineAssessmentPlan } from "@/lib/hr/training/generation/assessment-plan";
+import { buildTopicAwareAssessmentPlan } from "@/lib/hr/training/generation/placement";
 import { enqueue } from "@/lib/queue";
 import { AppError, UnauthenticatedError } from "@/lib/errors";
 
@@ -96,19 +97,40 @@ export async function POST(
   }
   const segments = await prisma.trainingTranscriptSegment.findMany({
     where: { clubId, transcriptBuildId: build.id },
-    select: { segmentIndex: true, text: true },
+    select: { segmentIndex: true, text: true, startSec: true, endSec: true },
     orderBy: [{ segmentIndex: "asc" }],
   });
 
-  const plan = buildBaselineAssessmentPlan({
+  // 4X topic-aware placement is the default. When it can produce at
+  // least one checkpoint OR learning objective, we prefer it; the
+  // deterministic baseline remains as a fallback when the topic-aware
+  // builder yields an empty plan (e.g. video too short).
+  const placement = buildTopicAwareAssessmentPlan({
     courseVersionId: versionId,
     resolvedTranscriptBuildId: build.resolvedTranscriptBuildId,
     sourceVideoSha256: version.videoSha256,
-    segments,
+    segments: segments.map((s) => ({
+      segmentIndex: s.segmentIndex,
+      text: s.text,
+      startSec: Number(s.startSec),
+      endSec: Number(s.endSec),
+    })),
     videoDurationSec: version.videoDurationSec,
     targetTotalQuestions,
     generatedByUserId: principal.id,
   });
+
+  const plan = placement.plan.learningObjectives.some((lo) => lo.segmentIds.length > 0)
+    ? placement.plan
+    : buildBaselineAssessmentPlan({
+        courseVersionId: versionId,
+        resolvedTranscriptBuildId: build.resolvedTranscriptBuildId,
+        sourceVideoSha256: version.videoSha256,
+        segments: segments.map((s) => ({ segmentIndex: s.segmentIndex, text: s.text })),
+        videoDurationSec: version.videoDurationSec,
+        targetTotalQuestions,
+        generatedByUserId: principal.id,
+      });
 
   try {
     const result = await requestGeneration(principal, clubId, {

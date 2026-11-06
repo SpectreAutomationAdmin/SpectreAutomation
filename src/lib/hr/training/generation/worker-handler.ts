@@ -34,8 +34,13 @@ import {
   type AssessmentPlanV1,
   EXCLUDED_SEGMENT_INDICES,
 } from "./assessment-plan";
+import {
+  evaluateAgainstPriors,
+  DEDUP_RULES_VERSION,
+  type DedupDecision,
+  type QuestionCandidate,
+} from "./dedup";
 import { canonicalise, sha256Hex } from "../ai-review/content-hash";
-import { createHash } from "node:crypto";
 
 export interface HandlerDeps {
   readonly fetchImpl?: typeof fetch;
@@ -107,8 +112,18 @@ export async function handleGenerateJob(
     group: string;
     kind: "CHECKPOINT" | "FINAL_ASSESSMENT";
     draft: ModalGenerateProposal;
+    contentHash: string;
+    dedupDecision: DedupDecision;
   }[] = [];
+  // Per-candidate dedup decision log for shortfallReasonJson.
+  const dedupLog: Array<{
+    group: string;
+    candidateContentHash: string;
+    decision: DedupDecision;
+    kept: boolean;
+  }> = [];
   let shortfallCount = 0;
+  let dedupDropCount = 0;
   let totalInferenceMs = 0;
   let totalPromptTokens = 0;
   let totalOutputTokens = 0;
@@ -168,7 +183,51 @@ export async function handleGenerateJob(
       for (const p of modalResponse.proposals) {
         const citedOk = p.sourceSegmentIds.every((id) => eligible.has(id) && !EXCLUDED_SEGMENT_INDICES.has(id));
         if (!citedOk) continue; // skip ungrounded proposals
-        generatedDrafts.push({ group: g.id, kind: g.kind, draft: p });
+
+        // Compute canonical body + content hash for dedup + persist.
+        const canonicalBody = {
+          questionType: p.questionType,
+          questionText: p.questionText,
+          options: p.options.map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
+          explanation: p.explanation,
+          sourceSegmentIds: [...p.sourceSegmentIds],
+        };
+        const candidateContentHash = sha256Hex(canonicalise(canonicalBody));
+
+        // Dedup against EVERY previously-kept candidate across all
+        // groups (checkpoints + final) in this plan.
+        const priors: QuestionCandidate[] = generatedDrafts.map((gd) => ({
+          id: gd.contentHash,
+          questionText: gd.draft.questionText,
+          options: gd.draft.options,
+          explanation: gd.draft.explanation,
+          destination: gd.group,
+        }));
+        const candidate: QuestionCandidate = {
+          id: candidateContentHash,
+          questionText: p.questionText,
+          options: p.options,
+          explanation: p.explanation,
+          destination: g.id,
+        };
+        const decision = evaluateAgainstPriors(candidate, priors);
+
+        // §6: EXACT_DUP / PARAPHRASE_DUP are dropped; TOPIC_CANDIDATE
+        // is kept but flagged for manager review.
+        const isDuplicate = decision.verdict === "EXACT_DUP" || decision.verdict === "PARAPHRASE_DUP";
+        dedupLog.push({ group: g.id, candidateContentHash, decision, kept: !isDuplicate });
+        if (isDuplicate) {
+          dedupDropCount++;
+          continue;
+        }
+
+        generatedDrafts.push({
+          group: g.id,
+          kind: g.kind,
+          draft: p,
+          contentHash: candidateContentHash,
+          dedupDecision: decision,
+        });
       }
 
       // Renew lease between groups.
@@ -204,7 +263,8 @@ export async function handleGenerateJob(
   // Prisma @@unique. A P2002 here is swallowed as a duplicate skip.
   const projectionSha = claim.planIdentity; // placeholder — 4W does not create a new projection
   let persistedCount = 0;
-  for (const { draft } of generatedDrafts) {
+  const courseId = await resolveCourseId(db, claim.courseVersionId);
+  for (const { draft, contentHash } of generatedDrafts) {
     const canonicalBody = {
       questionType: draft.questionType,
       questionText: draft.questionText,
@@ -212,12 +272,11 @@ export async function handleGenerateJob(
       explanation: draft.explanation,
       sourceSegmentIds: [...draft.sourceSegmentIds],
     };
-    const contentHash = sha256Hex(canonicalise(canonicalBody));
     try {
       await db.trainingQuestionAiDraft.create({
         data: {
           clubId: claim.clubId,
-          courseId: await resolveCourseId(db, claim.courseVersionId),
+          courseId,
           courseVersionId: claim.courseVersionId,
           generationRunId: claim.runId,
           draftJson: JSON.stringify(canonicalBody),
@@ -253,13 +312,22 @@ export async function handleGenerateJob(
         promptTokenCount: totalPromptTokens,
         outputTokenCount: totalOutputTokens,
         groundingProjectionSha256: projectionSha,
-        shortfallReasonJson: shortfallCount > 0
+        shortfallReasonJson: (shortfallCount > 0 || dedupDropCount > 0 || dedupLog.length > 0)
           ? JSON.stringify({
               schemaVersion: "shortfall-v1",
               targetCount: plan.totalTargetQuestionCount,
               generatedCount: persistedCount,
               shortfall: shortfallCount,
-              reason: "model returned fewer grounded candidates than target",
+              dedupDropCount,
+              dedupRulesVersion: DEDUP_RULES_VERSION,
+              dedupDecisions: dedupLog,
+              reason: shortfallCount > 0 && dedupDropCount > 0
+                ? "model returned fewer grounded candidates than target and duplicates dropped"
+                : shortfallCount > 0
+                  ? "model returned fewer grounded candidates than target"
+                  : dedupDropCount > 0
+                    ? "duplicates dropped by dedup pipeline"
+                    : "candidates flagged for manager review as topic-related",
             })
           : undefined,
       },
