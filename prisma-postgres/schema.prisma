@@ -594,6 +594,8 @@ model Club {
 
   // EP-TRAIN-6D-4T (2026-11-06) — approved-AI-draft promotion sidecar.
   trainingQuestionAiDraftPromotions TrainingQuestionAiDraftPromotion[]
+  // EP-TRAIN-6D-4V (2026-11-06) — transcription-job lifecycle sidecar.
+  trainingTranscriptionJobs       TrainingTranscriptionJob[]
 }
 
 // ---------------------------------------------------------------------
@@ -12911,6 +12913,8 @@ model TrainingCourseVersion {
   aiQuestionDrafts TrainingQuestionAiDraft[]
   // EP-TRAIN-6D-4K (2026-11-05) — immutable grounding projection evidence.
   trainingGroundingProjections TrainingGroundingProjection[]
+  // EP-TRAIN-6D-4V (2026-11-06) — transcription-job lifecycle.
+  transcriptionJobs            TrainingTranscriptionJob[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -16452,6 +16456,8 @@ model TrainingTranscriptBuild {
   createdAt                    DateTime @default(now())
 
   segments                     TrainingTranscriptSegment[]
+  // EP-TRAIN-6D-4V (2026-11-06) -- transcription jobs resolved here on success.
+  transcriptionJobs            TrainingTranscriptionJob[]
 
   @@unique([clubId, sourceVideoSha256, resolvedTranscriptBuildId])
   @@index([clubId, sourceVideoSha256])
@@ -16543,4 +16549,54 @@ model TrainingQuestionAiDraftPromotion {
 
   @@index([clubId, draftId])
   @@index([clubId, questionId])
+}
+
+model TrainingTranscriptionJob {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  courseVersionId               String
+  courseVersion                 TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  sourceVideoSha256             String
+
+  state                         String   @default("REQUESTED")
+
+  leaseToken                    String?
+  leaseExpiresAt                DateTime?
+
+  requestedAt                   DateTime @default(now())
+  queuedAt                      DateTime?
+  startedAt                     DateTime?
+  completedAt                   DateTime?
+  cancelledAt                   DateTime?
+
+  attempts                      Int      @default(0)
+  maxAttempts                   Int      @default(2)
+
+  modelVariant                  String?
+  elapsedMsTotal                Int?
+  elapsedMsColdBoot             Int?
+  elapsedMsTranscribe           Int?
+  estimatedCostUsdMicros        Int?
+
+  failureCode                   String?
+  failureMessage                String?
+
+  requestedByUserId             String?
+  cancelledByUserId             String?
+
+  resolvedTranscriptBuildId     String?
+  resolvedTranscriptBuild       TrainingTranscriptBuild? @relation(fields: [resolvedTranscriptBuildId], references: [id])
+
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  @@unique([clubId, courseVersionId, sourceVideoSha256, state])
+
+  @@index([clubId, state, requestedAt])
+  @@index([clubId, courseVersionId, state])
+  @@index([state, leaseExpiresAt])
 }

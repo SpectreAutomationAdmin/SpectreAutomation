@@ -555,6 +555,10 @@ export async function resetDb() {
     // TrainingQuestion AND TrainingQuestionAiDraft with ON DELETE
     // RESTRICT. Must clear BEFORE either parent.
     c.trainingQuestionAiDraftPromotion.deleteMany(),
+    // EP-TRAIN-6D-4V (2026-11-06) — transcription-job sidecar has FKs
+    // to TrainingCourseVersion + TrainingTranscriptBuild with ON
+    // DELETE RESTRICT / SET NULL. Clear BEFORE the version + build.
+    c.trainingTranscriptionJob.deleteMany(),
     c.trainingQuestion.deleteMany(),
     // EP-TRAIN-6D-4D (2026-11-04) — AI-review tables were added in
     // 6D-4B but were missed by resetDb at that time. Clear them BEFORE

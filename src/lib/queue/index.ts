@@ -149,7 +149,15 @@ export type JobKind =
   //   runEnsureTimesheetApprovalWi. Re-resolves every scope owner
   //   and approval state; never trusts stale routing in the payload;
   //   a period with no reviewable scopes is a harmless no-op.
-  | "ENSURE_TIMESHEET_APPROVAL_WI";
+  | "ENSURE_TIMESHEET_APPROVAL_WI"
+  // EP-TRAIN-6D-4V (2026-11-06) — faster-whisper transcription job.
+  // Payload: { jobId: string }
+  // Handler: src/lib/hr/training/transcription/worker-handler.ts
+  //   claims the job's lease, calls Modal with the version's signed
+  //   video URL, verifies HMAC + SHA, invokes 4L ingest services,
+  //   writes COMPLETED or FAILED. Idempotent via lease-token + state
+  //   checks; cancellation-safe via state re-read before every write.
+  | "TRAINING_TRANSCRIBE_VIDEO";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

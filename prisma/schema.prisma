@@ -593,6 +593,9 @@ model Club {
   // EP-TRAIN-6D-4T (2026-11-06) — approved-AI-draft → TrainingQuestion
   // promotion sidecar (tenant filter).
   trainingQuestionAiDraftPromotions TrainingQuestionAiDraftPromotion[]
+
+  // EP-TRAIN-6D-4V (2026-11-06) — transcription-job lifecycle sidecar.
+  trainingTranscriptionJobs       TrainingTranscriptionJob[]
 }
 
 // ---------------------------------------------------------------------
@@ -13101,6 +13104,8 @@ model TrainingCourseVersion {
   aiQuestionDrafts TrainingQuestionAiDraft[]
   // EP-TRAIN-6D-4K (2026-11-05) -- immutable grounding projection evidence.
   trainingGroundingProjections TrainingGroundingProjection[]
+  // EP-TRAIN-6D-4V (2026-11-06) -- transcription-job lifecycle.
+  transcriptionJobs            TrainingTranscriptionJob[]
 
   @@unique([courseId, version])
   @@index([state])
@@ -17137,6 +17142,8 @@ model TrainingTranscriptBuild {
   createdAt                    DateTime @default(now())
 
   segments                     TrainingTranscriptSegment[]
+  // EP-TRAIN-6D-4V (2026-11-06) -- transcription jobs resolved here on success.
+  transcriptionJobs            TrainingTranscriptionJob[]
 
   // Idempotency + uniqueness: the three-part key never repeats.
   @@unique([clubId, sourceVideoSha256, resolvedTranscriptBuildId])
@@ -17315,4 +17322,79 @@ model TrainingQuestionAiDraftPromotion {
 
   @@index([clubId, draftId])
   @@index([clubId, questionId])
+}
+
+// -----------------------------------------------------------------
+// EP-TRAIN-6D-4V (2026-11-06) — Transcription-job lifecycle sidecar.
+// Additive-only. Zero changes to existing entities outside the three
+// back-relations below.
+//
+// Durable lifecycle (founder requirement 1):
+//   REQUESTED -> QUEUED -> RUNNING -> COMPLETED | FAILED | CANCELLED
+//
+// Bounded leases (founder requirement 3): leaseToken + leaseExpiresAt
+// let a worker CLAIM an in-flight job and let a sweeper RECLAIM stale
+// leases without triggering unlimited Modal executions.
+//
+// Cancellation safety (founder requirement 7): the worker handler
+// re-reads state before writing COMPLETED. A late provider response
+// against a CANCELLED row is discarded, not persisted.
+//
+// Provider identity + cost metadata (founder requirement 5): stored
+// as columns on this row; credentials never land here.
+// -----------------------------------------------------------------
+model TrainingTranscriptionJob {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  courseVersionId               String
+  courseVersion                 TrainingCourseVersion @relation(fields: [courseVersionId], references: [id])
+
+  // Identity: the exact video bytes this job is about.
+  sourceVideoSha256             String
+
+  state                         String   @default("REQUESTED")
+
+  // Bounded-lease fields. Null unless state is QUEUED or RUNNING.
+  leaseToken                    String?
+  leaseExpiresAt                DateTime?
+
+  requestedAt                   DateTime @default(now())
+  queuedAt                      DateTime?
+  startedAt                     DateTime?
+  completedAt                   DateTime?
+  cancelledAt                   DateTime?
+
+  attempts                      Int      @default(0)
+  maxAttempts                   Int      @default(2)
+
+  // Cost-governance snapshot. Populated at COMPLETED.
+  modelVariant                  String?
+  elapsedMsTotal                Int?
+  elapsedMsColdBoot             Int?
+  elapsedMsTranscribe           Int?
+  estimatedCostUsdMicros        Int?
+
+  failureCode                   String?
+  failureMessage                String?
+
+  requestedByUserId             String?
+  cancelledByUserId             String?
+
+  resolvedTranscriptBuildId     String?
+  resolvedTranscriptBuild       TrainingTranscriptBuild? @relation(fields: [resolvedTranscriptBuildId], references: [id])
+
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  // One live row per (club, version, videoSha, state). Multiple
+  // FAILED / CANCELLED rows allowed as history; only one row may
+  // occupy each non-terminal state at a time.
+  @@unique([clubId, courseVersionId, sourceVideoSha256, state])
+
+  @@index([clubId, state, requestedAt])
+  @@index([clubId, courseVersionId, state])
+  @@index([state, leaseExpiresAt])
 }

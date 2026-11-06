@@ -491,3 +491,30 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_RESTORE_COMPLETION: "IMPLEMENTED",
   MAILBOX_ACTIVE_REVERIFY: "IMPLEMENTED",
 } as const;
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-6D-4V (2026-11-06) — TRAINING_TRANSCRIBE_VIDEO.
+//
+// Delegates to src/lib/hr/training/transcription/worker-handler.ts.
+// Keeps the queue registry a thin dispatcher; the actual Modal call
+// + 4L ingest + lifecycle writes live in the dedicated module so the
+// unit tests can mock the dependencies without pulling in the whole
+// queue machinery.
+// ---------------------------------------------------------------------------
+registerHandler<{ jobId: string }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload }) => {
+  // Local import keeps the queue bootstrap free of training-domain
+  // transitive deps when a worker only runs other queues.
+  const { handleTranscribeJob } = await import("../hr/training/transcription/worker-handler");
+  const { makeSignedTrainingVideoUrl } = await import("../hr/training/video-signed-url");
+  const result = await handleTranscribeJob(
+    { jobId: payload.jobId },
+    {
+      makeSignedVideoUrl: makeSignedTrainingVideoUrl,
+    },
+  );
+  logger.info("queue.handler.training_transcribe_video", {
+    jobId: payload.jobId,
+    status: result.status,
+  });
+  return { jobId: payload.jobId, status: result.status };
+});

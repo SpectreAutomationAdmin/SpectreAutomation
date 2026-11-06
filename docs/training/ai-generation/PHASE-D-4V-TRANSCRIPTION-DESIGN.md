@@ -1,13 +1,12 @@
 # EP-TRAIN-6D-4V — Automatic Video Transcription Integration — Design
 
-Status: **PREFLIGHT COMPLETE — STOP for founder correction.**
-Per directive §3: "If the required worker credentials, deployment
-model or schema cannot be supported safely, STOP and propose the
-smallest correction."
+Status: **IMPLEMENTATION COMPLETE OFFLINE.** Founder authorized
+Option 1 (sidecar) on 2026-11-06 with eight requirements; all
+honoured. Not pushed; not deployed.
 
 Author: Claude (Opus 4.7). Date: 2026-11-06. Branch:
-`ep-train-6d-4v/transcription-orchestration` (docs only; no
-implementation yet, no migration generated).
+`ep-train-6d-4v/transcription-orchestration`. See
+`PHASE-D-4V-ACCEPTANCE.md` for the evidence table.
 
 ## 1. Preflight findings
 
