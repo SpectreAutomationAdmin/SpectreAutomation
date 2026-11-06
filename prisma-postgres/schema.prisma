@@ -16183,6 +16183,17 @@ model TrainingQuestionAiGenerationRun {
   outputTokenCount              Int?
   gpuSeconds                    Decimal?
 
+  // EP-TRAIN-6D-4W (2026-11-06) — lifecycle lease + plan storage.
+  queuedAt                      DateTime?
+  startedAt                     DateTime?
+  leaseToken                    String?
+  leaseExpiresAt                DateTime?
+  attempts                      Int      @default(0)
+  maxAttempts                   Int      @default(2)
+  assessmentPlanJson            String?
+  planIdentity                  String?
+  shortfallReasonJson           String?
+
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
@@ -16192,6 +16203,8 @@ model TrainingQuestionAiGenerationRun {
   @@index([clubId, courseVersionId, requestedAt])
   @@index([executionStatus])
   @@index([pilotAuthorizationId])
+  @@index([executionStatus, leaseExpiresAt])
+  @@index([clubId, executionStatus])
 }
 
 model TrainingQuestionAiDraft {

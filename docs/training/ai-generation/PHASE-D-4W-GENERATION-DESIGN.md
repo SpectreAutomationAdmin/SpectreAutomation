@@ -1,14 +1,13 @@
 # EP-TRAIN-6D-4W — AI Question Generation + Assessment Composition — Design
 
-Status: **PREFLIGHT COMPLETE — STOP for founder schema
-authorization.** Per directive §3: "If durable generation jobs,
-assessment plans or destination metadata require schema changes,
-document the smallest additive design and STOP for founder
-authorization. Do not silently introduce new tables or columns."
+Status: **IMPLEMENTATION COMPLETE — OFFLINE.** Founder authorized
+Option C with 8 conditions on 2026-11-06. All 8 conditions
+honored; see [PHASE-D-4W-ACCEPTANCE.md](PHASE-D-4W-ACCEPTANCE.md) §2
+for the condition-by-condition mapping.
 
 Author: Claude (Opus 4.7). Date: 2026-11-06. Branch:
-`ep-train-6d-4w/question-generation` (docs only; no implementation
-yet, no migration generated).
+`ep-train-6d-4w/question-generation` (local commit; not pushed, not
+deployed, not run live against Modal or any GPU).
 
 ## 1. Preflight findings
 
@@ -59,9 +58,16 @@ Three options evaluated:
 - **Option B — a separate `TrainingQuestionAiAssessmentPlan` sibling** keyed to the GenerationRun. REJECTED (for 4W's scope): the plan is 1:1 with a generation, created atomically with it, and is just structured JSON. A full table for one-JSON-per-row buys nothing vs an additive nullable column.
 - **Option C — extend `TrainingQuestionAiGenerationRun` additively** (RECOMMENDED): add exactly the fields missing in §1.2 as nullable columns. Preserves every existing row verbatim (all 4B-era rows remain with the new columns NULL). Keeps lookup single-row. Mirrors how 4K extended `TrainingQuestionAiDraft` additively for the projection FK + verified-answer snapshot.
 
-## 2. Minimum additive schema change (requested)
+## 2. Minimum additive schema change (shipped offline)
 
-Add these columns to `TrainingQuestionAiGenerationRun`:
+As authorized, the Option C shape ships with one addition beyond the
+original 6-column proposal: founder condition #5 ("concurrency
+safety at the database boundary, not merely through application
+checks") required a durable identity column + partial-unique index.
+Added as `planIdentity` (SHA-256 of canonical plan JSON). Net:
+**9 new fields + 1 partial-unique + 2 regular indexes.**
+
+Added columns on `TrainingQuestionAiGenerationRun`:
 
 ```prisma
 model TrainingQuestionAiGenerationRun {
@@ -92,6 +98,12 @@ model TrainingQuestionAiGenerationRun {
   // shortfall"). Canonical JSON of
   //   { targetCount, generatedCount, reason, segmentIdsConsidered }.
   shortfallReasonJson            String?
+
+  // Plan identity (SHA-256 of canonical assessmentPlanJson). Backs
+  // the partial-unique index that enforces "no duplicate active run
+  // for the same (tenant, courseVersion, transcriptBuild, plan)" at
+  // the DB boundary (founder condition #5).
+  planIdentity                   String?
 }
 ```
 
@@ -104,7 +116,21 @@ Index additions:
 
 ```prisma
   @@index([executionStatus, leaseExpiresAt])    // sweeper
-  @@index([clubId, executionStatus])             // admin listing
+  @@index([clubId, executionStatus])            // admin listing
+  // Partial-unique prevents a second active (non-terminal) run for
+  // the same plan while a run is REQUESTED/QUEUED/RUNNING. Pre-4W
+  // rows have planIdentity NULL and are therefore excluded from the
+  // uniqueness constraint.
+  @@unique([clubId, courseVersionId, resolvedTranscriptBuildId, planIdentity, executionStatus])
+```
+
+In SQL (both SQLite + PG migrations):
+
+```sql
+CREATE UNIQUE INDEX "TrainingQuestionAiGenerationRun_planIdentity_active_unique"
+  ON "TrainingQuestionAiGenerationRun"
+  ("clubId", "courseVersionId", "resolvedTranscriptBuildId", "planIdentity", "executionStatus")
+  WHERE "planIdentity" IS NOT NULL;
 ```
 
 **Zero schema changes to any other entity.** `TrainingQuestionAiDraft`

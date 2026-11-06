@@ -518,3 +518,18 @@ registerHandler<{ jobId: string }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload
   });
   return { jobId: payload.jobId, status: result.status };
 });
+
+// ---------------------------------------------------------------------------
+// EP-TRAIN-6D-4W (2026-11-06) — TRAINING_GENERATE_QUESTIONS.
+//
+// Delegates to src/lib/hr/training/generation/worker-handler.ts.
+// ---------------------------------------------------------------------------
+registerHandler<{ generationRunId: string }>("TRAINING_GENERATE_QUESTIONS", async ({ payload }) => {
+  const { handleGenerateJob } = await import("../hr/training/generation/worker-handler");
+  const result = await handleGenerateJob({ runId: payload.generationRunId });
+  logger.info("queue.handler.training_generate_questions", {
+    generationRunId: payload.generationRunId,
+    status: result.status,
+  });
+  return { generationRunId: payload.generationRunId, status: result.status };
+});

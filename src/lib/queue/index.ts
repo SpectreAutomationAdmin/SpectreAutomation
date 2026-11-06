@@ -157,7 +157,15 @@ export type JobKind =
   //   video URL, verifies HMAC + SHA, invokes 4L ingest services,
   //   writes COMPLETED or FAILED. Idempotent via lease-token + state
   //   checks; cancellation-safe via state re-read before every write.
-  | "TRAINING_TRANSCRIBE_VIDEO";
+  | "TRAINING_TRANSCRIBE_VIDEO"
+  // EP-TRAIN-6D-4W (2026-11-06) — Qwen question generation job.
+  // Payload: { generationRunId: string }
+  // Handler: src/lib/hr/training/generation/worker-handler.ts
+  //   claims the run's lease, loads the assessment plan, calls
+  //   Modal /generate per plan group, runs the existing grounding
+  //   validator, persists accepted drafts via 4L, writes COMPLETED
+  //   or FAILED. Honours the per-plan unique-index dedup.
+  | "TRAINING_GENERATE_QUESTIONS";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

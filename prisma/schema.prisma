@@ -16828,6 +16828,23 @@ model TrainingQuestionAiGenerationRun {
   outputTokenCount              Int?
   gpuSeconds                    Decimal?
 
+  // EP-TRAIN-6D-4W (2026-11-06) — lifecycle lease + plan storage.
+  // Nullable so pre-4W rows remain valid; service-layer tightens.
+  queuedAt                      DateTime?
+  startedAt                     DateTime?
+  leaseToken                    String?
+  leaseExpiresAt                DateTime?
+  attempts                      Int      @default(0)
+  maxAttempts                   Int      @default(2)
+  // Canonical JSON of the course-level assessment plan.
+  // Immutable once state leaves REQUESTED (service-enforced).
+  assessmentPlanJson            String?
+  // SHA-256 of the canonical plan body. Non-null once plan is set.
+  // Component of the DB-boundary dedup unique.
+  planIdentity                  String?
+  // Shortfall report per §7.
+  shortfallReasonJson           String?
+
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
@@ -16837,6 +16854,8 @@ model TrainingQuestionAiGenerationRun {
   @@index([clubId, courseVersionId, requestedAt])
   @@index([executionStatus])
   @@index([pilotAuthorizationId])
+  @@index([executionStatus, leaseExpiresAt])
+  @@index([clubId, executionStatus])
 }
 
 model TrainingQuestionAiDraft {
