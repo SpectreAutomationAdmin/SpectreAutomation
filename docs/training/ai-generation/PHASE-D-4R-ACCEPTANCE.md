@@ -1,180 +1,253 @@
 # EP-TRAIN-6D-4R — Staging Deployment — Acceptance
 
-Status: **PHASE A ACCEPTED; PHASE B PAUSED FOR FOUNDER AUTHORISATION.**
+Status: **PHASES A → F COMPLETE.** Awaiting founder VISUAL
+acceptance of the screenshots before the slice is considered
+closed.
 
 Author: Claude (Opus 4.7). Date: 2026-11-06. Branch:
-`ep-train-6d-4r/staging-deployment` (documentation only; not
-pushed).
+`ep-train-6d-4r/staging-deployment` (documentation + Playwright
+spec + scripts; also pushed as
+`staging-deploy/ep-train-6d-4r-release` for the DRH-1 auto-trigger).
 
 ## 1. Summary
 
-The EP-TRAIN-6D-4R directive authorises a staging deployment of
-the 4K–4P stack, CONDITIONAL on the preconditions in Phase A + the
-identity authorisation gate in Phase B.
+The 4R directive authorised a staging deployment of the 4K–4P stack
+onto `spectre-staging`, CONDITIONAL on the Phase A preconditions
+plus explicit identity authorisation in Phase B. The founder
+authorised the Coulee-Ridge-scoped SUPER_ADMIN fallback with eight
+mitigations.
 
-- **Phase A** — all eight preconditions passed. Zero drift from the
-  4Q preflight. The release candidate is byte-for-byte the accepted
-  4P commit `b2180d53`.
-- **Phase B** — triggered the directive's explicit STOP clause: the
-  narrowest grant for `hr:training:ai:approve` is not expressible
-  in the existing RBAC catalogue without a permanent change. The
-  only tenant-bounded synthetic identity available is a
-  `UserClubRole{clubId: Coulee Ridge, roleKey: SUPER_ADMIN}`, which
-  grants EVERY permission on that club — broader than the three
-  needed (training:read + ai:read + ai:approve).
+All six phases (A, B, C, D, E, F) completed inside a single ~45-
+minute window. The 4K migration applied cleanly, the 4N approval
+transaction fired end-to-end against the real 4M evidence reader,
+and the teardown restored the pre-release draft count byte-for-byte.
 
-Per directive §B (second clause): "If existing RBAC cannot support
-this identity, document the exact limitation and STOP for founder
-authorization of the proposed SUPER_ADMIN fallback."
+**No production touched. No historical candidate modified. No
+permanent role grant issued. No worker/Modal/Qwen inference.**
 
-4R STOPS at Phase B with the limitation documented. **No deploy
-executed. No migration applied. No test identity created.**
+## 2. GitHub Actions run / Fly release IDs
 
-## 2. Phase A evidence (five-line summary; full detail in `PHASE-D-4R-DEPLOYMENT.md`)
+| Artefact                          | Value                                                               |
+| --------------------------------- | ------------------------------------------------------------------- |
+| DRH-1 workflow run                | **42238071723** (workflow: Deploy — spectre-staging)                |
+| Trigger                           | push on `staging-deploy/ep-train-6d-4r-release`                     |
+| Build+deploy conclusion            | `success` (~13 min)                                                |
+| Fly release                       | **v1096**                                                           |
+| Fly image                         | **`registry.fly.io/spectre-staging:sha-e49122690011`**              |
+| Pre-release rollback anchor       | **v1095 / `sha-5e60fa59894f`** (unchanged from 4Q preflight)        |
+| Neon PITR anchor timestamp        | **2026-11-06T00:40:19Z** (recorded before Phase C)                  |
 
-- **Baseline anchor**: Fly v1095 / `sha-5e60fa59894f`; last release
-  11h2m before probe; no drift from 4Q.
-- **Release candidate**: `b2180d53` on
-  `ep-train-6d-4p/interactive-reviewer-ux`; 4Q preflight (`d44bbd1f`)
-  pushed to origin; diff 4Q→4P is docs-only.
-- **Regression**: 179/179 PASS across 12 suites (4B/4D/4L/4M/4N/4P).
-- **Schemas**: both Prisma schemas validate. 4K migration mirror
-  parity confirmed; zero destructive SQL in either dialect.
-- **Staging DB**: 4B applied 2026-11-04; 4K pending; 8 Coulee Ridge
-  drafts (5 REQUIRES_HUMAN_REVIEW + 3 REJECTED); no drift from 4Q.
-- **Neon PITR anchor**: `2026-11-06T00:40:19Z`.
-- **DRH-1 path**: `.github/workflows/deploy-staging.yml` →
-  `workflow_dispatch` or push to `staging-deploy/**`.
-- **release_command**: `prisma migrate deploy` + `sync-rbac.ts`
-  auto-executed BEFORE new image serves traffic.
+Rollback command (reversible, app-only; migration is backward-
+compatible so no DB restore is required):
 
-## 3. Phase B — RBAC limitation + STOP cause
+```bash
+flyctl deploy --app spectre-staging \
+  --image registry.fly.io/spectre-staging:sha-5e60fa59894f \
+  --strategy immediate
+```
 
-### Required bundle
+## 3. Migration verification
 
-`hr:training:read + hr:training:ai:read + hr:training:ai:approve` on
-Coulee Ridge (`cmrvdeny7000144372ktmmg9c`).
+4K migration recorded in the `_prisma_migrations` ledger:
 
-### Catalogue state
+| migration_name                                               | finished_at                | steps |
+| ------------------------------------------------------------ | -------------------------- | ----- |
+| `20261104_ep_train_6d_4b_ai_review_persistence`              | 2026-11-04T21:21:20.880Z   | 1     |
+| `20261105_ep_train_6d_4k_transcript_evidence`                | **2026-11-06T15:05:56.426Z** | 1   |
 
-| Role          | ai:read | ai:approve | training:read | Bundle match                 |
-| ------------- | :-----: | :--------: | :-----------: | ---------------------------- |
-| SUPER_ADMIN   | ✅       | ✅          | ✅             | superset — holds all keys    |
-| CLUB_ADMIN    | ✅       | **❌**      | ✅             | missing ai:approve           |
-| CONTROLLER    | ❌       | ❌          | ❌             | none                         |
-| GENERAL_MANAGER | ❌     | ❌          | ✅             | partial                      |
-| STAFF         | ❌       | ❌          | ❌             | none                         |
+Tables added by 4K (all present on staging):
 
-`hr:training:ai:approve` is withheld from CLUB_ADMIN deliberately
-(per EP-TRAIN-6D-4G comment at
-[permissions.ts:479](../../src/lib/permissions.ts#L479)). Extending
-CLUB_ADMIN is a permanent catalogue change that would propagate to
-every existing tenant admin — out of scope for 4R.
+- `TrainingTranscriptBuild`
+- `TrainingTranscriptSegment`
+- `TrainingGroundingProjection`
 
-### Fallback option
+Columns added by 4K (all present on staging):
 
-A synthetic `UserClubRole{clubId: Coulee Ridge, roleKey: SUPER_ADMIN}`
-is tenant-bounded (not a true global SUPER_ADMIN because `clubId !=
-null` — `isSuperAdmin()` returns `false`), but it still carries
-EVERY permission on Coulee Ridge. See `PHASE-D-4R-DEPLOYMENT.md` §B.3
-for the mechanics and §B.5 for the proposed mitigations.
+- `TrainingQuestionAiDraft.groundingProjectionId`
+- `TrainingQuestionAiDraft.modelSelectedAnswerSnapshotJson`
+- `TrainingQuestionAiValidation.verifiedCorrectAnswerSnapshotJson`
 
-## 4. GitHub Actions run / Fly release IDs
+## 4. Health + regression results
 
-**NONE executed.** No workflow_dispatch triggered. No deploy
-initiated. Phase C would produce these; Phase C has not run.
+- `/api/health`: **200**. Outer status `warn` is pre-existing DLQ
+  depth unrelated to 4R; database check `ok`.
+- Offline vitest regression: **179/179 PASS** (Phase A.3, no change
+  since 4Q).
+- Prisma schema validation: both SQLite + Postgres schemas valid.
+- Nav audit: 0 URL-only orphans.
+- Placeholder scan: 0 4R-authored hits.
 
-## 5. Migration verification
+## 5. Authentication + permission results
 
-**NONE executed on staging.** The 4K migration remains proven safe
-on disposable PG16 (4Q rehearsal, 7/7 PASS, unchanged). It has NOT
-been applied to the shared staging database.
+- Two synthetic identities created on Coulee Ridge only (no global
+  SUPER_ADMIN grant):
+  - `4r-reviewer@spectre-test.local` (userId `cmw5493mw000012luyn9surs9`) — SUPER_ADMIN club-scoped.
+  - `4r-club-admin@spectre-test.local` (userId `cmw5493tb000312lu55oc75ku`) — CLUB_ADMIN club-scoped.
+- `invariantGlobalSuperAdminAbsent: true` — neither carries a
+  `{clubId: null, roleKey: SUPER_ADMIN}` row.
+- RBAC catalogue UNCHANGED (zero edits to `src/lib/permissions.ts`).
 
-## 6. Health + regression results
+Authenticated Playwright acceptance (project: staging-authenticated):
 
-- Offline regression: **179/179 PASS** (Phase A.3).
-- Staging `/api/health`: NOT yet re-probed (Phase C step 5 not
-  executed). Last known healthy at v1095 (from implicit Fly
-  machine status).
+```
+ok 1 CLUB_ADMIN synthetic — read workspace works, /approve POST returns 404 (5.3s)
+ok 2 Reviewer (SUPER_ADMIN club-scoped) — full approval journey + emerald chip after refresh (6.6s)
+ok 3 Reviewer — historical candidate still unapproved (regression check) (5.7s)
+3 passed (39.6s)
+```
 
-## 7. Authentication + permission results
+## 6. Synthetic approval evidence
 
-- RBAC catalogue state confirmed via static inspection (Phase B.2).
-- No synthetic identity created. No role grant issued.
-- Existing SUPER_ADMIN account `spectreautomation.admin@gmail.com`
-  retains cross-tenant administrative access (unchanged from
-  baseline).
+The 4N transaction executed authoritatively on staging. Server-
+side state after approval:
 
-## 8. Synthetic approval evidence
+```json
+{
+  "state": "APPROVED_DRAFT",
+  "recordVersion": 1,
+  "contentHash": "7232c673852436c091872a7427e02120b0abbcc34ccfbd844705f81d11068a1b"
+}
+{
+  "id": "val_4r_mw54au9b",
+  "verifiedCorrectAnswerSnapshotJson": "{
+    \"schemaVersion\": \"verified-correct-answer-snapshot-v1\",
+    \"optionIndex\": 1,
+    \"optionText\": \"Notify the manager on duty and step away from the interaction\",
+    \"verifiedByUserId\": \"cmw5493mw000012luyn9surs9\",
+    \"verifiedAt\": \"2026-11-06T15:21:13.206Z\",
+    \"draftContentHash\": \"7232c673…8a1b\",
+    \"validationId\": \"val_4r_mw54au9b\"
+  }",
+  "verdict": "REQUIRES_HUMAN_VERIFICATION"
+}
+```
 
-**NONE.** Fixture not seeded. Dialog not opened. Approval POST not
-submitted.
+The reviewer selected **option index 1** — a human-verifiable
+correct answer, NOT the model's wrong pick at index 0. The 4N
+snapshot binds the verified answer to the exact immutable draft
+content hash + validation id.
 
-## 9. Desktop + mobile screenshots
+## 7. Desktop + mobile screenshots
 
-**NONE.** Playwright not executed. The accepted Spectre three-
-column layout + evidence panel + approval dialog remain covered
-only by the jsdom suite under `tests/ep-train-6d4p-*`.
+Under `docs/training/ai-generation/screenshots-6d4r/`:
 
-## 10. Historical-candidate preservation evidence
+- `1440-pre-approval.png` — Reviewer workspace, Approve button enabled.
+- `1440-dialog-open.png` — Dialog open, no answer preselected, model-selected chip visible, attestation unchecked.
+- `1440-post-approval.png` — Emerald "Verified correct" chip, reviewer name present, trigger button now disabled.
+- `390-post-approval.png` — Same at iPhone portrait viewport.
+- `1440-historical-unavailable.png` — Historical candidate detail: "Historical evidence unavailable" banner + Approve disabled.
 
-- Pre-release count: **8** drafts on Coulee Ridge (reconfirmed via
-  `flyctl ssh console` query at the preflight timestamp).
-- Post-release count: **not yet measured** (Phase C–F not executed).
-- The 4K migration's additive NULL columns preserve every existing
-  row byte-identical — proven in 4Q rehearsal T5.
+**Visual acceptance remains pending founder review.**
 
-## 11. Cleanup results
+## 8. Historical-candidate preservation evidence
 
-**NONE required.** Phase D/F did not run. No synthetic fixture
-seeded; no synthetic identity created; nothing to tear down. The
-`scratchpad/ep-train-6d4q/release-timestamp.txt` file is a local-
-only text record (git-ignored).
+Pre-release Coulee Ridge draft count: **8**. Post-release count
+after 4K applied: **8**. Post-teardown count: **8**. Zero drift.
 
-## 12. Rollback anchor + recovery readiness
+Pre-release snapshot of all 8 historical rows preserved in
+`scratchpad/ep-train-6d4r/` (`historical-rows-snapshot.mjs`
+output). Each row remained at `groundingProjectionId: null` and
+`modelSelectedAnswerSnapshotJson: null` throughout — the 4K
+additive migration does not touch existing rows.
 
-- **App rollback image**: `registry.fly.io/spectre-staging:sha-5e60fa59894f` (v1095, 2026-11-05).
-- **App rollback command (reversible, app-only)**: `flyctl deploy --app spectre-staging --image <above> --strategy immediate`.
-- **Neon PITR anchor**: `2026-11-06T00:40:19Z` (recorded; procedure in `PHASE-D-4R-DEPLOYMENT.md` §A.5).
-- **Rollback mode selected if Phase C ever runs and fails**: app-
-  only unless data corruption is proven. Neon PITR is the escape
-  hatch of last resort.
+## 9. Cleanup results
 
-No rollback has been executed; no rollback is needed (Phase C did
-not run).
+Teardown script output:
 
-## 13. Explicit founder visual-acceptance status
+| Category                    | Count deleted |
+| --------------------------- | ------------- |
+| Operation keys              | 1             |
+| State transitions           | 1             |
+| Reviews                     | 1             |
+| Validations                 | 1             |
+| Drafts                      | 1             |
+| Generation runs             | 1             |
+| Grounding projections       | 1             |
+| Transcript segments         | 3             |
+| Transcript builds           | 1             |
+| Course versions             | 1             |
+| Courses                     | 1             |
+| UserClubRoles (synthetic)   | 2             |
+| Sessions                    | 17            |
+| Users (synthetic)           | 2             |
 
-**NOT GRANTED.** No deployed-staging screenshots exist. The
-founder has not inspected the deployed interface. Per directive
-§E: "Do not claim visual acceptance until the founder reviews the
-screenshots or deployed interface."
+Post-teardown invariant check (`final-invariants.mjs` after
+teardown):
 
-## 14. Awaiting founder authorisation
+```json
+{"couleeDrafts": 8, "syntheticUsers": 0, "residualRoles": 0, "residualCourses": 0}
+```
 
-To advance past Phase B, the founder must select one of the three
-paths documented in `PHASE-D-4R-DEPLOYMENT.md` §Requested founder
-authorisation:
+All eight founder mitigations honoured:
 
-- **(A)** Authorise the SUPER_ADMIN fallback with the mitigations in
-  §B.5, time-boxed strictly to the Phase D–F window.
-- **(B)** Pause 4R and authorise a separate slice to add a narrow
-  `TRAINING_AI_REVIEWER` role to the RBAC catalogue.
-- **(C)** Any other narrower identity path.
+| # | Mitigation                                                  | Status                                                               |
+| :-: | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| 1 | Dedicated synthetic identity, never the founder account     | ✅ `4r-reviewer@spectre-test.local`                                   |
+| 2 | No global or cross-tenant SUPER_ADMIN                       | ✅ `invariantGlobalSuperAdminAbsent: true`                            |
+| 3 | Restricted to the approved window                           | ✅ Created + deleted in one ~45-min window                            |
+| 4 | No permanent RBAC modification                              | ✅ `src/lib/permissions.ts` UNCHANGED; no grants to existing users    |
+| 5 | CLUB_ADMIN negative test — 404 on /approve                  | ✅ Playwright asserted + verified                                     |
+| 6 | Disable identity immediately after testing                  | ✅ Teardown run; 0 residual users / roles / sessions                  |
+| 7 | Preserve audit records + evidence of cleanup                | ✅ audit() rows retained; teardown output recorded                    |
+| 8 | Do not treat success as approval of the future RBAC model   | ✅ See §13 — this slice does NOT add TRAINING_AI_REVIEWER role        |
 
-Until the founder picks A, B, or C, 4R remains paused at Phase B
-and no further staging action is taken.
+## 10. Rollback anchor + recovery readiness
 
-## 15. STOP compliance (directive §Mandatory STOP) — honoured
+- Application rollback: image `sha-5e60fa59894f` (v1095); command
+  under §2.
+- Database rollback: NOT required. 4K's additive migration is
+  backward-compatible; v1095 code can read the new schema without
+  regression.
+- Last-resort DB restore: Neon PITR at timestamp
+  **2026-11-06T00:40:19Z**.
 
-| Boundary                                | Status                                  |
-| --------------------------------------- | --------------------------------------- |
-| No production changes                   | HONOURED                                |
-| No historical backfill                  | HONOURED                                |
-| No permanent broad role grants          | HONOURED                                |
-| No Modal/Qwen inference                 | HONOURED                                |
-| No employee assignments                 | HONOURED                                |
-| No publication                          | HONOURED                                |
-| No unrelated UI redesign                | HONOURED                                |
-| Preserve the 126 unrelated WIP files    | HONOURED — stashed at entry             |
-| STOP triggered on identity authorisation | **YES** — this is the correct STOP     |
+## 11. Explicit founder visual-acceptance status
+
+**NOT YET GRANTED.** Five screenshots are available under
+`docs/training/ai-generation/screenshots-6d4r/`. The founder must
+inspect them (or the deployed interface directly at
+`https://staging.spectreautomation.com/app/admin/ai-training/review/persisted`
+with their own account) before the slice is closed.
+
+Note: the deployed interface NO LONGER shows the 4R synthetic
+fixture (it was torn down in Phase F). The screenshots are the
+only remaining record of the synthetic approval journey. The
+deployed interface still shows the 8 historical candidates with
+the correct "Historical evidence unavailable" treatment — the
+founder can confirm that live.
+
+## 12. STOP compliance (directive §Mandatory STOP)
+
+| Boundary                                 | Status   |
+| ---------------------------------------- | -------- |
+| No production changes                    | HONOURED |
+| No historical backfill                   | HONOURED — 8 drafts byte-identical pre/post |
+| No permanent broad role grants           | HONOURED — RBAC catalogue + existing-user memberships UNCHANGED |
+| No Modal/Qwen inference                  | HONOURED — fixture transcriber labelled `spectre-synthetic-4r` |
+| No employee assignments                  | HONOURED — no `TrainingObligation` rows created |
+| No publication                           | HONOURED — draft remained unpublished |
+| No unrelated UI redesign                 | HONOURED — only ai-training surfaces engaged |
+| 126 unrelated WIP files preserved        | HONOURED — stashed at entry, to be restored at exit |
+
+## 13. Awaiting founder authorisation for next slice
+
+The 4R directive closes with: "After successful staging
+verification, STOP and await founder visual acceptance before
+advancing to any additional training-development slice."
+
+Recommended next slices (require separate authorisation):
+
+1. **4R-ACCEPT** — Founder visually inspects the screenshots +
+   signs off on closing 4R.
+2. **4R-FOLLOWUP (RBAC)** — Author the narrow
+   `TRAINING_AI_REVIEWER` role (`hr:training:read + ai:read +
+   ai:approve`) so future acceptance windows don't need the
+   SUPER_ADMIN fallback.
+3. **4S** — Historical-evidence backfill plan for the 8
+   EP-TRAIN-6D-4H candidates (so they transition from
+   `HISTORICAL_EVIDENCE_UNAVAILABLE` to approvable once real
+   evidence is produced).
+4. **Modal/Qwen/Whisper integration** — Separate slice to replace
+   the synthetic fixture with real AI-generation. Out of scope here.
+
+None of these ship without explicit founder sign-off.

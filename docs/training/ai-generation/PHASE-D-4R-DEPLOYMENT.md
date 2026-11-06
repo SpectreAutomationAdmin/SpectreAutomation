@@ -1,19 +1,20 @@
 # EP-TRAIN-6D-4R — Staging Deployment — Phase A Evidence + Phase B STOP
 
-Status: **PAUSED AT PHASE B.** All Phase A preconditions passed.
-Phase B identified an RBAC limitation that requires explicit founder
-authorisation of a SUPER_ADMIN fallback before Phase C can execute.
-Per directive §B (second clause): "If existing RBAC cannot support
-this identity, document the exact limitation and STOP for founder
-authorization of the proposed SUPER_ADMIN fallback."
+Status: **PHASES A → F COMPLETE.** All Phase A preconditions passed.
+Phase B's RBAC limitation was authorised by the founder with 8
+explicit mitigations (see §B.6). Phase C through F executed within
+a single 45-minute window. Zero drift from the pre-release baseline.
+Awaiting founder VISUAL acceptance of the screenshots.
 
 Release candidate: `ep-train-6d-4r/staging-deployment` built from
-`ep-train-6d-4p/interactive-reviewer-ux` @ `b2180d53`. No Fly image
-built. No staging deploy executed. No migration applied. No test
-identity created. The 126 unrelated WIP files remain safely stashed.
+`ep-train-6d-4p/interactive-reviewer-ux` @ `b2180d53`. Fly release
+**v1096 / sha-e49122690011**. 4K migration applied. Two synthetic
+identities created + torn down within the window. Synthetic
+authentic-evidence fixture seeded + approved + torn down. The 126
+unrelated WIP files remain safely stashed.
 
-Author: Claude (Opus 4.7). Date: 2026-11-06 (preflight window
-started 2026-11-06T00:40:19Z).
+Author: Claude (Opus 4.7). Date: 2026-11-06 (window 00:40:19Z →
+15:36Z).
 
 ---
 
@@ -276,17 +277,205 @@ in `PHASE-D-4Q-RELEASE-PLAN.md` §15:
 
 ---
 
-## Phase C–G — NOT EXECUTED
+### B.6 Founder authorisation received 2026-11-06 — proceed with Option A
 
-The release plan documented in
-[PHASE-D-4Q-RELEASE-PLAN.md](PHASE-D-4Q-RELEASE-PLAN.md) describes
-all 16 DRH-1 steps, rollback modes, and cleanup actions. None of
-Phase C (DRH-1 deploy), Phase D (synthetic approval), Phase E
-(screenshots), Phase F (cleanup), or Phase G (rollback) ran because
-Phase B is paused.
+The founder authorised the Coulee-Ridge-scoped SUPER_ADMIN fallback
+for the 4R acceptance window only, subject to eight conditions:
 
-**No Fly image built. No migration applied. No test identity
-created. No fixture seeded. No screenshots captured.**
+1. Dedicated synthetic test identity; never the founder account.
+2. Confirm the identity has no global or cross-tenant SUPER_ADMIN.
+3. Restrict use to the approved window.
+4. Do not modify permanent RBAC or grant permissions to existing
+   users.
+5. Verify CLUB_ADMIN remains read-only with a negative test against
+   the approval endpoint.
+6. Disable the synthetic identity + remove its role immediately
+   after testing, including on failure or timeout.
+7. Preserve audit records + report evidence of privilege cleanup.
+8. Do not treat SUPER_ADMIN success as acceptance of the future
+   manager-reviewer permission model.
+
+All 8 conditions honoured — see Phase F audit evidence in
+[PHASE-D-4R-ACCEPTANCE.md](PHASE-D-4R-ACCEPTANCE.md) §6.
+
+---
+
+## Phase C — DRH-1 deploy (COMPLETE)
+
+- GitHub Actions run: **42238071723** (workflow: Deploy —
+  spectre-staging; trigger: push on `staging-deploy/ep-train-6d-4r-release`).
+  Final conclusion: `success` (~13 min build + migrate + deploy).
+- Fly release: **v1096** at image
+  **`registry.fly.io/spectre-staging:sha-e49122690011`** (short SHA
+  matches the 4R documentation commit `e4912269` on top of the 4P
+  code commit `b2180d53`).
+- 4K migration applied by the Fly release_command:
+  `20261105_ep_train_6d_4k_transcript_evidence` — `finished_at =
+  2026-11-06T15:05:56.426Z`. Prisma ledger shows both 4B and 4K.
+- Post-deploy verification (`scratchpad/ep-train-6d4r/post-deploy-verify.mjs`):
+
+```
+{
+  "migration4K": true,
+  "tablesOk": true,
+  "columnsOk": true,
+  "historicalDrafts": 8,
+  "allHistoricalProjectionsNull": true,
+  "healthStatus": 200,
+  "verified": true
+}
+```
+
+- All 3 new 4K tables + 3 new 4K columns present.
+- 8 historical Coulee Ridge drafts preserved; every one has
+  `groundingProjectionId = NULL` (expected — additive NULL default,
+  no backfill).
+- `/api/health` returns 200. The outer status is `warn` only
+  because of a pre-existing queue DLQ depth (`dlq=9 · active=7 ·
+  historical=2`) that is unrelated to 4R. Database check: `ok`.
+
+## Phase D — authentic-evidence acceptance (COMPLETE)
+
+### D.1 Identities created — invariant satisfied
+
+Two synthetic identities, both scoped to Coulee Ridge
+(`cmrvdeny7000144372ktmmg9c`), zero global SUPER_ADMIN:
+
+| Role           | Email                                | userId                      | Scope                     |
+| -------------- | ------------------------------------ | --------------------------- | ------------------------- |
+| SUPER_ADMIN    | `4r-reviewer@spectre-test.local`     | `cmw5493mw000012luyn9surs9` | Coulee Ridge only         |
+| CLUB_ADMIN     | `4r-club-admin@spectre-test.local`   | `cmw5493tb000312lu55oc75ku` | Coulee Ridge only         |
+
+Both passwords were one-time UUIDs printed once during creation and
+**never persisted anywhere** (never saved to file, never written
+into audit logs, never committed). The `invariantGlobalSuperAdminAbsent`
+check printed `true` — neither identity carries a `{clubId: null,
+roleKey: SUPER_ADMIN}` row.
+
+### D.2 Fixture seeded (synthetic, not AI-generated)
+
+`scratchpad/ep-train-6d4r/create-fixture.mjs` seeded one authentic-
+evidence candidate on Coulee Ridge. Transcriber metadata deliberately
+reads `spectre-synthetic-4r` so no reader mistakes this fixture for
+AI-generation quality evidence.
+
+| Row                           | ID                                                               |
+| ----------------------------- | ---------------------------------------------------------------- |
+| TrainingCourse                | `crs_4r_synth`                                                   |
+| TrainingCourseVersion         | `ver_4r_synth`                                                   |
+| TrainingTranscriptBuild       | `blds_4r_mw54au9b`                                               |
+| TrainingTranscriptSegment     | 3 rows (indices 0, 1, 2 with real text + timestamps)             |
+| TrainingGroundingProjection   | `proj_4r_mw54au9b` (server-recomputed SHA-256 `523c44f8…e345`)   |
+| TrainingQuestionAiDraft       | `draft_4r_mw54au9b` (state `REQUIRES_HUMAN_REVIEW`, content hash `7232c673…8a1b`) |
+| TrainingQuestionAiValidation  | `val_4r_mw54au9b` (verdict `REQUIRES_HUMAN_VERIFICATION`)        |
+
+### D.3 Authenticated Playwright acceptance — 3/3 PASS
+
+Spec: `tests/e2e/ep-train-6d-4r.staging.spec.ts` (staging-authenticated project).
+
+```
+ok 1 CLUB_ADMIN synthetic — read workspace works, /approve POST returns 404 (5.3s)
+ok 2 Reviewer (SUPER_ADMIN club-scoped) — full approval journey + emerald chip after refresh (6.6s)
+ok 3 Reviewer — historical candidate still unapproved (regression check) (5.7s)
+3 passed (39.6s)
+```
+
+### D.4 Server-side approval round-trip verified
+
+Draft state post-approval (queried via `flyctl ssh console`):
+
+```json
+{"state":"APPROVED_DRAFT","recordVersion":1,"contentHash":"7232c673…8a1b"}
+{"id":"val_4r_mw54au9b",
+ "verifiedCorrectAnswerSnapshotJson":"{
+   \"schemaVersion\":\"verified-correct-answer-snapshot-v1\",
+   \"optionIndex\":1,
+   \"optionText\":\"Notify the manager on duty and step away from the interaction\",
+   \"verifiedByUserId\":\"cmw5493mw000012luyn9surs9\",
+   \"verifiedAt\":\"2026-11-06T15:21:13.206Z\",
+   \"draftContentHash\":\"7232c673…8a1b\",
+   \"validationId\":\"val_4r_mw54au9b\"
+ }"}
+```
+
+The reviewer selected **option index 1** (the human-verifiable
+correct answer — "Notify the manager on duty"), not the model's
+pick (option 0 — "Confront the member directly"). The 4N snapshot
+preserves every binding (content hash, validation id, reviewer id,
+ISO timestamp).
+
+### D.5 CLUB_ADMIN negative test proven
+
+The CLUB_ADMIN synthetic session:
+- Loaded the review workspace (200 on draft detail GET).
+- Saw the Approve button rendered DISABLED (eligibility
+  `canApprove: false`).
+- Direct `POST /api/admin/ai-training/drafts/draft_4r_mw54au9b/approve`
+  returned **HTTP 404 same-shape** (per 4N directive §4 — 403
+  mapped to 404).
+- Post-POST DB check confirmed the draft remained unchanged
+  (state `REQUIRES_HUMAN_REVIEW`, recordVersion 0 before the
+  authorised approval ran).
+
+### D.6 Historical regression — 8 drafts preserved
+
+Pre-release snapshot: 8 Coulee Ridge drafts, all with
+`groundingProjectionId: null` and `modelSelectedAnswerSnapshotJson:
+null` (additive 4K defaults). Spec navigated to
+`draft_hist_6c_q7-negativity-principle` as a representative sample;
+the 4M "Historical evidence unavailable" banner rendered; the
+Approve button was disabled with reason
+`HISTORICAL_EVIDENCE_UNAVAILABLE`.
+
+## Phase E — screenshots captured
+
+Saved under `docs/training/ai-generation/screenshots-6d4r/`:
+
+| File                            | Viewport     | State                                        |
+| ------------------------------- | ------------ | -------------------------------------------- |
+| `1440-pre-approval.png`         | 1440 × 900   | Reviewer workspace before approval, Approve button enabled |
+| `1440-dialog-open.png`          | 1440 × 900   | Approval dialog open, no answer preselected, model-selected chip visible, attestation unchecked |
+| `1440-post-approval.png`        | 1440 × 900   | After approval: emerald "Verified correct" chip, reviewer name present, trigger button disabled |
+| `390-post-approval.png`         | 390 × 844    | Same post-approval state at iPhone-portrait viewport |
+| `1440-historical-unavailable.png` | 1440 × 900 | Historical candidate detail: "Historical evidence unavailable" banner + Approve disabled |
+
+## Phase F — cleanup + invariant verification
+
+Teardown script output (`scratchpad/ep-train-6d4r/teardown.mjs`):
+
+```json
+{
+  "beforeRows": {"operationKeys":1, "transitions":1, "reviews":1, "validations":1},
+  "fixtureRows": {"drafts":1, "generationRuns":1, "projections":1, "segments":3, "builds":1, "versions":1, "courses":1},
+  "identityRows": {"userClubRoles":2, "sessions":17, "users":2},
+  "postTeardownInvariants": {
+    "remainingSynthUsers": 0,
+    "remainingUserClubRoles": 0,
+    "remainingFixtureDrafts": 0,
+    "couleeDraftCount": 8
+  }
+}
+```
+
+Final invariant re-check (`final-invariants.mjs`, run AFTER teardown):
+
+```json
+{"couleeDrafts": 8, "syntheticUsers": 0, "residualRoles": 0, "residualCourses": 0}
+```
+
+- **8** Coulee Ridge drafts (exactly the pre-release baseline — zero drift).
+- **0** residual synthetic users.
+- **0** residual UserClubRole rows for the synthetic users.
+- **0** residual fixture courses.
+- The 17 session rows (iron-session cookies) were cleaned up with
+  the User deletion cascade.
+- Audit log entries (`audit()` writes performed during the window)
+  remain for forensic traceability — only the login capability was
+  removed.
+- Fly-side cleanup: all 7 uploaded scripts removed from `/app` after
+  the final invariant check.
+
+All eight founder-authorised mitigations satisfied.
 
 ---
 
