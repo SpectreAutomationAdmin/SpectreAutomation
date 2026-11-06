@@ -39,7 +39,8 @@
 // "Historical evidence unavailable" treatment without ever synthesising
 // segment bodies from the fixture SHA.
 
-import { prisma } from "@/lib/prisma";
+import { prisma as defaultPrisma } from "@/lib/prisma";
+import type { PrismaClient } from "@prisma/client";
 import type { Principal } from "@/lib/rbac";
 import { hasPermission } from "@/lib/rbac";
 import { canonicalise, sha256Hex } from "./content-hash";
@@ -163,7 +164,9 @@ export async function resolveCandidateEvidence(
   principal: Principal | null | undefined,
   clubId: string,
   draftId: string,
+  opts: { prisma?: PrismaClient } = {},
 ): Promise<CandidateEvidence | null> {
+  const prisma = opts.prisma ?? defaultPrisma;
   if (!principal) {
     throw new EvidenceReaderError("UNAUTHENTICATED", 401);
   }

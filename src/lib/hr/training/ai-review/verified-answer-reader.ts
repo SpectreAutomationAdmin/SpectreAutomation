@@ -26,7 +26,8 @@
 //     integrity checks failed. UI must render the answer as
 //     unverified AND surface a dedicated banner.
 
-import { prisma } from "@/lib/prisma";
+import { prisma as defaultPrisma } from "@/lib/prisma";
+import type { PrismaClient } from "@prisma/client";
 import type { Principal } from "@/lib/rbac";
 import { hasPermission } from "@/lib/rbac";
 
@@ -74,7 +75,9 @@ export async function resolveVerifiedAnswer(
   principal: Principal | null | undefined,
   clubId: string,
   draftId: string,
+  opts: { prisma?: PrismaClient } = {},
 ): Promise<VerifiedAnswerResolution | null> {
+  const prisma = opts.prisma ?? defaultPrisma;
   if (!principal) return null;
   if (!hasPermission(principal, clubId, "hr:training:ai:read")) return null;
 

@@ -589,6 +589,10 @@ model Club {
   trainingTranscriptBuilds       TrainingTranscriptBuild[]
   trainingTranscriptSegments     TrainingTranscriptSegment[]
   trainingGroundingProjections   TrainingGroundingProjection[]
+
+  // EP-TRAIN-6D-4T (2026-11-06) — approved-AI-draft → TrainingQuestion
+  // promotion sidecar (tenant filter).
+  trainingQuestionAiDraftPromotions TrainingQuestionAiDraftPromotion[]
 }
 
 // ---------------------------------------------------------------------
@@ -13130,6 +13134,10 @@ model TrainingQuestion {
   options   TrainingAnswerOption[]
   responses TrainingQuestionResponse[]
 
+  // EP-TRAIN-6D-4T (2026-11-06) — back-relation to the promotion
+  // sidecar. 1-1: a promoted question has exactly one promotion row.
+  aiPromotion TrainingQuestionAiDraftPromotion?
+
   @@index([courseVersionId, displayOrder])
   @@index([checkpointId])
 }
@@ -16892,6 +16900,11 @@ model TrainingQuestionAiDraft {
   stateTransitions              TrainingQuestionAiStateTransition[]
   operationKeys                 TrainingQuestionAiOperationKey[]
 
+  // EP-TRAIN-6D-4T (2026-11-06) — back-relation to the promotion
+  // sidecar. 1-1: an approved draft can produce at most one
+  // TrainingQuestion promotion.
+  promotion                     TrainingQuestionAiDraftPromotion?
+
   // Uniqueness: within a (club, courseVersion) a given contentHash
   // can only exist ONCE. Duplicate persistence attempts collapse.
   @@unique([clubId, courseVersionId, contentHash])
@@ -17240,4 +17253,66 @@ model TrainingGroundingProjection {
 
   @@index([clubId, courseVersionId])
   @@index([clubId, sha256])
+}
+
+// -----------------------------------------------------------------
+// EP-TRAIN-6D-4T (2026-11-06) — Approved AI draft → TrainingQuestion
+// promotion sidecar. Additive-only. Zero changes to existing entities
+// outside the three back-relations below.
+//
+// 1-1 symmetry: unique on both draftId + questionId. ON DELETE
+// RESTRICT on both FKs so neither side can be silently removed while
+// the promotion row exists.
+//
+// Immutable approval provenance (founder condition 2 on 2026-11-06):
+// the row stores the exact draft content hash + validation id +
+// verified-answer binding + reviewer id that made the promotion
+// legal. A later reviewer edit that bumps the draft's recordVersion
+// or contentHash leaves these columns byte-identical — they are the
+// forensic record of exactly what was approved when the promotion
+// happened.
+//
+// Divergence detection (founder condition 5): `promotedQuestionContentHash`
+// is a canonical hash of the TrainingQuestion + options AT PROMOTION
+// TIME. The 4T-extended publish gate recomputes this hash against
+// the current question/options and refuses publication on divergence,
+// requiring reapproval via a follow-on slice.
+// -----------------------------------------------------------------
+model TrainingQuestionAiDraftPromotion {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String   @unique
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  questionId                    String   @unique
+  question                      TrainingQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  // "CHECKPOINT" | "FINAL_ASSESSMENT" — immutable after insert.
+  destination                   String
+
+  // Redundant with TrainingQuestion.checkpointId at promotion-time;
+  // preserved here so a later edit that moves the question between
+  // buckets is still traceable to the original promotion intent.
+  checkpointId                  String?
+
+  // Immutable approval provenance.
+  approvedDraftContentHash      String
+  approvedValidationId          String
+  verifiedAnswerOptionIndex     Int
+  verifiedAnswerSnapshotHash    String
+  approvedReviewId              String
+  approvedByUserId              String
+
+  // Divergence-detection hash. Recomputed by the 4T publish gate.
+  promotedQuestionContentHash   String
+
+  promotedByUserId              String
+  promotedAt                    DateTime @default(now())
+  createdAt                     DateTime @default(now())
+
+  @@index([clubId, draftId])
+  @@index([clubId, questionId])
 }

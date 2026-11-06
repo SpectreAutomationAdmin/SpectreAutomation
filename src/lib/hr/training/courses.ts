@@ -30,6 +30,11 @@ import { requirePermission, type Principal } from "../../rbac";
 import { assertTenantOwned } from "../../services/tenant";
 import { assertPostingAllowed, withPostingGuard } from "../../posting-guard";
 import { ConflictError, NotFoundError, ValidationError } from "../../errors";
+// EP-TRAIN-6D-4T (2026-11-06) — divergence-detection hash helper for
+// the publish gate. No circular import: promotion-service imports
+// Prisma + content-hash + evidence-reader + verified-answer-reader;
+// it does not reach back into courses.ts.
+import { promotedQuestionContentHash } from "./ai-review/promotion-service";
 
 export const TRAINING_COURSE_CATEGORIES = [
   "Safety",
@@ -250,7 +255,22 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
     where: { id: versionId },
     include: {
       questions: {
-        include: { options: true },
+        include: {
+          options: true,
+          // EP-TRAIN-6D-4T (2026-11-06) — surface the promotion sidecar
+          // so the publish gate can detect divergence between the
+          // promoted-at-approval content hash and the current content
+          // hash (founder condition 5).
+          aiPromotion: {
+            select: {
+              id: true,
+              draftId: true,
+              approvedDraftContentHash: true,
+              promotedQuestionContentHash: true,
+              draft: { select: { state: true, contentHash: true } },
+            },
+          },
+        },
       },
       checkpoints: { orderBy: { atSecond: "asc" } },
       course: { select: { clubId: true } },
@@ -276,6 +296,35 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
   const activeQs = version.questions.filter((q) => q.active);
   for (const q of activeQs) {
     const type = (q.questionType as "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE") ?? "SINGLE_CHOICE";
+    // 4T divergence check — only runs for questions that originated
+    // from an AI promotion. Manually-authored questions skip this
+    // entirely.
+    if (q.aiPromotion) {
+      const currentHash = promotedQuestionContentHash({
+        prompt: q.prompt,
+        questionType: type,
+        checkpointId: q.checkpointId ?? null,
+        options: q.options
+          .slice()
+          .sort((a, b) => a.displayOrder - b.displayOrder)
+          .map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
+      });
+      if (currentHash !== q.aiPromotion.promotedQuestionContentHash) {
+        reasons.push(
+          `Question '${q.prompt.slice(0, 40)}...' originated from AI draft ${q.aiPromotion.draftId} but has been edited since approval. Re-approval is required before publishing.`,
+        );
+      }
+      if (q.aiPromotion.draft.state !== "APPROVED_DRAFT") {
+        reasons.push(
+          `Question '${q.prompt.slice(0, 40)}...' originated from AI draft ${q.aiPromotion.draftId} which is no longer in APPROVED_DRAFT state (${q.aiPromotion.draft.state}). Re-approval is required.`,
+        );
+      }
+      if (q.aiPromotion.draft.contentHash !== q.aiPromotion.approvedDraftContentHash) {
+        reasons.push(
+          `Question '${q.prompt.slice(0, 40)}...' originated from AI draft ${q.aiPromotion.draftId} whose immutable draft body has changed since approval. Re-approval is required.`,
+        );
+      }
+    }
     if (q.options.length < 2) {
       reasons.push(`Question '${q.prompt.slice(0, 40)}...' needs at least 2 answer options.`);
       continue;

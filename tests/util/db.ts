@@ -551,6 +551,10 @@ export async function resetDb() {
     c.trainingProgress.deleteMany(),
     c.trainingAssignment.deleteMany(),
     c.trainingAnswerOption.deleteMany(),
+    // EP-TRAIN-6D-4T (2026-11-06) — promotion sidecar has FK to both
+    // TrainingQuestion AND TrainingQuestionAiDraft with ON DELETE
+    // RESTRICT. Must clear BEFORE either parent.
+    c.trainingQuestionAiDraftPromotion.deleteMany(),
     c.trainingQuestion.deleteMany(),
     // EP-TRAIN-6D-4D (2026-11-04) — AI-review tables were added in
     // 6D-4B but were missed by resetDb at that time. Clear them BEFORE

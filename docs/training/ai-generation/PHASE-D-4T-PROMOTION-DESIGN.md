@@ -1,13 +1,12 @@
 # EP-TRAIN-6D-4T — Approved AI Question → Course-Authoring Bridge — Design
 
-Status: **PREFLIGHT COMPLETE — STOP for founder schema authorization.**
-Per directive §3: "If additional schema changes are required, present
-the minimal additive design and STOP for founder authorization before
-implementation. Do not silently introduce new tables or columns."
+Status: **IMPLEMENTATION COMPLETE OFFLINE.** The founder authorized
+Option B on 2026-11-06 with eight conditions; all conditions are
+honoured in the implementation below. Not pushed; not deployed.
 
 Author: Claude (Opus 4.7). Date: 2026-11-06. Branch:
-`ep-train-6d-4t/promotion-bridge` (docs only; no implementation yet,
-no migration generated).
+`ep-train-6d-4t/promotion-bridge`. See
+`PHASE-D-4T-ACCEPTANCE.md` for the evidence table.
 
 ## 1. Preflight finding
 

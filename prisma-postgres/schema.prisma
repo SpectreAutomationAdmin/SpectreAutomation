@@ -591,6 +591,9 @@ model Club {
   trainingTranscriptBuilds       TrainingTranscriptBuild[]
   trainingTranscriptSegments     TrainingTranscriptSegment[]
   trainingGroundingProjections   TrainingGroundingProjection[]
+
+  // EP-TRAIN-6D-4T (2026-11-06) — approved-AI-draft promotion sidecar.
+  trainingQuestionAiDraftPromotions TrainingQuestionAiDraftPromotion[]
 }
 
 // ---------------------------------------------------------------------
@@ -12937,6 +12940,9 @@ model TrainingQuestion {
   options   TrainingAnswerOption[]
   responses TrainingQuestionResponse[]
 
+  // EP-TRAIN-6D-4T (2026-11-06) — back-relation to promotion sidecar.
+  aiPromotion TrainingQuestionAiDraftPromotion?
+
   @@index([courseVersionId, displayOrder])
   @@index([checkpointId])
 }
@@ -16247,6 +16253,9 @@ model TrainingQuestionAiDraft {
   stateTransitions              TrainingQuestionAiStateTransition[]
   operationKeys                 TrainingQuestionAiOperationKey[]
 
+  // EP-TRAIN-6D-4T (2026-11-06) — back-relation to promotion sidecar.
+  promotion                     TrainingQuestionAiDraftPromotion?
+
   // Uniqueness: within a (club, courseVersion) a given contentHash
   // can only exist ONCE. Duplicate persistence attempts collapse.
   @@unique([clubId, courseVersionId, contentHash])
@@ -16502,4 +16511,36 @@ model TrainingGroundingProjection {
   @@unique([clubId, courseVersionId, sha256])
   @@index([clubId, courseVersionId])
   @@index([clubId, sha256])
+}
+
+model TrainingQuestionAiDraftPromotion {
+  id                            String   @id @default(cuid())
+
+  clubId                        String
+  club                          Club     @relation(fields: [clubId], references: [id])
+
+  draftId                       String   @unique
+  draft                         TrainingQuestionAiDraft @relation(fields: [draftId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  questionId                    String   @unique
+  question                      TrainingQuestion @relation(fields: [questionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  destination                   String
+  checkpointId                  String?
+
+  approvedDraftContentHash      String
+  approvedValidationId          String
+  verifiedAnswerOptionIndex     Int
+  verifiedAnswerSnapshotHash    String
+  approvedReviewId              String
+  approvedByUserId              String
+
+  promotedQuestionContentHash   String
+
+  promotedByUserId              String
+  promotedAt                    DateTime @default(now())
+  createdAt                     DateTime @default(now())
+
+  @@index([clubId, draftId])
+  @@index([clubId, questionId])
 }
