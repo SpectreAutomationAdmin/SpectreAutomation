@@ -32,8 +32,8 @@ modal secret create spectre-training-response-hmac-key    # optional per §Q.5
 
 Deploy the two Hybrid-contract Modal apps:
 ```
-modal deploy modal/spectre_training_transcribe.py
-modal deploy modal/spectre_training_generate.py
+modal deploy -m modal_endpoints.transcribe_app
+modal deploy -m modal_endpoints.generate_app
 ```
 
 Immediately stop both apps so no GPU container stays warm:
