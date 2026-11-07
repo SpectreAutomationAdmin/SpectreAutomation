@@ -38,6 +38,22 @@ from .shared.errors import ContractError, FailureCode
 from .shared.replay import ModalDictReplayRegistry, replay_key
 
 
+def _extract_request_id_from_headers(headers: dict[str, str]) -> str:
+    """EP-TRAIN-4Y-C §3 — mirror of the transcribe-endpoint helper.
+    Early requestId extraction so error responses can be signed with
+    the client's actual request-id even when envelope verification
+    fails downstream. ASCII-only guard prevents header-smuggling."""
+    hdr = {k.lower(): v for k, v in headers.items() if isinstance(v, str)}
+    rid = hdr.get("x-spectre-request-id") or ""
+    if not rid or len(rid) > 128:
+        return "unknown"
+    for ch in rid:
+        code = ord(ch)
+        if code < 0x20 or code > 0x7E:
+            return "unknown"
+    return rid
+
+
 def _handle_generate_request(
     *,
     headers: dict[str, str],
@@ -49,7 +65,14 @@ def _handle_generate_request(
     now_sec: int,
     run_qwen: Any,  # callable(system_prompt, transcript, constraints) -> (proposals, elapsed, tokens)
 ) -> tuple[int, str, dict[str, str]]:
-    """Core request handler. Returns `(http_status, body_text, headers)`."""
+    """Core request handler. Returns `(http_status, body_text, headers)`.
+
+    EP-TRAIN-4Y-C §3 — error responses are signed with the request-id
+    harvested from the HEADER early, so the client's
+    `verifyResponseSignature` can match the request-id and reject
+    tampered error payloads.
+    """
+    early_request_id = _extract_request_id_from_headers(headers)
     try:
         auth, body = verify_request_envelope(
             headers=headers,
@@ -63,7 +86,7 @@ def _handle_generate_request(
     except ContractError as err:
         return _signed_error(
             operation=OPERATION_GENERATE,
-            request_id="unknown",
+            request_id=early_request_id,
             http_status=err.http_status if err.http_status else 400,
             code=err.code,
             message=str(err),

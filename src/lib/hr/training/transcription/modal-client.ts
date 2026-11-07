@@ -116,24 +116,55 @@ export async function callModalTranscribe(
   clearTimeout(timer);
 
   const respText = await res.text();
-
-  // On any non-2xx we try to extract a server-emitted contract code
-  // from the response headers (both success and documented failure
-  // responses are signed per §5).
-  if (!res.ok) {
-    const serverCode = res.headers.get("x-spectre-failure-code") ?? undefined;
-    throw new ModalContractError(
-      coerceServerCode(serverCode) ?? "MODAL_HTTP_ERROR",
-      `Modal returned HTTP ${res.status}${serverCode ? ` (${serverCode})` : ""}.`,
-      { httpStatus: res.status },
-    );
-  }
-
-  // Verify response signature (fail-closed on unsigned success).
   const headerMap: Record<string, string> = {};
   res.headers.forEach((v, k) => {
     headerMap[k.toLowerCase()] = v;
   });
+
+  // EP-TRAIN-4Y-C §3 — verify response signature for BOTH success
+  // and error paths when signed-response headers are present.
+  //
+  // Decision tree on non-2xx:
+  //   (a) signed-response headers present → verify; if OK, trust the
+  //       x-spectre-failure-code header. If signature fails, throw
+  //       MODAL_HMAC_INVALID — attacker-controlled failure codes are
+  //       rejected.
+  //   (b) signed-response headers absent (e.g. proxy-level 502 /
+  //       Modal workspace rejection before our function runs) →
+  //       classify as MODAL_HTTP_ERROR without trusting any header.
+  if (!res.ok) {
+    const hasSignedHeaders =
+      !!headerMap["x-spectre-response-signature"] &&
+      !!headerMap["x-spectre-response-operation"] &&
+      !!headerMap["x-spectre-response-request-id"] &&
+      !!headerMap["x-spectre-contract-version"];
+    if (hasSignedHeaders) {
+      // This throws if the signature is invalid — attacker cannot
+      // inject a crafted failure code without a valid HMAC.
+      verifyResponseSignature({
+        headers: headerMap,
+        bodyText: respText,
+        expectedOperation: OPERATION_TRANSCRIBE,
+        expectedRequestId: input.requestId,
+        httpStatus: res.status,
+        responseHmacKey: creds.responseHmacKey,
+      });
+      const serverCode = headerMap["x-spectre-failure-code"];
+      throw new ModalContractError(
+        coerceServerCode(serverCode) ?? "MODAL_HTTP_ERROR",
+        `Modal returned HTTP ${res.status}${serverCode ? ` (${serverCode})` : ""}.`,
+        { httpStatus: res.status },
+      );
+    }
+    // Unsigned error response — do NOT trust any header from it.
+    throw new ModalContractError(
+      "MODAL_HTTP_ERROR",
+      `Modal returned HTTP ${res.status} with no signed-response headers; classifying as transport error.`,
+      { httpStatus: res.status },
+    );
+  }
+
+  // Success path — unchanged. Fail-closed on unsigned success.
   const parsedUnknown = verifyResponseSignature({
     headers: headerMap,
     bodyText: respText,

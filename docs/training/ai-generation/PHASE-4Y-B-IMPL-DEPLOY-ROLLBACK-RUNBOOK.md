@@ -189,39 +189,42 @@ Within 1 hour of deploy:
 
 ---
 
-## 5. Compatibility with 6C-11 operator path (§D.6)
+## 5. 6C-11 operator path — RETIRED (EP-TRAIN-4Y-C §2)
 
-The EP-TRAIN-6C-11 workstation operator path
-(`generate-lite-run.mjs` + SPECTRE-SEC-1 DPAPI creds) continues
-to work against the Hybrid-contract Modal function AS LONG AS:
+**Status change (2026-11-07):** this section's prior claim that the
+Hybrid Modal function would accept the 6C-11 legacy envelope was
+architecturally incorrect. See
+[PHASE-4Y-C-6C11-RETIREMENT-RATIONALE.md](./PHASE-4Y-C-6C11-RETIREMENT-RATIONALE.md)
+for the full analysis. Summary:
 
-- The Modal function accepts requests WITHOUT
-  `x-spectre-contract-version` as the legacy envelope and
-  returns unsigned legacy responses.
-- The operator workstation path is NOT exposed to tenant-facing
-  application traffic (§D.6: "Do not expose it to tenant-facing
-  application traffic").
+- The 6C-11 operator script (`generate-lite-run.mjs`) targets a
+  DIFFERENT Modal operation (`spectre.training.generate.lite.v1`)
+  at a DIFFERENT URL (its own `web_lite` endpoint), NOT
+  `spectre.training.generate.v1` served by the new
+  `spectre_training_generate.py`. Making one endpoint serve both
+  envelopes would require wiring a second operation into it,
+  which is more work than simply keeping the two endpoints
+  separate.
+- The 6C-11 endpoint is operator-only; no tenant or customer
+  depends on it. Retiring compatibility on the NEW endpoint has
+  no customer impact.
 
-Sunset condition for the legacy path:
-- 90 days after the 4Y-B-IMPL deploy acceptance (ending
-  **2027-02-05** if deployed on 2026-11-07).
-- At sunset, the Modal function begins REQUIRING
-  `x-spectre-contract-version`; the legacy workstation path
-  starts receiving `CONTRACT_VERSION_MISMATCH` and the operator
-  can either upgrade or stop using it.
+**Retirement plan:**
 
-**Backward-compatibility must not weaken the new contract.** Any
-observed divergence between the legacy and Hybrid paths is a
-defect against the Hybrid contract, not against the legacy.
+1. The NEW endpoints (`spectre_training_transcribe` +
+   `spectre_training_generate`) REQUIRE `x-spectre-contract-version`.
+   Any legacy envelope arriving at these URLs gets rejected with
+   `REQUEST_HMAC_INVALID` — safe, closed.
+2. Operator may keep the 6C-11 `generate_lite` endpoint running
+   independently if the workstation diagnostic is still useful.
+   It lives at its own Modal app and consumes its own secrets.
+3. On the first Hybrid deploy cutover, the operator SHOULD stop
+   the 6C-11 `generate_lite` Modal app to avoid dual-spend. The
+   runbook is updated to reflect this.
 
----
-
-## 6. Post-sunset cleanup (2027-02-05+)
-
-- Remove the legacy-envelope code path from the Modal function.
-- Delete `scripts/spectre-sec-1/` + `scratchpad/ep-train-6b/`
-  from the repo (optional; operator judgement).
-- Make `x-spectre-contract-version` strictly required.
+**Pending founder authorisation:** per EP-TRAIN-4Y-C §2, this
+retirement requires founder sign-off before proceeding. See the
+final acceptance report for the explicit YES/NO decision.
 
 ---
 

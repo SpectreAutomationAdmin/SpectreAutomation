@@ -106,3 +106,13 @@ tsconfig.tsbuildinfo
 *.tsbuildinfo
 nav-audit.out
 scan-placeholders.out
+
+# --- Python bytecode / cache --------------------------------------------
+# Modal endpoint code is Python; its bytecode and caches must not be
+# tracked. Added 2026-11-07 per EP-TRAIN-4Y-C §5.
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -68,37 +68,77 @@ class InMemoryReplayRegistry(ReplayRegistry):
 
 
 class ModalDictReplayRegistry(ReplayRegistry):
-    """Production. Uses `modal.Dict` with TTL semantics.
+    """Production. Uses `modal.Dict.put(..., skip_if_exists=True)` for
+    atomic put-if-absent.
 
-    NOTE: this class is instantiated inside the Modal function scope
-    with a shared `modal.Dict` attached. The put-if-absent pattern
-    below relies on `modal.Dict.put(..., condition=NOT_EXISTS)` or
-    equivalent. The actual Dict API surface may differ by Modal SDK
-    version — operators MUST confirm atomicity at deploy time
-    (`modal.Dict.setnx` or equivalent). Falling back to
-    read-then-write is NOT acceptable because it introduces a race.
+    EP-TRAIN-4Y-C §1 fix (2026-11-07) — the previous
+    `contains` → `put` sequence was a check-then-set race across
+    concurrent containers. Replaced with Modal SDK's documented
+    atomic primitive: `modal.Dict.put(key, value, skip_if_exists=True)`
+    returns `True` iff the key was absent and the value was stored;
+    `False` iff the key was already present (no change made). The
+    guarantee is provided server-side by the Modal control plane,
+    not by this process.
+
+    **SDK version pin:** `modal>=0.65.42` (first release documenting
+    `skip_if_exists` on `Dict.put`). Older SDKs do NOT have this
+    parameter — the Modal image in `spectre_training_transcribe.py`
+    + `spectre_training_generate.py` MUST pin the SDK at or above
+    this version (operator deploy-time check in the checklist).
+
+    If the deployed SDK does not provide `skip_if_exists`, the
+    operator MUST either upgrade the SDK or substitute a different
+    shared atomic store before serving traffic. There is no safe
+    non-atomic fallback inside this class — a missing primitive is a
+    deployment blocker.
     """
+
+    MIN_SDK_VERSION = "0.65.42"
 
     def __init__(self, dict_: Any) -> None:
         self._dict = dict_
 
     def record(self, key: str, ttl_sec: int) -> None:
         try:
-            # Pseudocode: Modal's actual atomic put-if-absent call.
-            # The exact method name is Modal-SDK-version-specific.
-            if self._dict.contains(key):  # type: ignore[attr-defined]
-                raise ContractError(FailureCode.REPLAY_DETECTED, f"Key {key} seen recently.", http_status=409)
-            self._dict.put(key, time.time() + ttl_sec)  # type: ignore[attr-defined]
+            # Atomic put-if-absent. Returns True on fresh insert,
+            # False if a live record for this key already exists.
+            # No exception is raised by Modal for the duplicate case;
+            # we classify the False return as REPLAY_DETECTED.
+            inserted = self._dict.put(  # type: ignore[attr-defined]
+                key,
+                time.time() + ttl_sec,
+                skip_if_exists=True,
+            )
+        except TypeError as exc:
+            # `skip_if_exists` parameter is absent on the deployed
+            # Modal SDK. Fail closed — DO NOT fall back to a racy
+            # check-then-set. Operator must upgrade the SDK.
+            raise ContractError(
+                FailureCode.REPLAY_STORE_UNAVAILABLE,
+                f"Modal SDK does not support atomic put-if-absent "
+                f"(skip_if_exists). Pin modal>={self.MIN_SDK_VERSION}.",
+                http_status=503,
+            ) from exc
         except ContractError:
             raise
         except Exception as exc:
-            # Any Modal-side failure propagates as REPLAY_STORE_UNAVAILABLE.
-            # Fail closed.
+            # Any OTHER Modal-side failure propagates as
+            # REPLAY_STORE_UNAVAILABLE. Fail closed.
             raise ContractError(
                 FailureCode.REPLAY_STORE_UNAVAILABLE,
                 f"Replay store error: {type(exc).__name__}.",
                 http_status=503,
             ) from exc
+
+        if not inserted:
+            # Duplicate — the key was already present from a prior
+            # request. The caller MUST reject this request as a
+            # replay.
+            raise ContractError(
+                FailureCode.REPLAY_DETECTED,
+                f"Key {key} seen recently.",
+                http_status=409,
+            )
 
     def is_healthy(self) -> bool:
         try:

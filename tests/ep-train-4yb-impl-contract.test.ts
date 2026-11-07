@@ -155,6 +155,19 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
     const headers = normaliseHeaders(init?.headers);
     const bodyText = (init?.body as string) ?? "";
 
+    // EP-TRAIN-4Y-C §3 — mirror the Python-side early requestId
+    // extraction so error responses are signed with the client's
+    // actual request-id.
+    const earlyRequestId = (() => {
+      const rid = headers["x-spectre-request-id"] ?? "";
+      if (!rid || rid.length > 128) return "unknown";
+      for (let i = 0; i < rid.length; i++) {
+        const c = rid.charCodeAt(i);
+        if (c < 0x20 || c > 0x7e) return "unknown";
+      }
+      return rid;
+    })();
+
     // 1. Proxy auth check (workspace-level).
     if (opts.invalidProxyAuth || headers["modal-key"] !== FIXTURE_PROXY_KEY) {
       return makeJsonResponse(401, { error: { code: "PROXY_AUTH_FAILED" } }, {});
@@ -172,12 +185,12 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
       timestampSkewSec: 300,
     });
     if (!sigResult.ok) {
-      return failureResponse(sigResult.code, sigResult.message, 400, opts);
+      return failureResponse(sigResult.code, sigResult.message, 400, opts, earlyRequestId);
     }
 
     const body = JSON.parse(bodyText) as ModalRequestBody<Record<string, unknown>>;
     if (body.operation !== opts.operation) {
-      return failureResponse("OPERATION_MISMATCH", "Body operation mismatch", 400, opts);
+      return failureResponse("OPERATION_MISMATCH", "Body operation mismatch", 400, opts, earlyRequestId);
     }
 
     // 3. Fingerprint check.
@@ -187,6 +200,7 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
         "Fingerprint did not verify",
         400,
         opts,
+        earlyRequestId,
       );
     }
 
@@ -200,6 +214,7 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
         "Auth operation != TRANSCRIBE_VIDEO",
         400,
         opts,
+        earlyRequestId,
       );
     }
     if (
@@ -211,17 +226,18 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
         "Auth operation != GENERATE_DRAFT_QUESTIONS",
         400,
         opts,
+        earlyRequestId,
       );
     }
 
     // 5. Expiry.
     if (isPilotAuthorizationExpired(body.pilotAuthorization, clock)) {
-      return failureResponse("PILOT_AUTH_EXPIRED", "Auth expired", 400, opts);
+      return failureResponse("PILOT_AUTH_EXPIRED", "Auth expired", 400, opts, earlyRequestId);
     }
 
     // 6. Replay.
     if (opts.replayStoreOutage) {
-      return failureResponse("REPLAY_STORE_UNAVAILABLE", "Replay store down", 503, opts);
+      return failureResponse("REPLAY_STORE_UNAVAILABLE", "Replay store down", 503, opts, earlyRequestId);
     }
     const key = replayKey({
       authorizationId: body.pilotAuthorization.authorizationId,
@@ -229,7 +245,7 @@ function mockModalServer(opts: MockServerOptions): typeof fetch {
     });
     const rec = await replay.record({ key, ttlSec: 900 });
     if (!rec.ok && rec.reason === "duplicate") {
-      return failureResponse("REPLAY_DETECTED", "Request-id seen", 409, opts);
+      return failureResponse("REPLAY_DETECTED", "Request-id seen", 409, opts, earlyRequestId);
     }
 
     // 7. Success: build response + sign.
@@ -278,12 +294,22 @@ function failureResponse(
   message: string,
   status: number,
   opts: MockServerOptions,
+  requestId: string,
 ): Response {
-  const body = { error: { code, message } };
+  // EP-TRAIN-4Y-C §3 — error responses are now signed with the
+  // CLIENT's request-id (extracted from the request header early),
+  // so the client can verify the signature and reject tampered
+  // error payloads.
+  const body = {
+    contractVersion: CONTRACT_VERSION,
+    operation: opts.operation,
+    requestId,
+    error: { code, message },
+  };
   const bodyText = JSON.stringify(body);
   const sigHdrs = signResponse({
     operation: opts.operation,
-    requestId: "error",
+    requestId,
     httpStatus: status,
     bodyText,
     responseHmacKey: FIXTURE_RESPONSE_HMAC_KEY,

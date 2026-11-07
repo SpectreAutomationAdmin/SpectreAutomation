@@ -55,6 +55,23 @@ from .shared.replay import ModalDictReplayRegistry, replay_key
 # import time so the file remains unit-testable.
 
 
+def _extract_request_id_from_headers(headers: dict[str, str]) -> str:
+    """EP-TRAIN-4Y-C §3 — early requestId extraction so error responses
+    can be signed with the client's actual request-id even when envelope
+    verification fails downstream. ASCII-only guard prevents header-
+    smuggling into the signed message. Returns `unknown` on any
+    anomaly."""
+    hdr = {k.lower(): v for k, v in headers.items() if isinstance(v, str)}
+    rid = hdr.get("x-spectre-request-id") or ""
+    if not rid or len(rid) > 128:
+        return "unknown"
+    for ch in rid:
+        code = ord(ch)
+        if code < 0x20 or code > 0x7E:
+            return "unknown"
+    return rid
+
+
 def _handle_transcribe_request(
     *,
     headers: dict[str, str],
@@ -75,7 +92,15 @@ def _handle_transcribe_request(
     On any ContractError: returns `(err.http_status, error_body,
     {x-spectre-failure-code: err.code})`. Responses on the error
     path are ALSO signed (§5: no bypass path for failures).
+
+    EP-TRAIN-4Y-C §3 — the client-facing error response is signed
+    with the request-id harvested from the request HEADER at the
+    earliest possible moment, so a client that calls
+    `verifyResponseSignature` against an error response can
+    successfully match request-id and reject tampered error
+    payloads.
     """
+    early_request_id = _extract_request_id_from_headers(headers)
     try:
         auth, body = verify_request_envelope(
             headers=headers,
@@ -89,7 +114,7 @@ def _handle_transcribe_request(
     except ContractError as err:
         return _signed_error(
             operation=OPERATION_TRANSCRIBE,
-            request_id="unknown",
+            request_id=early_request_id,
             http_status=err.http_status if err.http_status else 400,
             code=err.code,
             message=str(err),

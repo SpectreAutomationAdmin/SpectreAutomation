@@ -99,20 +99,44 @@ export async function callModalGenerate(
   clearTimeout(timer);
 
   const respText = await res.text();
-
-  if (!res.ok) {
-    const serverCode = res.headers.get("x-spectre-failure-code") ?? undefined;
-    throw new ModalContractError(
-      coerceServerCode(serverCode) ?? "MODAL_HTTP_ERROR",
-      `Modal returned HTTP ${res.status}${serverCode ? ` (${serverCode})` : ""}.`,
-      { httpStatus: res.status },
-    );
-  }
-
   const headerMap: Record<string, string> = {};
   res.headers.forEach((v, k) => {
     headerMap[k.toLowerCase()] = v;
   });
+
+  // EP-TRAIN-4Y-C §3 — verify response signature for BOTH success
+  // and error paths when signed-response headers are present. See
+  // the transcription client's long-form comment for rationale.
+  if (!res.ok) {
+    const hasSignedHeaders =
+      !!headerMap["x-spectre-response-signature"] &&
+      !!headerMap["x-spectre-response-operation"] &&
+      !!headerMap["x-spectre-response-request-id"] &&
+      !!headerMap["x-spectre-contract-version"];
+    if (hasSignedHeaders) {
+      verifyResponseSignature({
+        headers: headerMap,
+        bodyText: respText,
+        expectedOperation: OPERATION_GENERATE,
+        expectedRequestId: input.requestId,
+        httpStatus: res.status,
+        responseHmacKey: creds.responseHmacKey,
+      });
+      const serverCode = headerMap["x-spectre-failure-code"];
+      throw new ModalContractError(
+        coerceServerCode(serverCode) ?? "MODAL_HTTP_ERROR",
+        `Modal returned HTTP ${res.status}${serverCode ? ` (${serverCode})` : ""}.`,
+        { httpStatus: res.status },
+      );
+    }
+    throw new ModalContractError(
+      "MODAL_HTTP_ERROR",
+      `Modal returned HTTP ${res.status} with no signed-response headers; classifying as transport error.`,
+      { httpStatus: res.status },
+    );
+  }
+
+  // Success path — unchanged. Fail-closed on unsigned success.
   const parsed = verifyResponseSignature({
     headers: headerMap,
     bodyText: respText,
