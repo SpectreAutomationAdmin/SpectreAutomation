@@ -1,0 +1,409 @@
+{
+  "fixtureVersion": "4yb-verify-v1",
+  "contractVersion": "4yb-v1",
+  "notes": [
+    "All expected values pre-computed OFFLINE with Python stdlib.",
+    "Neither production module (TS canonicalise / Python auth.canonicalise) is used by this generator.",
+    "Tests MUST load this fixture and assert their production output == these values.",
+    "Secrets here are synthetic test keys — not production."
+  ],
+  "canonicalisationVectors": [
+    {
+      "name": "c1-simple-sort",
+      "description": "sorted keys ascending",
+      "input": {
+        "b": 1,
+        "a": 2
+      },
+      "expectedCanonical": "{\"a\":2,\"b\":1}",
+      "expectedSha256Hex": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772"
+    },
+    {
+      "name": "c2-nested-sort",
+      "description": "nested object + array preservation",
+      "input": {
+        "z": [
+          1,
+          2
+        ],
+        "a": {
+          "c": 1,
+          "b": 2
+        }
+      },
+      "expectedCanonical": "{\"a\":{\"b\":2,\"c\":1},\"z\":[1,2]}",
+      "expectedSha256Hex": "a6ed41779616ad7cf395b322c3007ce0bbf140cced9245bd39acec83ede41101"
+    },
+    {
+      "name": "c3-empty-object",
+      "description": "empty object",
+      "input": {},
+      "expectedCanonical": "{}",
+      "expectedSha256Hex": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "c4-empty-array",
+      "description": "empty array",
+      "input": [],
+      "expectedCanonical": "[]",
+      "expectedSha256Hex": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "c5-null-value",
+      "description": "null preserved",
+      "input": {
+        "x": null,
+        "y": 1
+      },
+      "expectedCanonical": "{\"x\":null,\"y\":1}",
+      "expectedSha256Hex": "1dd91d95c676dce4c3ae8de245587b8ff5e7b0d926fbe1c8362bb2af224e3d74"
+    },
+    {
+      "name": "c6-boolean",
+      "description": "booleans",
+      "input": {
+        "ok": true,
+        "no": false
+      },
+      "expectedCanonical": "{\"no\":false,\"ok\":true}",
+      "expectedSha256Hex": "ae8ab1e1b72505d8544a32bf3803333e81528159e214e4198a0271d2f60dc419"
+    },
+    {
+      "name": "c7-zero-integer",
+      "description": "zero integer",
+      "input": {
+        "n": 0
+      },
+      "expectedCanonical": "{\"n\":0}",
+      "expectedSha256Hex": "f3013f933b9fb80ab6d995e7ad9da36f683837ba1d81e950c943d40111eac2f0"
+    },
+    {
+      "name": "c8-negative-integer",
+      "description": "negative integer",
+      "input": {
+        "n": -1
+      },
+      "expectedCanonical": "{\"n\":-1}",
+      "expectedSha256Hex": "0c31e9341837b3869856e8ea000cdc2668e68a8bd0f291d61c3d7ea52bbcff96"
+    },
+    {
+      "name": "c9-ascii-text",
+      "description": "ASCII with double-quote, newline, tab, backslash — escapes correct",
+      "input": {
+        "text": "hello \"world\"\n\t\\"
+      },
+      "expectedCanonical": "{\"text\":\"hello \\\"world\\\"\\n\\t\\\\\"}",
+      "expectedSha256Hex": "cc40bb3924e5da9d3444f99afe985d26330d714af284e868c60ac167c2e934ff"
+    },
+    {
+      "name": "c10-unicode-payload",
+      "description": "Unicode user content allowed (not identity scope); em-dash present — both impls must emit same UTF-8 bytes",
+      "input": {
+        "q": "naïve café — résumé"
+      },
+      "expectedCanonical": "{\"q\":\"naïve café — résumé\"}",
+      "expectedSha256Hex": "334c9ac84c0146528b7e68b9ca4af1f140c4353f6827f8cadb9e934ba68d2308"
+    },
+    {
+      "name": "c11-array-preserves-order",
+      "description": "array element order preserved (not sorted)",
+      "input": {
+        "ids": [
+          3,
+          1,
+          2
+        ]
+      },
+      "expectedCanonical": "{\"ids\":[3,1,2]}",
+      "expectedSha256Hex": "2432a382194ccff61576ead5096e48ad8758fbbf3b52be450f99f519031838a4"
+    },
+    {
+      "name": "c12-deep-nested",
+      "description": "deep nested structure, all keys sorted at every level",
+      "input": {
+        "a": {
+          "b": {
+            "c": {
+              "d": [
+                1,
+                {
+                  "e": 2,
+                  "f": 3
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expectedCanonical": "{\"a\":{\"b\":{\"c\":{\"d\":[1,{\"e\":2,\"f\":3}]}}}}",
+      "expectedSha256Hex": "402c883050ef919e97f46fdcd996c28a798315800d1b6aae01b056e456869154"
+    },
+    {
+      "name": "c13-same-content-different-input-order",
+      "description": "same semantic content as different input key order must canonicalise identically to {'a':1,'b':2,'c':3}",
+      "input": {
+        "c": 3,
+        "a": 1,
+        "b": 2
+      },
+      "expectedCanonical": "{\"a\":1,\"b\":2,\"c\":3}",
+      "expectedSha256Hex": "e6a3385fb77c287a712e7f406a451727f0625041823ecf23bea7ef39b2e39805"
+    }
+  ],
+  "fingerprintVectors": [
+    {
+      "name": "f1-generate-auth-fingerprint",
+      "description": "fingerprint = b64url_nopad(HMAC-SHA-256(fpSecret, canonicalise(authWithoutFingerprint)))",
+      "input": {
+        "authWithoutFingerprint": {
+          "schemaVersion": "pilot-generation-authorization-v1",
+          "authorizationId": "auth-vector-fp",
+          "tenantId": "club-silver-springs",
+          "courseId": "course:cmvzs3w05000456qcgfgps7gy",
+          "versionId": "cmvzs3w05000456qcgfgps7gy",
+          "sourceVideoSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "resolvedTranscriptBuildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approvedGroundingProjectionSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "operation": "GENERATE_DRAFT_QUESTIONS",
+          "maxRequestedQuestions": 6,
+          "pilotRestrictions": {
+            "publicationProhibited": true,
+            "employeeAssignmentProhibited": true,
+            "databaseWritesProhibited": false,
+            "automaticRetriesProhibited": false,
+            "excludedSegmentIds": [
+              16,
+              17
+            ],
+            "scope": "vector-fixture"
+          },
+          "issuedAtUtc": "2026-11-07T08:00:00.000Z",
+          "expiresAtUtc": "2026-11-07T09:00:00.000Z",
+          "issuedBy": "system:training"
+        },
+        "fingerprintSecretB64": "dGVzdC1maW5nZXJwcmludC1zZWNyZXQtMDAwMDAwMDA="
+      },
+      "expectedCanonicalAuth": "{\"approvedGroundingProjectionSha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"authorizationId\":\"auth-vector-fp\",\"courseId\":\"course:cmvzs3w05000456qcgfgps7gy\",\"expiresAtUtc\":\"2026-11-07T09:00:00.000Z\",\"issuedAtUtc\":\"2026-11-07T08:00:00.000Z\",\"issuedBy\":\"system:training\",\"maxRequestedQuestions\":6,\"operation\":\"GENERATE_DRAFT_QUESTIONS\",\"pilotRestrictions\":{\"automaticRetriesProhibited\":false,\"databaseWritesProhibited\":false,\"employeeAssignmentProhibited\":true,\"excludedSegmentIds\":[16,17],\"publicationProhibited\":true,\"scope\":\"vector-fixture\"},\"resolvedTranscriptBuildId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"schemaVersion\":\"pilot-generation-authorization-v1\",\"sourceVideoSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tenantId\":\"club-silver-springs\",\"versionId\":\"cmvzs3w05000456qcgfgps7gy\"}",
+      "expectedFingerprint": "hdRnuZRA8r9U_pPH2XIcQuEv6bUloQExJ4M5ASm4sw0"
+    }
+  ],
+  "requestSigningVectors": [
+    {
+      "name": "r1-transcribe-request",
+      "description": "TRANSCRIBE request, placeholders present, fingerprint over auth bound-fields",
+      "input": {
+        "body": {
+          "contractVersion": "4yb-v1",
+          "operation": "spectre.training.transcribe.v1",
+          "requestId": "r-vector-1",
+          "timestamp": "1762521600",
+          "pilotAuthorization": {
+            "schemaVersion": "pilot-generation-authorization-v1",
+            "authorizationId": "auth-vector-1",
+            "tenantId": "club-silver-springs",
+            "courseId": "course:cmvzs3w05000456qcgfgps7gy",
+            "versionId": "cmvzs3w05000456qcgfgps7gy",
+            "sourceVideoSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "resolvedTranscriptBuildId": "0000000000000000000000000000000000000000000000000000000000000000",
+            "approvedGroundingProjectionSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "operation": "TRANSCRIBE_VIDEO",
+            "maxRequestedQuestions": 1,
+            "pilotRestrictions": {
+              "publicationProhibited": true,
+              "employeeAssignmentProhibited": true,
+              "databaseWritesProhibited": false,
+              "automaticRetriesProhibited": false,
+              "excludedSegmentIds": [
+                16,
+                17
+              ],
+              "scope": "vector-fixture"
+            },
+            "issuedAtUtc": "2026-11-07T08:00:00.000Z",
+            "expiresAtUtc": "2026-11-07T09:00:00.000Z",
+            "issuedBy": "system:training",
+            "fingerprint": "_b_FUtcQ-QPrTllhxknh5ym0AT-RKved9IVfwDtql-o"
+          },
+          "payload": {
+            "audioUrl": "https://r2.example/v.mp4?sig=xxx",
+            "languageCode": "en",
+            "modelVariant": "faster-whisper-large-v3"
+          }
+        },
+        "operation": "spectre.training.transcribe.v1",
+        "requestId": "r-vector-1",
+        "timestampSec": 1762521600,
+        "hmacKeyB64": "dGVzdC1yZXF1ZXN0LWhtYWMta2V5LTAwMDAwMDAwMDA="
+      },
+      "expectedCanonicalBody": "{\"contractVersion\":\"4yb-v1\",\"operation\":\"spectre.training.transcribe.v1\",\"payload\":{\"audioUrl\":\"https://r2.example/v.mp4?sig=xxx\",\"languageCode\":\"en\",\"modelVariant\":\"faster-whisper-large-v3\"},\"pilotAuthorization\":{\"approvedGroundingProjectionSha256\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"authorizationId\":\"auth-vector-1\",\"courseId\":\"course:cmvzs3w05000456qcgfgps7gy\",\"expiresAtUtc\":\"2026-11-07T09:00:00.000Z\",\"fingerprint\":\"_b_FUtcQ-QPrTllhxknh5ym0AT-RKved9IVfwDtql-o\",\"issuedAtUtc\":\"2026-11-07T08:00:00.000Z\",\"issuedBy\":\"system:training\",\"maxRequestedQuestions\":1,\"operation\":\"TRANSCRIBE_VIDEO\",\"pilotRestrictions\":{\"automaticRetriesProhibited\":false,\"databaseWritesProhibited\":false,\"employeeAssignmentProhibited\":true,\"excludedSegmentIds\":[16,17],\"publicationProhibited\":true,\"scope\":\"vector-fixture\"},\"resolvedTranscriptBuildId\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"schemaVersion\":\"pilot-generation-authorization-v1\",\"sourceVideoSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tenantId\":\"club-silver-springs\",\"versionId\":\"cmvzs3w05000456qcgfgps7gy\"},\"requestId\":\"r-vector-1\",\"timestamp\":\"1762521600\"}",
+      "expectedBodyDigest": "ca1f881ef8793302b5b54523084058cbddeef8d6a796dcd3d15856fd5557f422",
+      "expectedSignedMessage": "v1.spectre.training.transcribe.v1.r-vector-1.1762521600.ca1f881ef8793302b5b54523084058cbddeef8d6a796dcd3d15856fd5557f422",
+      "expectedSignature": "g30SzH_kd84zsrqMNot4c-IwmyknIb1uH2hxJHZ0FzU"
+    },
+    {
+      "name": "r2-generate-request",
+      "description": "GENERATE request, placeholders absent, fingerprint over distinct bound-fields",
+      "input": {
+        "body": {
+          "contractVersion": "4yb-v1",
+          "operation": "spectre.training.generate.v1",
+          "requestId": "r-vector-2",
+          "timestamp": "1762521600",
+          "pilotAuthorization": {
+            "schemaVersion": "pilot-generation-authorization-v1",
+            "authorizationId": "auth-vector-2",
+            "tenantId": "club-silver-springs",
+            "courseId": "course:cmvzs3w05000456qcgfgps7gy",
+            "versionId": "cmvzs3w05000456qcgfgps7gy",
+            "sourceVideoSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "resolvedTranscriptBuildId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "approvedGroundingProjectionSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "operation": "GENERATE_DRAFT_QUESTIONS",
+            "maxRequestedQuestions": 6,
+            "pilotRestrictions": {
+              "publicationProhibited": true,
+              "employeeAssignmentProhibited": true,
+              "databaseWritesProhibited": false,
+              "automaticRetriesProhibited": false,
+              "excludedSegmentIds": [
+                16,
+                17
+              ],
+              "scope": "vector-fixture"
+            },
+            "issuedAtUtc": "2026-11-07T08:00:00.000Z",
+            "expiresAtUtc": "2026-11-07T09:00:00.000Z",
+            "issuedBy": "system:training",
+            "fingerprint": "_DAdts7W10flZtEUD1ypWB0x0U-8S4116J59xQURdZg"
+          },
+          "payload": {
+            "modelVariant": "qwen-2.5-7b-instruct-awq",
+            "systemPrompt": "Generate 5 questions.",
+            "transcript": "[0] welcome\n[1] rules",
+            "constraints": {
+              "proposalKind": "QUESTION_CHECKPOINT_BOUND",
+              "maxQuestions": 5,
+              "allowedQuestionTypes": [
+                "SINGLE_CHOICE",
+                "TRUE_FALSE"
+              ],
+              "jsonSchema": {}
+            }
+          }
+        },
+        "operation": "spectre.training.generate.v1",
+        "requestId": "r-vector-2",
+        "timestampSec": 1762521600,
+        "hmacKeyB64": "dGVzdC1yZXF1ZXN0LWhtYWMta2V5LTAwMDAwMDAwMDA="
+      },
+      "expectedCanonicalBody": "{\"contractVersion\":\"4yb-v1\",\"operation\":\"spectre.training.generate.v1\",\"payload\":{\"constraints\":{\"allowedQuestionTypes\":[\"SINGLE_CHOICE\",\"TRUE_FALSE\"],\"jsonSchema\":{},\"maxQuestions\":5,\"proposalKind\":\"QUESTION_CHECKPOINT_BOUND\"},\"modelVariant\":\"qwen-2.5-7b-instruct-awq\",\"systemPrompt\":\"Generate 5 questions.\",\"transcript\":\"[0] welcome\\n[1] rules\"},\"pilotAuthorization\":{\"approvedGroundingProjectionSha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"authorizationId\":\"auth-vector-2\",\"courseId\":\"course:cmvzs3w05000456qcgfgps7gy\",\"expiresAtUtc\":\"2026-11-07T09:00:00.000Z\",\"fingerprint\":\"_DAdts7W10flZtEUD1ypWB0x0U-8S4116J59xQURdZg\",\"issuedAtUtc\":\"2026-11-07T08:00:00.000Z\",\"issuedBy\":\"system:training\",\"maxRequestedQuestions\":6,\"operation\":\"GENERATE_DRAFT_QUESTIONS\",\"pilotRestrictions\":{\"automaticRetriesProhibited\":false,\"databaseWritesProhibited\":false,\"employeeAssignmentProhibited\":true,\"excludedSegmentIds\":[16,17],\"publicationProhibited\":true,\"scope\":\"vector-fixture\"},\"resolvedTranscriptBuildId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"schemaVersion\":\"pilot-generation-authorization-v1\",\"sourceVideoSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tenantId\":\"club-silver-springs\",\"versionId\":\"cmvzs3w05000456qcgfgps7gy\"},\"requestId\":\"r-vector-2\",\"timestamp\":\"1762521600\"}",
+      "expectedBodyDigest": "2438ff2eb7ff461a9c7f24e07cb1d43e5a6f34e354515055a44ad79bae6c2421",
+      "expectedSignedMessage": "v1.spectre.training.generate.v1.r-vector-2.1762521600.2438ff2eb7ff461a9c7f24e07cb1d43e5a6f34e354515055a44ad79bae6c2421",
+      "expectedSignature": "GzRM4Nvvuppu3f6rLjBV0oMppzwud3TU0BdCxZWzZBQ"
+    }
+  ],
+  "responseSigningVectors": [
+    {
+      "name": "resp1-generate-200",
+      "description": "response signed message binds contractVersion, operation, requestId, httpStatus, canonical body digest",
+      "input": {
+        "responseBody": {
+          "contractVersion": "4yb-v1",
+          "operation": "spectre.training.generate.v1",
+          "requestId": "r-vector-2",
+          "modelVariant": "qwen-2.5-7b-instruct-awq",
+          "proposals": [
+            {
+              "questionType": "SINGLE_CHOICE",
+              "questionText": "What does the brand standard require?",
+              "options": [
+                {
+                  "text": "A",
+                  "isCorrect": true
+                },
+                {
+                  "text": "B",
+                  "isCorrect": false
+                }
+              ],
+              "explanation": "See segment 2.",
+              "sourceSegmentIds": [
+                2
+              ]
+            }
+          ],
+          "elapsedMs": {
+            "coldBoot": 500,
+            "generate": 1200
+          },
+          "tokenCounts": {
+            "prompt": 800,
+            "output": 300
+          }
+        },
+        "operation": "spectre.training.generate.v1",
+        "requestId": "r-vector-2",
+        "httpStatus": 200,
+        "responseHmacKeyB64": "dGVzdC1yZXNwb25zZS1obWFjLWtleS0wMDAwMDAwMDA="
+      },
+      "expectedCanonicalResponseBody": "{\"contractVersion\":\"4yb-v1\",\"elapsedMs\":{\"coldBoot\":500,\"generate\":1200},\"modelVariant\":\"qwen-2.5-7b-instruct-awq\",\"operation\":\"spectre.training.generate.v1\",\"proposals\":[{\"explanation\":\"See segment 2.\",\"options\":[{\"isCorrect\":true,\"text\":\"A\"},{\"isCorrect\":false,\"text\":\"B\"}],\"questionText\":\"What does the brand standard require?\",\"questionType\":\"SINGLE_CHOICE\",\"sourceSegmentIds\":[2]}],\"requestId\":\"r-vector-2\",\"tokenCounts\":{\"output\":300,\"prompt\":800}}",
+      "expectedResponseBodyDigest": "b3d5ac85743ad7469aa907124297aaac638454236d048e2c3e312b958334fa4a",
+      "expectedResponseSignedMessage": "response-sig-v1.4yb-v1.spectre.training.generate.v1.r-vector-2.200.b3d5ac85743ad7469aa907124297aaac638454236d048e2c3e312b958334fa4a",
+      "expectedResponseSignature": "45U_FMHnRVUsyhnL1T7B9bRZsn2LaArFz2p3Rw1LKks"
+    }
+  ],
+  "timestampBoundaryVectors": [
+    {
+      "name": "ts1-at-boundary-plus-300",
+      "signedTimestampSec": 1762521600,
+      "verifierNowSec": 1762521900,
+      "expectedValid": true
+    },
+    {
+      "name": "ts2-just-outside-plus-301",
+      "signedTimestampSec": 1762521600,
+      "verifierNowSec": 1762521901,
+      "expectedValid": false
+    },
+    {
+      "name": "ts3-at-boundary-minus-300",
+      "signedTimestampSec": 1762521600,
+      "verifierNowSec": 1762521300,
+      "expectedValid": true
+    },
+    {
+      "name": "ts4-just-outside-minus-301",
+      "signedTimestampSec": 1762521600,
+      "verifierNowSec": 1762521299,
+      "expectedValid": false
+    }
+  ],
+  "tamperVectors": [
+    {
+      "name": "t1-tampered-body-digest-mismatches",
+      "description": "if body is mutated post-signing, its sha256 differs from x-spectre-body-digest",
+      "originalBody": {
+        "a": 1,
+        "b": 2
+      },
+      "mutatedBody": {
+        "a": 1,
+        "b": 3
+      },
+      "originalDigest": "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+      "mutatedDigest": "f9c6777fb86597920de313c707c2c0aa7b059e208a66e1f56f7a2b548e11453d",
+      "expectedDiffer": true
+    },
+    {
+      "name": "t2-nan-is-rejected",
+      "description": "NaN / Infinity must be rejected by canonicalise (TS TypeError, Python ValueError)",
+      "shouldThrow": true,
+      "forbiddenInput": "NaN"
+    }
+  ],
+  "syntheticKeys": {
+    "hmacKeyB64": "dGVzdC1yZXF1ZXN0LWhtYWMta2V5LTAwMDAwMDAwMDA=",
+    "responseHmacKeyB64": "dGVzdC1yZXNwb25zZS1obWFjLWtleS0wMDAwMDAwMDA=",
+    "fingerprintSecretB64": "dGVzdC1maW5nZXJwcmludC1zZWNyZXQtMDAwMDAwMDA="
+  }
+}
