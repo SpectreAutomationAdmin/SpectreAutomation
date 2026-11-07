@@ -123,11 +123,28 @@ export interface RequestTranscriptionResult {
  * whether they exist.
  */
 export function modalCredentialsPresent(opts: { env?: NodeJS.ProcessEnv } = {}): boolean {
+  // EP-TRAIN-4Y-G §5 — web-side precheck signals.
+  //
+  // The web app (spectre-staging) DOES NOT carry inference credentials
+  // per the §7 least-privilege rule; those live only on the worker.
+  // So the web-side fast-fail cannot read MODAL_SPECTRE_HMAC_KEY /
+  // SPECTRE_PILOT_AUTH_FINGERPRINT_SECRET directly.
+  //
+  // Instead, the web honours a non-sensitive boolean MODAL_HYBRID_ENABLED=1
+  // that the operator sets on the web app at the same time as they
+  // provision the 7 secrets on the worker. Legacy fallback
+  // (MODAL_SPECTRE_SHARED_TOKEN) is preserved so pre-Hybrid test envs
+  // still pass the precheck.
   const env = opts.env ?? process.env;
-  return typeof env.MODAL_TRANSCRIBE_URL === "string" &&
+  const hybridEnabled =
+    typeof env.MODAL_HYBRID_ENABLED === "string" &&
+    env.MODAL_HYBRID_ENABLED === "1";
+  const legacyShared =
+    typeof env.MODAL_TRANSCRIBE_URL === "string" &&
     env.MODAL_TRANSCRIBE_URL.length > 0 &&
     typeof env.MODAL_SPECTRE_SHARED_TOKEN === "string" &&
     env.MODAL_SPECTRE_SHARED_TOKEN.length > 0;
+  return hybridEnabled || legacyShared;
 }
 
 export const DEFAULT_DAILY_USD_MICROS = 10 * 1_000_000; // $10 × 1e6

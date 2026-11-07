@@ -111,11 +111,20 @@ export class GenerationRejectedError extends AppError {
 // ─── Credentials + cost governance ──────────────────────────────────
 
 export function modalGenerateCredentialsPresent(opts: { env?: NodeJS.ProcessEnv } = {}): boolean {
+  // EP-TRAIN-4Y-G §5 — symmetric to modalCredentialsPresent() in
+  // transcription/job-service.ts. Web-side precheck uses the
+  // MODAL_HYBRID_ENABLED=1 non-sensitive signal; legacy fallback
+  // preserved for backwards compat in older test envs.
   const env = opts.env ?? process.env;
-  return typeof env.MODAL_GENERATE_URL === "string" &&
+  const hybridEnabled =
+    typeof env.MODAL_HYBRID_ENABLED === "string" &&
+    env.MODAL_HYBRID_ENABLED === "1";
+  const legacyShared =
+    typeof env.MODAL_GENERATE_URL === "string" &&
     env.MODAL_GENERATE_URL.length > 0 &&
     typeof env.MODAL_SPECTRE_SHARED_TOKEN === "string" &&
     env.MODAL_SPECTRE_SHARED_TOKEN.length > 0;
+  return hybridEnabled || legacyShared;
 }
 
 export const DEFAULT_DAILY_USD_MICROS = 10 * 1_000_000; // $10 × 1e6

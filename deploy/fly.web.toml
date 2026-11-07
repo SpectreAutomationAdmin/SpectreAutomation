@@ -73,6 +73,13 @@ kill_timeout = 30
   MICROSOFT_GRAPH_AUTHORITY_AUDIENCE = "organizations"
   APP_URL = "https://staging.spectreautomation.com"
   NEXT_PUBLIC_APP_URL = "https://staging.spectreautomation.com"
+  # EP-TRAIN-4Y-G §5 — Hybrid Modal contract enabled signal (non-secret
+  # boolean). Read by modalCredentialsPresent() /
+  # modalGenerateCredentialsPresent() on the web admin routes to
+  # fast-fail BEFORE enqueuing when the worker isn't configured.
+  # Inference credentials themselves live only on
+  # spectre-staging-worker per §7 least privilege.
+  MODAL_HYBRID_ENABLED = "1"
   MAILBOX_MAX_ATTACHMENT_MB = "25"
   # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. The
   # account-scoped values (KMS key ARN, R2 endpoint, R2 bucket) and
