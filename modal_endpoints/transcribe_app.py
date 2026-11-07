@@ -181,17 +181,23 @@ def api():
     container — UNLESS SPECTRE_GATE_1_NO_INFERENCE=1, in which case
     the helper's inference callable raises a signed ContractError
     before .remote() fires."""
-    from fastapi import FastAPI, Request, Response
+    # Use Starlette primitives directly. FastAPI 0.162+ with
+    # Starlette 1.10+ incorrectly treated a `Request`-typed param as
+    # a query parameter, returning HTTP 422 "Field required" before
+    # the handler body ever ran. A plain Starlette app sidesteps that
+    # parameter-introspection path entirely.
+    from starlette.applications import Starlette
+    from starlette.requests import Request as _Request
+    from starlette.responses import Response
+    from starlette.routing import Route
 
     from .shared.errors import ContractError, FailureCode
 
-    web = FastAPI()
     transcriber = Transcriber()  # type: ignore[call-arg]
 
-    @web.post("/")
-    async def transcribe_endpoint(req: Request) -> Response:
-        body_text = (await req.body()).decode("utf-8")
-        headers = {k.lower(): v for k, v in req.headers.items()}
+    async def transcribe_endpoint(request: _Request) -> Response:
+        body_text = (await request.body()).decode("utf-8")
+        headers = {k.lower(): v for k, v in request.headers.items()}
 
         duration_holder: dict[str, int] = {"value": 0}
 
@@ -235,6 +241,7 @@ def api():
             headers=resp_hdrs,
         )
 
+    web = Starlette(routes=[Route("/", transcribe_endpoint, methods=["POST"])])
     return web
 
 

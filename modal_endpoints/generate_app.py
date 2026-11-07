@@ -41,7 +41,9 @@ image = (
     )
     .apt_install("git")
     .pip_install(
-        "torch==2.4.1",
+        # torch 2.3.1 matches autoawq 0.2.6's hard dependency pin.
+        # Attempting 2.4.x breaks dependency resolution.
+        "torch==2.3.1",
         "transformers>=4.45,<4.50",
         "autoawq==0.2.6",
         "accelerate>=0.33",
@@ -235,17 +237,20 @@ def api():
     and NEVER reach the GPU container. SPECTRE_GATE_1_NO_INFERENCE=1
     causes `_run_qwen` to raise ContractError(REQUEST_BODY_INVALID,
     http_status=503) at the CPU boundary — zero GPU time."""
-    from fastapi import FastAPI, Request, Response
+    # Starlette primitives — see transcribe_app.py for the FastAPI
+    # 0.162+ parameter-introspection bug this sidesteps.
+    from starlette.applications import Starlette
+    from starlette.requests import Request as _Request
+    from starlette.responses import Response
+    from starlette.routing import Route
 
     from .shared.errors import ContractError, FailureCode
 
-    web = FastAPI()
     qwen = Qwen()  # type: ignore[call-arg]
 
-    @web.post("/")
-    async def generate_endpoint(req: Request) -> Response:
-        body_text = (await req.body()).decode("utf-8")
-        headers = {k.lower(): v for k, v in req.headers.items()}
+    async def generate_endpoint(request: _Request) -> Response:
+        body_text = (await request.body()).decode("utf-8")
+        headers = {k.lower(): v for k, v in request.headers.items()}
 
         def _run_qwen(system_prompt: str, transcript: str, constraints: dict):
             # §3 CPU-BOUNDARY GATE — checked BEFORE any .remote() call.
@@ -283,6 +288,7 @@ def api():
             headers=resp_hdrs,
         )
 
+    web = Starlette(routes=[Route("/", generate_endpoint, methods=["POST"])])
     return web
 
 
