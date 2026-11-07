@@ -1,142 +1,204 @@
-// EP-TRAIN-6D-4W (2026-11-06) — Modal /generate HTTPS client (Qwen 2.5
-// 7B Instruct AWQ with LM Format Enforcer).
-//
-// Mirrors the 4V transcription client's security envelope:
-//   - Bearer token auth via MODAL_SPECTRE_SHARED_TOKEN.
-//   - HMAC-SHA-256 response verification.
-//   - Bounded wall-clock via AbortController.
-//   - Classified error codes.
-//   - No Modal network call in offline tests (fetch is injected).
+// EP-TRAIN-4Y-B-IMPL (2026-11-07) — Hybrid-contract Modal Qwen
+// generate endpoint HTTP client. Supersedes the 4W Bearer-only
+// client. Security envelope is symmetric to transcription; see the
+// transcription client header comment for details.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  canonicalise,
+  resolveModalCredentials,
+  signRequest,
+  verifyResponseSignature,
+  CONTRACT_VERSION,
+  OPERATION_GENERATE,
+  SYSTEM_CLOCK,
+  ModalContractError,
+  type Clock,
+  type GeneratePayload,
+  type GenerateResponseBody,
+  type ModalRequestBody,
+  type PilotAuthorizationV1,
+} from "../modal-shared";
 
 export const PROPOSAL_SCHEMA_VERSION = "training-proposals-v1" as const;
 
-export interface ModalGenerateConstraints {
-  readonly proposalKind: "QUESTION_CHECKPOINT_BOUND" | "QUESTION_FINAL_ASSESSMENT";
-  readonly maxQuestions: number;
-  readonly allowedQuestionTypes: readonly ("SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE")[];
-  readonly jsonSchema: Record<string, unknown>;
-}
-
-export interface ModalGenerateRequest {
+export interface ModalGenerateInput {
   readonly requestId: string;
+  readonly pilotAuthorization: PilotAuthorizationV1;
   readonly modelVariant: string;
-  readonly promptSchemaVersion: typeof PROPOSAL_SCHEMA_VERSION;
   readonly systemPrompt: string;
   readonly transcript: string;
-  readonly constraints: ModalGenerateConstraints;
-}
-
-export interface ModalGenerateOption {
-  readonly text: string;
-  readonly isCorrect: boolean;
-}
-
-export interface ModalGenerateProposal {
-  readonly questionType: "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE";
-  readonly questionText: string;
-  readonly options: readonly ModalGenerateOption[];
-  readonly explanation: string;
-  readonly sourceSegmentIds: readonly number[];
-}
-
-export interface ModalGenerateResponse {
-  readonly schemaVersion: typeof PROPOSAL_SCHEMA_VERSION;
-  readonly modelVariant: string;
-  readonly proposals: readonly ModalGenerateProposal[];
-  readonly elapsedMs: { readonly coldBoot: number; readonly generate: number };
-  readonly tokenCounts: { readonly prompt: number; readonly output: number };
-}
-
-export class ModalGenerateClientError extends Error {
-  readonly code:
-    | "MODAL_HTTP_ERROR"
-    | "MODAL_TIMEOUT"
-    | "MODAL_HMAC_INVALID"
-    | "MODAL_BODY_INVALID"
-    | "CREDENTIAL_ABSENT";
-  constructor(code: ModalGenerateClientError["code"], message: string) {
-    super(message);
-    this.code = code;
-  }
+  readonly constraints: GeneratePayload["constraints"];
 }
 
 export interface ModalGenerateClientOptions {
   readonly fetchImpl?: typeof fetch;
   readonly env?: NodeJS.ProcessEnv;
+  readonly clock?: Clock;
   readonly timeoutMs?: number;
 }
 
 export async function callModalGenerate(
-  request: ModalGenerateRequest,
+  input: ModalGenerateInput,
   opts: ModalGenerateClientOptions = {},
-): Promise<ModalGenerateResponse> {
-  const env = opts.env ?? process.env;
+): Promise<GenerateResponseBody> {
+  const clock = opts.clock ?? SYSTEM_CLOCK;
   const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as typeof fetch);
-  const url = env.MODAL_GENERATE_URL;
-  const token = env.MODAL_SPECTRE_SHARED_TOKEN;
+  const creds = resolveModalCredentials(OPERATION_GENERATE, opts.env ?? process.env);
 
-  if (!url || !token) {
-    throw new ModalGenerateClientError("CREDENTIAL_ABSENT", "Modal generate credentials not configured.");
-  }
+  const timestamp = String(Math.floor(clock.nowMs() / 1000));
+  const payload: GeneratePayload = {
+    modelVariant: input.modelVariant,
+    systemPrompt: input.systemPrompt,
+    transcript: input.transcript,
+    constraints: input.constraints,
+  };
+  const body: ModalRequestBody<GeneratePayload> = {
+    contractVersion: CONTRACT_VERSION,
+    operation: OPERATION_GENERATE,
+    requestId: input.requestId,
+    timestamp,
+    pilotAuthorization: input.pilotAuthorization,
+    payload,
+  };
+
+  const signed = signRequest({
+    operation: OPERATION_GENERATE,
+    requestId: input.requestId,
+    hmacKey: creds.requestHmacKey,
+    body,
+    clock,
+    timestampOverrideSec: Number.parseInt(timestamp, 10),
+  });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10 * 60 * 1000);
 
   let res: Response;
   try {
-    res = await fetchImpl(url, {
+    res = await fetchImpl(creds.endpointUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(request),
+      headers: {
+        "Content-Type": "application/json",
+        "Modal-Key": creds.proxyKey,
+        "Modal-Secret": creds.proxySecret,
+        ...signed.headers,
+      },
+      body: signed.bodyText,
       signal: controller.signal,
     });
   } catch (err) {
     clearTimeout(timer);
     if ((err as Error)?.name === "AbortError") {
-      throw new ModalGenerateClientError("MODAL_TIMEOUT", "Modal request timed out.");
+      throw new ModalContractError("MODAL_TIMEOUT", "Modal generate request timed out.");
     }
-    throw new ModalGenerateClientError("MODAL_HTTP_ERROR", `Modal request failed: ${(err as Error)?.message ?? String(err)}`);
+    throw new ModalContractError(
+      "MODAL_HTTP_ERROR",
+      `Modal generate request failed: ${(err as Error)?.message ?? String(err)}`,
+    );
   }
   clearTimeout(timer);
 
+  const respText = await res.text();
+
   if (!res.ok) {
-    throw new ModalGenerateClientError("MODAL_HTTP_ERROR", `Modal returned HTTP ${res.status}.`);
+    const serverCode = res.headers.get("x-spectre-failure-code") ?? undefined;
+    throw new ModalContractError(
+      coerceServerCode(serverCode) ?? "MODAL_HTTP_ERROR",
+      `Modal returned HTTP ${res.status}${serverCode ? ` (${serverCode})` : ""}.`,
+      { httpStatus: res.status },
+    );
   }
 
-  const bodyText = await res.text();
-  const signatureHeader = res.headers.get("x-spectre-signature");
-  if (!signatureHeader) {
-    throw new ModalGenerateClientError("MODAL_HMAC_INVALID", "Missing HMAC header.");
-  }
-  const expected = createHmac("sha256", token).update(bodyText, "utf-8").digest();
-  let supplied: Buffer;
-  try {
-    supplied = Buffer.from(signatureHeader, "base64");
-  } catch {
-    throw new ModalGenerateClientError("MODAL_HMAC_INVALID", "HMAC not valid base64.");
-  }
-  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    throw new ModalGenerateClientError("MODAL_HMAC_INVALID", "HMAC did not verify.");
-  }
+  const headerMap: Record<string, string> = {};
+  res.headers.forEach((v, k) => {
+    headerMap[k.toLowerCase()] = v;
+  });
+  const parsed = verifyResponseSignature({
+    headers: headerMap,
+    bodyText: respText,
+    expectedOperation: OPERATION_GENERATE,
+    expectedRequestId: input.requestId,
+    httpStatus: res.status,
+    responseHmacKey: creds.responseHmacKey,
+  });
 
-  let body: ModalGenerateResponse;
-  try {
-    body = JSON.parse(bodyText) as ModalGenerateResponse;
-  } catch {
-    throw new ModalGenerateClientError("MODAL_BODY_INVALID", "Response body is not valid JSON.");
+  return asGenerateBody(parsed, input.requestId);
+}
+
+function coerceServerCode(code: string | undefined): import("../modal-shared").ModalContractFailureCode | null {
+  if (!code) return null;
+  const KNOWN = new Set([
+    "REQUEST_HMAC_INVALID",
+    "REQUEST_BODY_INVALID",
+    "TIMESTAMP_SKEW_EXCEEDED",
+    "UNKNOWN_OPERATION",
+    "OPERATION_MISMATCH",
+    "CONTRACT_VERSION_MISMATCH",
+    "ASCII_SCOPE_REQUIRED",
+    "PILOT_AUTH_FINGERPRINT_MISMATCH",
+    "PILOT_AUTH_EXPIRED",
+    "PILOT_AUTH_OPERATION_MISMATCH",
+    "PILOT_AUTH_SCHEMA_MISMATCH",
+    "TENANT_MISMATCH",
+    "COURSE_VERSION_MISMATCH",
+    "VIDEO_SHA_MISMATCH_AT_BOUNDARY",
+    "REPLAY_DETECTED",
+    "REPLAY_STORE_UNAVAILABLE",
+  ]);
+  return KNOWN.has(code) ? (code as import("../modal-shared").ModalContractFailureCode) : null;
+}
+
+function asGenerateBody(
+  value: Readonly<Record<string, unknown>>,
+  expectedRequestId: string,
+): GenerateResponseBody {
+  if (value.contractVersion !== CONTRACT_VERSION) {
+    throw new ModalContractError(
+      "CONTRACT_VERSION_MISMATCH",
+      `Response contractVersion is ${String(value.contractVersion)}.`,
+    );
   }
-  if (body.schemaVersion !== PROPOSAL_SCHEMA_VERSION) {
-    throw new ModalGenerateClientError("MODAL_BODY_INVALID", `Unexpected schemaVersion: ${body.schemaVersion}`);
+  if (value.operation !== OPERATION_GENERATE) {
+    throw new ModalContractError(
+      "RESPONSE_OPERATION_MISMATCH",
+      `Response body operation is ${String(value.operation)}.`,
+    );
   }
-  if (!Array.isArray(body.proposals)) {
-    throw new ModalGenerateClientError("MODAL_BODY_INVALID", "proposals is not an array.");
+  if (value.requestId !== expectedRequestId) {
+    throw new ModalContractError(
+      "RESPONSE_REQUEST_ID_MISMATCH",
+      "Response body requestId does not match request.",
+    );
   }
-  for (const p of body.proposals) {
-    if (!p || typeof p.questionText !== "string" || !Array.isArray(p.options) || !Array.isArray(p.sourceSegmentIds)) {
-      throw new ModalGenerateClientError("MODAL_BODY_INVALID", "proposal shape invalid.");
+  if (!Array.isArray(value.proposals)) {
+    throw new ModalContractError("MODAL_BODY_INVALID", "proposals is not an array.");
+  }
+  for (const p of value.proposals as readonly unknown[]) {
+    if (!p || typeof p !== "object") {
+      throw new ModalContractError("MODAL_BODY_INVALID", "proposal shape invalid.");
+    }
+    const pp = p as Record<string, unknown>;
+    if (
+      typeof pp.questionText !== "string" ||
+      !Array.isArray(pp.options) ||
+      !Array.isArray(pp.sourceSegmentIds)
+    ) {
+      throw new ModalContractError("MODAL_BODY_INVALID", "proposal field shape invalid.");
     }
   }
-  return body;
+  const elapsed = value.elapsedMs as Record<string, unknown> | undefined;
+  if (!elapsed || typeof elapsed.coldBoot !== "number" || typeof elapsed.generate !== "number") {
+    throw new ModalContractError("MODAL_BODY_INVALID", "elapsedMs shape invalid.");
+  }
+  const tokens = value.tokenCounts as Record<string, unknown> | undefined;
+  if (!tokens || typeof tokens.prompt !== "number" || typeof tokens.output !== "number") {
+    throw new ModalContractError("MODAL_BODY_INVALID", "tokenCounts shape invalid.");
+  }
+  return value as unknown as GenerateResponseBody;
 }
+
+// Legacy-name re-exports for callers mid-migration.
+export type { GenerateResponseBody as ModalGenerateResponse };
+export type ModalGenerateProposal = GenerateResponseBody["proposals"][number];
+export { ModalContractError as ModalGenerateClientError } from "../modal-shared";
+export { canonicalise };

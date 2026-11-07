@@ -55,7 +55,29 @@ export type JobFailureCode =
   | "INGEST_FAILED"
   | "CREDENTIAL_ABSENT"
   | "COST_CAP_EXCEEDED"
-  | "INTEGRITY_FAILURE";
+  | "INTEGRITY_FAILURE"
+  // EP-TRAIN-4Y-B-IMPL widening — Hybrid contract failure codes.
+  // The DB `failureCode` column is a String?, so adding values is
+  // a pure type widening, not a schema change.
+  | "REQUEST_HMAC_INVALID"
+  | "REQUEST_BODY_INVALID"
+  | "TIMESTAMP_SKEW_EXCEEDED"
+  | "UNKNOWN_OPERATION"
+  | "OPERATION_MISMATCH"
+  | "CONTRACT_VERSION_MISMATCH"
+  | "ASCII_SCOPE_REQUIRED"
+  | "PILOT_AUTH_FINGERPRINT_MISMATCH"
+  | "PILOT_AUTH_EXPIRED"
+  | "PILOT_AUTH_OPERATION_MISMATCH"
+  | "PILOT_AUTH_SCHEMA_MISMATCH"
+  | "TENANT_MISMATCH"
+  | "COURSE_VERSION_MISMATCH"
+  | "VIDEO_SHA_MISMATCH_AT_BOUNDARY"
+  | "REPLAY_DETECTED"
+  | "REPLAY_STORE_UNAVAILABLE"
+  | "MODAL_BODY_INVALID"
+  | "RESPONSE_REQUEST_ID_MISMATCH"
+  | "RESPONSE_OPERATION_MISMATCH";
 
 export type RequestRejectionCode =
   | "VERSION_NOT_FOUND"                       // 404 same-shape

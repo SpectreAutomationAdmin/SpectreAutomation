@@ -1,9 +1,18 @@
 // EP-TRAIN-6D-4V (2026-11-06) — TRAINING_TRANSCRIBE_VIDEO worker handler.
+// EP-TRAIN-4Y-B-IMPL (2026-11-07) — Hybrid-contract auth update.
 //
 // This is the ONLY code path that calls the Modal provider. It runs
 // in the Fly worker process (bin/worker.ts), claims the queued job's
 // lease, performs the Modal call, verifies the response, invokes 4L
 // ingest, and records COMPLETED or FAILED.
+//
+// Hybrid auth (§D.1): the handler issues a fresh `PilotAuthorizationV1`
+// per invocation. Queue-level retries re-enter this handler and emit a
+// new auth each time (§Q.4 "fresh authorization on retry"). The
+// TRANSCRIBE operation uses placeholder sentinels for
+// `resolvedTranscriptBuildId` and `approvedGroundingProjectionSha256`
+// because those artefacts do not exist yet — Modal-side TRANSCRIBE
+// verifier requires exactly those placeholder values.
 //
 // Cancellation safety (requirement 7): every state mutation goes
 // through the job-service, which refuses writes on
@@ -15,7 +24,9 @@
 //
 // Credential absence (requirement 4 + §6): the modal-client raises
 // CREDENTIAL_ABSENT before any I/O happens; the handler maps it to
-// recordJobFailed(code=CREDENTIAL_ABSENT, retryable=false).
+// recordJobFailed(code=CREDENTIAL_ABSENT, retryable=false). Missing
+// fingerprint-secret also surfaces as CREDENTIAL_ABSENT before any
+// Modal call (via `issuePilotAuthorization` wrapper here).
 
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
@@ -36,7 +47,14 @@ import {
   persistTranscriptBuild,
   persistTranscriptSegments,
 } from "./ingest";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  issuePilotAuthorization,
+  ModalContractError,
+  TRANSCRIBE_PLACEHOLDER_TRANSCRIPT_BUILD_ID,
+  TRANSCRIBE_PLACEHOLDER_GROUNDING_SHA,
+  ENV_FINGERPRINT_SECRET,
+} from "../modal-shared";
 
 /**
  * Build a worker-system Principal scoped to a single club. NOT a DB
@@ -137,17 +155,77 @@ export async function handleTranscribeJob(
     return { status: "FAILED" };
   }
 
+  // §D.1 + §Q.4: issue a FRESH PilotAuthorizationV1 per attempt.
+  // The authorizationId / issuedAtUtc / expiresAtUtc / fingerprint
+  // all change. TRANSCRIBE placeholders stand in for the
+  // transcript-build + grounding-projection fields that do not yet
+  // exist. The request-id is derived from the jobId + a random
+  // nonce so a retry of the same jobId emits a DIFFERENT request-id
+  // and the Modal replay store does not reject it as a duplicate.
+  const env = deps.env ?? process.env;
+  const fingerprintSecret = env[ENV_FINGERPRINT_SECRET];
+  if (!fingerprintSecret) {
+    await recordJobFailed({
+      jobId: claim.jobId,
+      leaseToken: claim.leaseToken,
+      failureCode: "CREDENTIAL_ABSENT",
+      failureMessage: `Modal credentials not configured: ${ENV_FINGERPRINT_SECRET}.`,
+      retryable: false,
+    });
+    return { status: "FAILED" };
+  }
+
+  let pilotAuth;
+  try {
+    pilotAuth = issuePilotAuthorization({
+      tenantId: claim.clubId,
+      courseId: `course:${claim.courseVersionId}`,
+      versionId: claim.courseVersionId,
+      sourceVideoSha256: claim.sourceVideoSha256,
+      resolvedTranscriptBuildId: TRANSCRIBE_PLACEHOLDER_TRANSCRIPT_BUILD_ID,
+      approvedGroundingProjectionSha256: TRANSCRIBE_PLACEHOLDER_GROUNDING_SHA,
+      operation: "TRANSCRIBE_VIDEO",
+      maxRequestedQuestions: 1,
+      pilotRestrictions: {
+        publicationProhibited: true,
+        employeeAssignmentProhibited: true,
+        databaseWritesProhibited: false,
+        automaticRetriesProhibited: false,
+        excludedSegmentIds: [],
+        scope: `transcribe:${claim.jobId}`,
+      },
+      ttlSec: 3600,
+      issuedBy: `system:training-transcription:${claim.clubId}`,
+      fingerprintSecret,
+    });
+  } catch (err) {
+    const code: JobFailureCode =
+      err instanceof ModalContractError ? (err.code as JobFailureCode) : "INTEGRITY_FAILURE";
+    await recordJobFailed({
+      jobId: claim.jobId,
+      leaseToken: claim.leaseToken,
+      failureCode: code,
+      failureMessage: `PilotAuthorization issuance failed: ${(err as Error)?.message ?? String(err)}`,
+      retryable: false,
+    });
+    return { status: "FAILED" };
+  }
+
+  // Fresh request-id per attempt (32 hex chars). Correlation with
+  // the jobId is via the audit log's `meta.jobId`.
+  const requestId = `t-${claim.jobId}-${randomBytes(16).toString("hex")}`;
+
   // Call Modal.
   const now = new Date();
   let modalResponse;
   try {
     modalResponse = await callModalTranscribe(
       {
-        requestId: claim.jobId,
+        requestId,
         audioUrl,
         languageCode: "en",
         modelVariant: "faster-whisper-large-v3",
-        schemaVersion: "transcribe-v1",
+        pilotAuthorization: pilotAuth,
       },
       {
         fetchImpl: deps.fetchImpl,
@@ -155,17 +233,38 @@ export async function handleTranscribeJob(
       },
     );
   } catch (err) {
-    const code: JobFailureCode =
-      err instanceof ModalClientError && err.code !== "MODAL_BODY_INVALID"
-        ? (err.code as JobFailureCode)
-        : "MODAL_HTTP_ERROR";
+    const contractCode =
+      err instanceof ModalClientError ? (err as ModalContractError).code : null;
+    const code: JobFailureCode = (contractCode as JobFailureCode | null) ?? "MODAL_HTTP_ERROR";
+    // Retry policy for Hybrid contract: integrity-level failures
+    // are terminal; transport-level failures are retryable within
+    // the attempt budget.
+    const NON_RETRYABLE: ReadonlySet<string> = new Set([
+      "CREDENTIAL_ABSENT",
+      "MODAL_HMAC_INVALID",
+      "REQUEST_HMAC_INVALID",
+      "REQUEST_BODY_INVALID",
+      "MODAL_BODY_INVALID",
+      "PILOT_AUTH_FINGERPRINT_MISMATCH",
+      "PILOT_AUTH_SCHEMA_MISMATCH",
+      "PILOT_AUTH_OPERATION_MISMATCH",
+      "TENANT_MISMATCH",
+      "COURSE_VERSION_MISMATCH",
+      "VIDEO_SHA_MISMATCH_AT_BOUNDARY",
+      "OPERATION_MISMATCH",
+      "UNKNOWN_OPERATION",
+      "CONTRACT_VERSION_MISMATCH",
+      "ASCII_SCOPE_REQUIRED",
+      "RESPONSE_REQUEST_ID_MISMATCH",
+      "RESPONSE_OPERATION_MISMATCH",
+    ]);
+    const retryable = !NON_RETRYABLE.has(code);
     await recordJobFailed({
       jobId: claim.jobId,
       leaseToken: claim.leaseToken,
       failureCode: code,
       failureMessage: (err as Error)?.message ?? String(err),
-      // CREDENTIAL_ABSENT + HMAC are not retryable; others are.
-      retryable: code !== "CREDENTIAL_ABSENT" && code !== "MODAL_HMAC_INVALID",
+      retryable,
     });
     return { status: "FAILED" };
   }

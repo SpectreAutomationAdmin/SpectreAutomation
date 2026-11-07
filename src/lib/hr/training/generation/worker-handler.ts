@@ -16,6 +16,7 @@
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { PrismaClient } from "@prisma/client";
 import { logger } from "@/lib/observability/logger";
+import { randomBytes } from "node:crypto";
 import {
   claimNextGenerationRun,
   recordGenerationCompleted,
@@ -41,6 +42,11 @@ import {
   type QuestionCandidate,
 } from "./dedup";
 import { canonicalise, sha256Hex } from "../ai-review/content-hash";
+import {
+  issuePilotAuthorization,
+  ModalContractError,
+  ENV_FINGERPRINT_SECRET,
+} from "../modal-shared";
 
 export interface HandlerDeps {
   readonly fetchImpl?: typeof fetch;
@@ -147,14 +153,58 @@ export async function handleGenerateJob(
     },
   ];
 
+  // §D.1 + §Q.4 — per-group FRESH PilotAuthorizationV1. Reused
+  // once per Modal call. The authorizationId / requestId / timestamp
+  // / fingerprint all change each loop iteration AND on every
+  // queue-level retry.
+  const env = deps.env ?? process.env;
+  const fingerprintSecret = env[ENV_FINGERPRINT_SECRET];
+  if (!fingerprintSecret) {
+    await recordGenerationFailed(
+      {
+        runId: claim.runId,
+        leaseToken: claim.leaseToken,
+        failureCode: "CREDENTIAL_ABSENT",
+        failureMessage: `Modal credentials not configured: ${ENV_FINGERPRINT_SECRET}.`,
+        retryable: false,
+      },
+      { prisma: db },
+    );
+    return { status: "FAILED" };
+  }
+
   for (const g of groups) {
     if (g.target <= 0) continue;
     try {
+      // Fresh auth + requestId per Modal call.
+      const groupRequestId = `g-${claim.runId}-${g.id}-${randomBytes(12).toString("hex")}`;
+      const pilotAuth = issuePilotAuthorization({
+        tenantId: claim.clubId,
+        courseId: `course:${claim.courseVersionId}`,
+        versionId: claim.courseVersionId,
+        sourceVideoSha256: plan.sourceVideoSha256,
+        resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
+        approvedGroundingProjectionSha256: claim.planIdentity,
+        operation: "GENERATE_DRAFT_QUESTIONS",
+        maxRequestedQuestions: g.target,
+        pilotRestrictions: {
+          publicationProhibited: true,
+          employeeAssignmentProhibited: true,
+          databaseWritesProhibited: false,
+          automaticRetriesProhibited: false,
+          excludedSegmentIds: Array.from(EXCLUDED_SEGMENT_INDICES),
+          scope: `generate:${claim.runId}:${g.id}`,
+        },
+        ttlSec: 3600,
+        issuedBy: `system:training-generation:${claim.clubId}`,
+        fingerprintSecret,
+      });
+
       const modalResponse = await callModalGenerate(
         {
-          requestId: `${claim.runId}:${g.id}`,
+          requestId: groupRequestId,
+          pilotAuthorization: pilotAuth,
           modelVariant: "qwen-2.5-7b-instruct-awq",
-          promptSchemaVersion: PROPOSAL_SCHEMA_VERSION,
           systemPrompt: buildSystemPrompt(g.kind, g.target),
           transcript: transcriptText,
           constraints: {
@@ -238,16 +288,35 @@ export async function handleGenerateJob(
         return { status: "FAILED" };
       }
     } catch (err) {
-      const code: GenerationFailureCode =
-        err instanceof ModalGenerateClientError
-          ? (err.code as GenerationFailureCode)
-          : "MODAL_HTTP_ERROR";
+      const contractCode =
+        err instanceof ModalGenerateClientError ? (err as ModalContractError).code : null;
+      const code: GenerationFailureCode = (contractCode as GenerationFailureCode | null) ?? "MODAL_HTTP_ERROR";
+      const NON_RETRYABLE: ReadonlySet<string> = new Set([
+        "CREDENTIAL_ABSENT",
+        "MODAL_HMAC_INVALID",
+        "REQUEST_HMAC_INVALID",
+        "REQUEST_BODY_INVALID",
+        "MODAL_BODY_INVALID",
+        "PILOT_AUTH_FINGERPRINT_MISMATCH",
+        "PILOT_AUTH_SCHEMA_MISMATCH",
+        "PILOT_AUTH_OPERATION_MISMATCH",
+        "TENANT_MISMATCH",
+        "COURSE_VERSION_MISMATCH",
+        "VIDEO_SHA_MISMATCH_AT_BOUNDARY",
+        "OPERATION_MISMATCH",
+        "UNKNOWN_OPERATION",
+        "CONTRACT_VERSION_MISMATCH",
+        "ASCII_SCOPE_REQUIRED",
+        "RESPONSE_REQUEST_ID_MISMATCH",
+        "RESPONSE_OPERATION_MISMATCH",
+      ]);
+      const retryable = !NON_RETRYABLE.has(code);
       await safeFail(
         db,
         claim,
         code,
         (err as Error)?.message ?? String(err),
-        code !== "CREDENTIAL_ABSENT" && code !== "MODAL_HMAC_INVALID",
+        retryable,
       );
       return { status: "FAILED" };
     }
