@@ -160,7 +160,17 @@ def _audio_passthrough(data: bytes) -> bytes:
     return data
 
 
-@app.function(image=image, secrets=secrets, timeout=120)
+@app.function(
+    image=image,
+    secrets=secrets,
+    timeout=120,
+    # EP-TRAIN-4Y-F §3 — Gate 1 default. Removing this env entry (and
+    # redeploying) activates Gate 2 live inference. The ASGI handler
+    # checks this env var BEFORE calling .remote(), so the GPU
+    # container NEVER boots during Gate 1 — the no-inference gate is
+    # enforced at the CPU boundary, not inside the GPU container.
+    env={"SPECTRE_GATE_1_NO_INFERENCE": "1"},
+)
 @modal.asgi_app()
 def api():
     """CPU ASGI endpoint. Performs HMAC + fingerprint + replay
@@ -168,8 +178,12 @@ def api():
     signed error response immediately (no GPU container ever
     materialises). On auth success, delegates to Transcriber.
     transcribe.remote(...) which spins up (or reuses) the GPU
-    container."""
+    container — UNLESS SPECTRE_GATE_1_NO_INFERENCE=1, in which case
+    the helper's inference callable raises a signed ContractError
+    before .remote() fires."""
     from fastapi import FastAPI, Request, Response
+
+    from .shared.errors import ContractError, FailureCode
 
     web = FastAPI()
     transcriber = Transcriber()  # type: ignore[call-arg]
@@ -182,6 +196,17 @@ def api():
         duration_holder: dict[str, int] = {"value": 0}
 
         def _run_whisper(wav_bytes: bytes) -> tuple[list[dict], dict]:
+            # §3 CPU-BOUNDARY GATE — checked BEFORE any .remote() call.
+            # When SPECTRE_GATE_1_NO_INFERENCE=1, we raise rather than
+            # delegate; the helper catches the ContractError and emits
+            # a signed error response. Zero GPU time, zero container
+            # boot, no modal.enter() runs.
+            if os.environ.get("SPECTRE_GATE_1_NO_INFERENCE") == "1":
+                raise ContractError(
+                    FailureCode.REQUEST_BODY_INVALID,
+                    "SPECTRE_GATE_1_NO_INFERENCE=1 — CPU gate refused inference (Gate 1 diagnostic path)",
+                    http_status=503,
+                )
             result = transcriber.transcribe.remote(wav_bytes)
             duration_holder["value"] = int(result["durationSec"])
             return result["segments"], result["elapsedMs"]

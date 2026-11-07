@@ -143,6 +143,20 @@ def _handle_transcribe_request(
         wav_bytes = audio_to_wav(audio_bytes)
         audio_sha256 = hashlib.sha256(wav_bytes).hexdigest()
         segments, elapsed_ms = run_whisper(wav_bytes)
+    except ContractError as err:
+        # EP-TRAIN-4Y-F §3 — the inference callable can raise a
+        # `ContractError` to communicate a deliberate refusal (e.g.
+        # the CPU-boundary SPECTRE_GATE_1_NO_INFERENCE gate). Preserve
+        # its code + http_status + message faithfully rather than
+        # collapsing to REQUEST_BODY_INVALID.
+        return _signed_error(
+            operation=OPERATION_TRANSCRIBE,
+            request_id=body["requestId"],
+            http_status=err.http_status if err.http_status else 500,
+            code=err.code,
+            message=str(err),
+            response_hmac_key=response_hmac_key,
+        )
     except Exception as exc:  # pragma: no cover - inference layer
         return _signed_error(
             operation=OPERATION_TRANSCRIBE,

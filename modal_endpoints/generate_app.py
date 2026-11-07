@@ -218,13 +218,26 @@ class Qwen:
 
 # ───────────────────────────────────────── CPU HTTP endpoint
 
-@app.function(image=image, secrets=secrets, timeout=120)
+@app.function(
+    image=image,
+    secrets=secrets,
+    timeout=120,
+    # EP-TRAIN-4Y-F §3 — Gate 1 default. Removing this env entry (and
+    # redeploying) activates Gate 2 live inference. CPU-boundary guard
+    # inside _run_qwen fires BEFORE .remote(), so the GPU container
+    # NEVER boots during Gate 1.
+    env={"SPECTRE_GATE_1_NO_INFERENCE": "1"},
+)
 @modal.asgi_app()
 def api():
     """CPU ASGI endpoint. Verifies HMAC + fingerprint + replay BEFORE
     any GPU call. Attacker-controlled requests fail authentication
-    and NEVER reach the GPU container."""
+    and NEVER reach the GPU container. SPECTRE_GATE_1_NO_INFERENCE=1
+    causes `_run_qwen` to raise ContractError(REQUEST_BODY_INVALID,
+    http_status=503) at the CPU boundary — zero GPU time."""
     from fastapi import FastAPI, Request, Response
+
+    from .shared.errors import ContractError, FailureCode
 
     web = FastAPI()
     qwen = Qwen()  # type: ignore[call-arg]
@@ -235,6 +248,13 @@ def api():
         headers = {k.lower(): v for k, v in req.headers.items()}
 
         def _run_qwen(system_prompt: str, transcript: str, constraints: dict):
+            # §3 CPU-BOUNDARY GATE — checked BEFORE any .remote() call.
+            if os.environ.get("SPECTRE_GATE_1_NO_INFERENCE") == "1":
+                raise ContractError(
+                    FailureCode.REQUEST_BODY_INVALID,
+                    "SPECTRE_GATE_1_NO_INFERENCE=1 — CPU gate refused inference (Gate 1 diagnostic path)",
+                    http_status=503,
+                )
             result = qwen.generate.remote(
                 system_prompt=system_prompt,
                 transcript=transcript,
