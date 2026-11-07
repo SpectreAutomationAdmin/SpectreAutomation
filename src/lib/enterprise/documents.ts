@@ -24,6 +24,11 @@ export interface StorageAdapter {
   // training-video reference-establishment paths to prove the R2
   // object still exists after acquiring the per-key advisory lock.
   head(args: { clubId: string; storageKey: string }): Promise<boolean>;
+  // EP-TRAIN-4Y-G §5 (2026-11-07): optional presigned-GET for
+  // server-to-server pulls (Modal → R2 video fetch). Only the S3
+  // adapter implements it in production; test / in-memory adapters
+  // leave it undefined and callers use `/__dev-fallback/${key}`.
+  signUrl?(args: { clubId: string; storageKey: string; ttlSec: number }): Promise<string>;
 }
 
 export const memoryStorageAdapter: StorageAdapter = (() => {

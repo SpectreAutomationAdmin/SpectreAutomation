@@ -74,6 +74,14 @@ export async function resolveDocumentStorage(args: {
       const result = await shared.get({ clubId: args.clubId, storageKey });
       return result !== null;
     },
+    // EP-TRAIN-4Y-G §5: expose presigned-URL helper when the
+    // underlying shared adapter (S3/R2) provides one.
+    signUrl: typeof (shared as { signUrl?: unknown }).signUrl === "function"
+      ? async (storageKey: string, ttlSec: number) =>
+          (shared as {
+            signUrl: (a: { clubId: string; storageKey: string; ttlSec: number }) => Promise<string>;
+          }).signUrl({ clubId: args.clubId, storageKey, ttlSec })
+      : undefined,
   };
 }
 

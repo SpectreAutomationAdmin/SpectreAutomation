@@ -61,6 +61,22 @@ export async function s3StorageAdapter(args: { region: string; bucket: string; a
     endpoint: args.endpoint,
     forcePathStyle: args.forcePathStyle,
   });
+
+  // EP-TRAIN-4Y-G §5 — lazy-load the presigner so test envs without
+  // the package still get a usable adapter (put/get/delete/head
+  // continue to work; signUrl throws a clear error if called).
+  // The package is listed as a runtime dependency; the lazy import
+  // just avoids a mandatory import tree for adapters that only use
+  // put/get/delete/head.
+  async function getPresigner() {
+    try {
+      const mod = await optionalImport("@aws-sdk/s3-request-presigner");
+      return mod?.getSignedUrl ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     async put({ clubId, storageKey, body, mimeType }) {
       const key = `clubs/${clubId}/${storageKey}`;
@@ -92,6 +108,22 @@ export async function s3StorageAdapter(args: { region: string; bucket: string; a
         if (code === 404 || (err as { name?: string }).name === "NotFound") return false;
         throw err;
       }
+    },
+    // EP-TRAIN-4Y-G §5 — presigned GET URL for server-to-server
+    // pulls (Modal → R2). TTL is bounded by `ttlSec`. Fail-closed if
+    // the presigner module isn't installed or if signing fails.
+    async signUrl({ clubId, storageKey, ttlSec }) {
+      const key = `clubs/${clubId}/${storageKey}`;
+      const getSignedUrl = await getPresigner();
+      if (!getSignedUrl) {
+        throw new Error(
+          "@aws-sdk/s3-request-presigner not installed — cannot generate a time-bounded signed URL",
+        );
+      }
+      const cmd = new GetObjectCommand({ Bucket: args.bucket, Key: key });
+      // `expiresIn` is in seconds; clamp to [60, 3600].
+      const bounded = Math.max(60, Math.min(3600, Math.floor(ttlSec)));
+      return await getSignedUrl(client, cmd, { expiresIn: bounded });
     },
   };
 }
