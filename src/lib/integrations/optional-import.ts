@@ -34,6 +34,9 @@ const IMPORT_DISPATCH: Record<string, () => Promise<AnyModule>> = {
   // Storage — required by the profile-photo streamer + AP intake
   // attachment persistence + AR statement uploads.
   "@aws-sdk/client-s3":               () => import("@aws-sdk/client-s3"),
+  // S3 presigner — required by signUrl() for Modal → R2 fetches
+  // (EP-TRAIN-4Y-G §5).
+  "@aws-sdk/s3-request-presigner":    () => import("@aws-sdk/s3-request-presigner"),
   // KMS — required by SIN + banking + TD1 encryption paths.
   "@aws-sdk/client-kms":              () => import("@aws-sdk/client-kms"),
   // Anthropic SDK — AP intelligence + reporting narrative generation.
