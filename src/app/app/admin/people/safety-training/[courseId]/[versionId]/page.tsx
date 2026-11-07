@@ -172,7 +172,17 @@ export default async function VersionEditorPage({
           <h1 className="page-title">{version.title}</h1>
           <p className="mt-1 text-xs text-stone-500 font-mono">{version.course.code}</p>
         </div>
-        <span className={
+        <div className="flex items-center gap-3">
+          {isDraft && canAuthor && (
+            <Link
+              href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}/ai-workspace`}
+              className="text-xs text-stone-500 hover:text-club-ink underline-offset-4 hover:underline"
+              data-testid="training-editor-ai-workspace-link"
+            >
+              Open AI workspace →
+            </Link>
+          )}
+          <span className={
           "inline-block rounded border px-3 py-1 text-xs font-medium " +
           (stateBadge.tone === "emerald"
             ? "bg-emerald-50 text-emerald-800 border-emerald-200"
@@ -182,6 +192,7 @@ export default async function VersionEditorPage({
         } data-testid="training-version-state">
           {stateBadge.label}
         </span>
+        </div>
       </div>
 
       {err && (

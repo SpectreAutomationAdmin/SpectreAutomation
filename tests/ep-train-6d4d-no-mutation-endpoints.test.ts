@@ -9,6 +9,10 @@
 //   - GET  /api/admin/ai-training/drafts/[id]        (4D detail read)
 //   - POST /api/admin/ai-training/drafts/[id]/approve (4N approval;
 //                                                     consumed by 4P)
+//   - POST /api/admin/ai-training/drafts/[id]/promote (4Y wrapper over
+//                                                     the 4T promotion
+//                                                     service; existing
+//                                                     hr:training:write)
 //
 // The check:
 //   1. Enumerate every file under src/app/api/admin/ai-training/.
@@ -41,11 +45,13 @@ function listAllFiles(dir: string): string[] {
  *  Every route NOT in this set must be GET-only. */
 const MUTATION_ALLOWLIST: ReadonlySet<string> = new Set([
   "src/app/api/admin/ai-training/drafts/[id]/approve/route.ts", // 4N POST
+  "src/app/api/admin/ai-training/drafts/[id]/promote/route.ts", // 4Y POST
 ]);
 
 /** The full enumeration of route files under this tree. */
 const ALL_ROUTE_FILES: readonly string[] = [
   "src/app/api/admin/ai-training/drafts/[id]/approve/route.ts",
+  "src/app/api/admin/ai-training/drafts/[id]/promote/route.ts",
   "src/app/api/admin/ai-training/drafts/[id]/route.ts",
   "src/app/api/admin/ai-training/drafts/route.ts",
 ];
