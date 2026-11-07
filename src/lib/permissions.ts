@@ -372,6 +372,17 @@ export const ROLES = {
   STAFF: { name: "Staff", description: "Operational staff; limited read access." },
   AUDITOR_READ_ONLY: { name: "Auditor (Read Only)", description: "External auditor; read-only, audited access." },
   BOARD_READ_ONLY: { name: "Board (Read Only)", description: "Board / finance-committee reporting access." },
+  // EP-TRAIN-6D-4Z-D (2026-11-07) — least-privilege human reviewer of
+  // AI-generated training questions. Carries EXACTLY three permissions:
+  // hr:training:read + hr:training:ai:read + hr:training:ai:approve.
+  // Deliberately EXCLUDES: ai:generate / ai:review-write / ai:edit /
+  // ai:revalidate / ai:remediate-rejected / ai:archive / training:write
+  // / training:publish / training:assign / any finance/HR/payroll admin.
+  TRAINING_AI_REVIEWER: {
+    name: "AI Training Reviewer",
+    description:
+      "Approves human-reviewed AI training-question drafts. Cannot author, promote, publish, or assign courses; cannot access unrelated modules.",
+  },
 } as const;
 
 export type RoleKey = keyof typeof ROLES;
@@ -852,5 +863,21 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "kpi:read",
     "documents:read",
     "search:read",
+  ],
+  // EP-TRAIN-6D-4Z-D (2026-11-07) — least-privilege AI training
+  // reviewer. EXACTLY THREE PERMISSIONS, no more. The reviewer can:
+  //   - read the training catalogue (to see course + version context)
+  //   - read AI-draft candidates (queue + detail + evidence metadata)
+  //   - approve a human-reviewed AI draft
+  // The reviewer CANNOT promote (hr:training:write), publish
+  // (hr:training:publish), assign employees (hr:training:assign),
+  // or touch any non-training module. The 4N approval service still
+  // re-verifies evidence + verified-answer + content-hash bindings
+  // on every call, so this grant is the ONLY authority surface it
+  // opens.
+  TRAINING_AI_REVIEWER: [
+    "hr:training:read",
+    "hr:training:ai:read",
+    "hr:training:ai:approve",
   ],
 };

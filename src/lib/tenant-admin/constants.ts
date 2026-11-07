@@ -44,6 +44,10 @@ export const TENANT_ASSIGNABLE_ROLES: ReadonlyArray<RoleKey> = [
   "STAFF",
   "AUDITOR_READ_ONLY",
   "BOARD_READ_ONLY",
+  // EP-TRAIN-6D-4Z-D (2026-11-07) — least-privilege AI training
+  // reviewer; grantable by a Tenant Administrator via the existing
+  // invitation / role-change workflow. No new API or UI surface.
+  "TRAINING_AI_REVIEWER",
 ] as const;
 
 export function isTenantAssignableRole(roleKey: string): roleKey is RoleKey {
@@ -69,6 +73,7 @@ export const ROLE_LABELS: Record<RoleKey, string> = {
   STAFF: "Staff",
   AUDITOR_READ_ONLY: "External Auditor (read-only)",
   BOARD_READ_ONLY: "Board Member (read-only)",
+  TRAINING_AI_REVIEWER: "AI Training Reviewer",
 };
 
 // ---------------------------------------------------------------------

@@ -67,6 +67,13 @@ interface AiWorkspaceClientProps {
     readonly canReview: boolean;
     readonly canPublish: boolean;
   };
+  // EP-TRAIN-6D-4Z-D §7 — server-rendered initial stage hints, so the
+  // stepper badge is informative on the first paint and never shows
+  // "…" before the first poll completes.
+  readonly initialStageHints?: {
+    readonly transcription?: "NOT_STARTED" | "COMPLETED" | "UNKNOWN";
+    readonly generation?: "NOT_STARTED" | "COMPLETED" | "UNKNOWN";
+  };
 }
 
 type TranscriptionStatus =
@@ -144,12 +151,27 @@ const STAGE_LABELS: readonly { key: string; label: string }[] = [
 export default function AiWorkspaceClient(
   props: AiWorkspaceClientProps,
 ): JSX.Element {
+  // EP-TRAIN-6D-4Z-D §7 — seed the stepper badge from the server-
+  // rendered hint so the first paint shows a meaningful label (ready
+  // / idle / completed) instead of "…". The subsequent poll will
+  // replace this with the authoritative live payload.
+  const transcriptionHint = props.initialStageHints?.transcription ?? "UNKNOWN";
+  const generationHint = props.initialStageHints?.generation ?? "UNKNOWN";
+  const seededTranscription: TranscriptionStatus | null =
+    transcriptionHint === "NOT_STARTED" ? { state: "NOT_STARTED" } : null;
+  const seededGeneration: GenerationStatus | null =
+    generationHint === "NOT_STARTED" ? { state: "NOT_STARTED" } : null;
+
   const [transcription, setTranscription] =
-    useState<TranscriptionStatus | null>(null);
-  const [generation, setGeneration] = useState<GenerationStatus | null>(null);
+    useState<TranscriptionStatus | null>(seededTranscription);
+  const [generation, setGeneration] = useState<GenerationStatus | null>(seededGeneration);
   const [activeStage, setActiveStage] = useState<string>("video");
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  // EP-TRAIN-6D-4Z-D §7 — client-side optimistic promote state so the
+  // promote buttons flip to "Already promoted" immediately after a
+  // successful POST, without waiting for a page reload.
+  const [locallyPromoted, setLocallyPromoted] = useState<Record<string, string>>({});
 
   const refreshTranscription = useCallback(async () => {
     const res = await fetch(
@@ -384,6 +406,10 @@ export default function AiWorkspaceClient(
             checkpoints={props.checkpoints}
             canAuthor={props.permissions.canAuthor}
             versionState={props.version.state}
+            locallyPromoted={locallyPromoted}
+            onLocalPromote={(draftId, destinationLabel) =>
+              setLocallyPromoted((m) => ({ ...m, [draftId]: destinationLabel }))
+            }
           />
         )}
 
@@ -953,12 +979,16 @@ function AssemblyPanel({
   checkpoints,
   canAuthor,
   versionState,
+  locallyPromoted,
+  onLocalPromote,
 }: {
   candidates: readonly CandidateQueueRow[];
   approvedDrafts: readonly ApprovedDraftRow[];
   checkpoints: readonly CheckpointOption[];
   canAuthor: boolean;
   versionState: VersionState;
+  locallyPromoted: Record<string, string>;
+  onLocalPromote: (draftId: string, destinationLabel: string) => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
@@ -1009,6 +1039,10 @@ function AssemblyPanel({
             ? `Already promoted (replay). ${body.destinationKind}`
             : `Promoted. ${body.destinationKind}`,
         }));
+        // EP-TRAIN-6D-4Z-D §7 — flip the row to the "Already promoted"
+        // state immediately so the Promote buttons disappear without
+        // waiting for a page reload.
+        onLocalPromote(draftId, body.destinationKind);
       }
     } finally {
       setBusy(null);
@@ -1048,10 +1082,14 @@ function AssemblyPanel({
       <ul className="mt-3 space-y-3">
         {approvedCandidates.map((c) => {
           const approved = approvedById.get(c.draftId);
+          const effectiveAlreadyPromoted =
+            approved?.alreadyPromoted || Boolean(locallyPromoted[c.draftId]);
+          const effectiveDestinationKind =
+            approved?.promotionDestinationKind ?? locallyPromoted[c.draftId] ?? null;
           const disabled =
             !canAuthor ||
             !approved?.validationId ||
-            approved.alreadyPromoted ||
+            effectiveAlreadyPromoted ||
             busy === c.draftId;
           return (
             <li
@@ -1069,8 +1107,8 @@ function AssemblyPanel({
                 <PromoteControls
                   disabled={disabled}
                   checkpoints={checkpoints}
-                  alreadyPromoted={approved?.alreadyPromoted ?? false}
-                  promotedDestination={approved?.promotionDestinationKind ?? null}
+                  alreadyPromoted={effectiveAlreadyPromoted}
+                  promotedDestination={effectiveDestinationKind}
                   onPromote={(destination) => {
                     if (!approved?.validationId) return;
                     void promote(

@@ -227,6 +227,17 @@ export default async function AiWorkspacePage({
           promotionDestinationKind: d.promotion?.destination ?? null,
         }))}
         permissions={{ canAuthor, canReview, canPublish }}
+        initialStageHints={{
+          // EP-TRAIN-6D-4Z-D §7 — informative first-paint badge.
+          // "NOT_STARTED" when the server can see no supporting state
+          // (no video, no build, no candidates); otherwise defer to the
+          // first poll which paints COMPLETED/WAITING/RUNNING etc.
+          transcription:
+            !version.videoSha256 || !version.videoStorageKey
+              ? "NOT_STARTED"
+              : undefined,
+          generation: candidates.length === 0 ? "NOT_STARTED" : undefined,
+        }}
       />
     </div>
   );
