@@ -41,6 +41,17 @@ interface AutoPrepareReport {
       | "NO_VIDEO";
     runId?: string;
   };
+  // EP-TRAIN-4Y-R §8 — stale-draft detection. If a run exists whose
+  // sourceVideoSha256 differs from the version's current videoSha256,
+  // the AI suggestions for that run are now grounded in a previous
+  // upload. The directive §8 "Replacing a video invalidates stale
+  // AI suggestions" — this field surfaces that fact so the editor
+  // can present a clear warning / cleanup action.
+  staleRuns: Array<{
+    runId: string;
+    runSourceVideoSha256: string;
+    draftCount: number;
+  }>;
   mockExecution: true;
   note: string;
 }
@@ -75,9 +86,34 @@ export async function POST(
     videoSha256: version.videoSha256 ?? null,
     transcript: { state: version.videoSha256 ? "WOULD_ENQUEUE" : "NO_VIDEO" },
     generation: { state: version.videoSha256 ? "AWAITS_TRANSCRIPT" : "NO_VIDEO" },
+    staleRuns: [],
     mockExecution: true,
-    note: "EP-TRAIN-4Y-Q §9 checkpoint runs orchestration in report-only mode. Real Whisper / Qwen inference requires explicit founder authorisation per the cost controls in the 4Y-arc memory.",
+    note: "EP-TRAIN-4Y-Q §9 / EP-TRAIN-4Y-R §8 — orchestration report. Real Whisper / Qwen inference requires explicit founder authorisation per the cost controls in the 4Y-arc memory.",
   };
+
+  // EP-TRAIN-4Y-R §8 — stale-run detection, regardless of current
+  // video state. A run whose sourceVideoSha256 does not match the
+  // version's current videoSha256 means the video was replaced
+  // after that run completed.
+  if (version.videoSha256) {
+    const runsOnVersion = await prisma.trainingQuestionAiGenerationRun.findMany({
+      where: { clubId, courseVersionId: versionId },
+      select: {
+        id: true,
+        sourceVideoSha256: true,
+        _count: { select: { drafts: true } },
+      },
+    });
+    for (const r of runsOnVersion) {
+      if (r.sourceVideoSha256 && r.sourceVideoSha256 !== version.videoSha256) {
+        report.staleRuns.push({
+          runId: r.id,
+          runSourceVideoSha256: r.sourceVideoSha256,
+          draftCount: r._count.drafts,
+        });
+      }
+    }
+  }
 
   if (!version.videoSha256) {
     void audit(principal, {
