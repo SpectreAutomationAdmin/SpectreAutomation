@@ -58,6 +58,8 @@ export async function GET(
   let correctIndex: number | null = null;
   let correctText: string | null = null;
   let questionText: string | null = null;
+  let sourceSegmentIdsCount: number | null = null;
+  let sourceSegmentIds: number[] = [];
   try {
     const body = JSON.parse(draft.draftJson);
     questionText = typeof body.questionText === "string" ? body.questionText : null;
@@ -69,6 +71,12 @@ export async function GET(
           break;
         }
       }
+    }
+    if (Array.isArray(body.sourceSegmentIds)) {
+      sourceSegmentIds = body.sourceSegmentIds.filter(
+        (n: unknown): n is number => typeof n === "number",
+      );
+      sourceSegmentIdsCount = sourceSegmentIds.length;
     }
   } catch {}
 
@@ -84,5 +92,7 @@ export async function GET(
     correctOptionIndex: correctIndex,
     correctOptionText: correctText,
     questionText,
+    sourceSegmentIdsCount,
+    sourceSegmentIds,
   });
 }

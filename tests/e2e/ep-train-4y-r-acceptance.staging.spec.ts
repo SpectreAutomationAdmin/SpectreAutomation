@@ -16,15 +16,31 @@
 // env vars carry the credentials.
 
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
 const COURSE_ID = "cmvzs3vz9000256qcu7lfysoz";
 const VERSION_ID = "cmvzs3w05000456qcgfgps7gy";
 const BASE = process.env.SPECTRE_STAGING_BASE_URL ?? "https://staging.spectreautomation.com";
 
+function readLocalEnv(key: string): string | undefined {
+  // process.env wins; else try the same git-ignored files staging-auth reads.
+  if (process.env[key]) return process.env[key];
+  for (const file of [".env.playwright.local", ".env.staging.local", ".env.local"]) {
+    const p = path.join(process.cwd(), file);
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, "utf8").split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Z_0-9]+)\s*=\s*(.*)\s*$/);
+      if (m && m[1] === key) return m[2].replace(/^["']|["']$/g, "");
+    }
+  }
+  return undefined;
+}
+
 async function loginAsReviewer(ctx: BrowserContext): Promise<Page | null> {
-  const email = process.env.SPECTRE_4YQ_REVIEWER_EMAIL;
-  const password = process.env.SPECTRE_4YQ_REVIEWER_PASSWORD;
+  const email = readLocalEnv("SPECTRE_4YQ_REVIEWER_EMAIL");
+  const password = readLocalEnv("SPECTRE_4YQ_REVIEWER_PASSWORD");
   if (!email || !password) return null;
   const page = await ctx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
@@ -70,15 +86,41 @@ test.describe("EP-TRAIN-4Y-R end-to-end unified-editor acceptance", () => {
     await reviewerPage.waitForTimeout(3000);
     await reviewerPage.screenshot({ path: "test-results/4yr-01-reviewer-editor.png", fullPage: true });
 
-    // Find the first actionable draft via the inline Verify-evidence button
-    const verifyBtn = reviewerPage.locator('button[data-testid^="ai-draft-inline-attest-"]').first();
-    await expect(verifyBtn, "at least one draft is actionable").toHaveCount(1);
-    const targetDraftId = (await verifyBtn.getAttribute("data-testid"))?.replace(
-      "ai-draft-inline-attest-",
-      "",
+    // Target draft selection:
+    //   - If SPECTRE_4YR_TARGET_DRAFT_ID is set, use it (production-safe
+    //     way to re-run the walk against a specific eligible draft).
+    //   - Otherwise pick the first editor-rendered Verify button; if
+    //     that draft turns out to be ineligible (sourceSegmentIds.length
+    //     > 5, which fails CONVERT), skip the walk and report the
+    //     reason as a truthful §4 finding.
+    const envTarget = readLocalEnv("SPECTRE_4YR_TARGET_DRAFT_ID");
+    let targetDraftId: string;
+    if (envTarget) {
+      targetDraftId = envTarget;
+      console.log(`TARGET_DRAFT_ID (from env): ${targetDraftId}`);
+    } else {
+      const verifyBtn = reviewerPage.locator('button[data-testid^="ai-draft-inline-attest-"]').first();
+      await expect(verifyBtn, "at least one draft is actionable").toHaveCount(1);
+      const t = (await verifyBtn.getAttribute("data-testid"))?.replace(
+        "ai-draft-inline-attest-",
+        "",
+      );
+      expect(t, "target draft id").toBeTruthy();
+      targetDraftId = t as string;
+      console.log(`TARGET_DRAFT_ID (first editor-rendered): ${targetDraftId}`);
+    }
+
+    // Pre-check the draft's eligibility via the state endpoint — this
+    // surfaces the CONVERT-stage sourceSegmentIds cap (> 5 ⇒ permanent
+    // REJECTED regardless of attestation). Truthful §4 finding either way.
+    const preCheck = await reviewerPage.request.get(
+      `${BASE}/api/admin/ai-training/drafts/${targetDraftId}/state`,
     );
-    expect(targetDraftId, "target draft id").toBeTruthy();
-    console.log(`TARGET_DRAFT_ID: ${targetDraftId}`);
+    const preCheckBody = await preCheck.json();
+    console.log(`TARGET_PRECHECK: ${JSON.stringify(preCheckBody)}`);
+    const ssi = preCheckBody.sourceSegmentIdsCount;
+    const eligible = typeof ssi === "number" && ssi >= 1 && ssi <= 5;
+    console.log(`TARGET_ELIGIBLE: ${eligible} (sourceSegmentIdsCount=${ssi})`);
 
     // ── §3 Per-segment attestation
     await verifyBtn.scrollIntoViewIfNeeded();
