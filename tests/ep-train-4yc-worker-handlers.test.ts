@@ -89,7 +89,29 @@ const prismaMocks = vi.hoisted(() => ({
     findMany: vi.fn(),
   },
   trainingQuestionAiDraft: {
-    create: vi.fn().mockResolvedValue({}),
+    create: vi.fn().mockResolvedValue({ id: "mock-draft-id" }),
+    findUnique: vi.fn().mockResolvedValue({
+      id: "mock-draft-id",
+      clubId: "mock-club",
+      contentHash: "mock-content-hash",
+      draftJson: JSON.stringify({
+        questionType: "SINGLE_CHOICE",
+        questionText: "mock question text",
+        options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
+        explanation: "mock explanation",
+        sourceSegmentIds: [0],
+      }),
+      groundingProjectionId: null,
+      generationRun: { id: "mock-run" },
+    }),
+    update: vi.fn().mockResolvedValue({}),
+  },
+  // EP-TRAIN-4Y-P §6 — mocks for projection + validation materialisation.
+  trainingGroundingProjection: {
+    upsert: vi.fn().mockResolvedValue({ id: "mock-projection-id" }),
+  },
+  trainingQuestionAiValidation: {
+    create: vi.fn().mockResolvedValue({ id: "mock-validation-id" }),
   },
 }));
 

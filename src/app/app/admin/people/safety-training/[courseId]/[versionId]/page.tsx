@@ -39,6 +39,7 @@ import ApplicabilityPicker from "./ApplicabilityPicker";
 import PublishPanel from "./PublishPanel";
 import TimelineEditor from "./TimelineEditor";
 import PublishRevisionDialog from "./PublishRevisionDialog";
+import { AiSuggestionsPanel } from "./AiSuggestionsPanel";
 import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
 
 export const runtime = "nodejs";
@@ -174,12 +175,17 @@ export default async function VersionEditorPage({
         </div>
         <div className="flex items-center gap-3">
           {isDraft && canAuthor && (
+            // EP-TRAIN-4Y-P §2 — the canonical editor is now the primary
+            // interface for AI-assisted training (see AiSuggestionsPanel
+            // further down the page). The legacy AI Workspace route
+            // remains accessible for archive / debug access, de-emphasised.
             <Link
               href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}/ai-workspace`}
-              className="text-xs text-stone-500 hover:text-club-ink underline-offset-4 hover:underline"
+              className="text-[11px] text-stone-400 hover:text-stone-600 underline-offset-4 hover:underline"
               data-testid="training-editor-ai-workspace-link"
+              title="Legacy AI Workspace (archive)"
             >
-              Open AI workspace →
+              Legacy AI workspace
             </Link>
           )}
           <span className={
@@ -345,6 +351,18 @@ export default async function VersionEditorPage({
           disabled={readOnly}
         />
       </section>
+
+      {/* EP-TRAIN-4Y-P §4 + §5 — AI suggestions surfaced in the canonical
+          editor. Replaces the need to navigate to a separate AI Workspace
+          for discovery. Review + approval still land through the
+          existing persisted-review surface. */}
+      <div className="mt-8">
+        <AiSuggestionsPanel
+          clubId={clubId}
+          courseVersionId={version.id}
+          canReview={hasPermission(principal, clubId, "hr:training:ai:read")}
+        />
+      </div>
 
       {version.videoStorageKey && (() => {
         // EP-TRAIN-4A §2: build the per-checkpoint question map once so

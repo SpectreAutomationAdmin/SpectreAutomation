@@ -35,6 +35,11 @@ import {
   type AssessmentPlanV1,
   EXCLUDED_SEGMENT_INDICES,
 } from "./assessment-plan";
+import {
+  materialiseGroundingProjection,
+  materialiseValidationForDraft,
+  synthesizePilotAuthorizationFromRun,
+} from "../ai-review/projection-and-validation-persistence";
 
 /** EP-TRAIN-4Y-M (2026-11-08) — runtime-only grounding-hygiene filter.
  *  Applied at prompt-build + proposal-validation time inside this
@@ -460,12 +465,44 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
 
+  // EP-TRAIN-4Y-P §6 — materialise the TrainingGroundingProjection
+  // row BEFORE we persist drafts, so each draft can be bound to it
+  // via FK and the real projection sha256 is persisted (rather than
+  // the pre-4Y-P planIdentity placeholder). The upsert is idempotent
+  // on (clubId, courseVersionId, sha256) so safe on retries.
+  //
+  // If projection materialisation fails (eg. an environment where the
+  // transcript build row is unreachable), we log + fall back to the
+  // pre-4Y-P placeholder behaviour so the run still COMPLETES. The
+  // reviewer-eligibility gate will push HISTORICAL_EVIDENCE_UNAVAILABLE
+  // for such drafts, matching the 4Y-M / 4Y-N baseline — that is the
+  // safe-fall-through contract.
+  const courseId = await resolveCourseId(db, claim.courseVersionId);
+  let materialised: Awaited<ReturnType<typeof materialiseGroundingProjection>> | null = null;
+  try {
+    materialised = await materialiseGroundingProjection(
+      {
+        clubId: claim.clubId,
+        courseId,
+        courseVersionId: claim.courseVersionId,
+        plan,
+      },
+      { prisma: db },
+    );
+  } catch (err) {
+    logger.warn("training.generation.projection_materialise_failed", {
+      runId: claim.runId,
+      error: (err as Error)?.message ?? String(err),
+    });
+  }
+  const projectionSha = materialised?.projectionSha256 ?? claim.planIdentity;
+  const projectionRowId = materialised?.projectionRowId ?? null;
+
   // Persist drafts. Each draft attaches to the run via generationRunId.
   // We dedup within the run via (clubId, courseVersionId, contentHash)
   // Prisma @@unique. A P2002 here is swallowed as a duplicate skip.
-  const projectionSha = claim.planIdentity; // placeholder — 4W does not create a new projection
   let persistedCount = 0;
-  const courseId = await resolveCourseId(db, claim.courseVersionId);
+  const persistedDraftIds: string[] = [];
   for (const { draft, contentHash } of generatedDrafts) {
     const canonicalBody = {
       questionType: draft.questionType,
@@ -475,7 +512,7 @@ export async function handleGenerateJob(
       sourceSegmentIds: [...draft.sourceSegmentIds],
     };
     try {
-      await db.trainingQuestionAiDraft.create({
+      const persisted = await db.trainingQuestionAiDraft.create({
         data: {
           clubId: claim.clubId,
           courseId,
@@ -486,13 +523,20 @@ export async function handleGenerateJob(
           sourceVideoSha256: plan.sourceVideoSha256,
           resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
           groundingProjectionSha256: projectionSha,
+          // EP-TRAIN-4Y-P §6 — bind the FK so evidence-reader
+          // classifies as `authentic`, not `historical-unavailable`.
+          // Nullable: fall-through when projection materialisation
+          // failed above (matches pre-4Y-P behaviour for that case).
+          ...(projectionRowId ? { groundingProjectionId: projectionRowId } : {}),
           pilotAuthorizationId: "4w-generation",
           pilotAuthorizationFingerprint: claim.planIdentity.slice(0, 32),
           state: "REQUIRES_HUMAN_REVIEW",
           recordVersion: 0,
           generatedAt: new Date(),
         },
+        select: { id: true },
       });
+      persistedDraftIds.push(persisted.id);
       persistedCount++;
     } catch (err) {
       if ((err as { code?: string })?.code === "P2002") {
@@ -501,6 +545,47 @@ export async function handleGenerateJob(
       }
       await safeFail(db, claim, "DRAFT_PERSIST_FAILED", (err as Error)?.message ?? String(err), false);
       return { status: "FAILED" };
+    }
+  }
+
+  // EP-TRAIN-4Y-P §6 — emit a TrainingQuestionAiValidation row per
+  // persisted draft. The reviewer-eligibility gate requires
+  // `latestValidation`; without this every modern-pipeline draft
+  // stayed VALIDATION_ROW_MISSING and thus unapprovable (proven live
+  // in 4Y-O). If projection materialisation failed above, the
+  // deterministic validator cannot be run (no grounding object),
+  // so we skip this step — drafts remain visible but ineligible,
+  // matching pre-4Y-P behaviour.
+  if (materialised && projectionRowId) {
+    const authorization = synthesizePilotAuthorizationFromRun({
+      runId: claim.runId,
+      clubId: claim.clubId,
+      courseId,
+      versionId: claim.courseVersionId,
+      plan,
+      pilotAuthorizationId: "4w-generation",
+      pilotAuthorizationFingerprint: claim.planIdentity.slice(0, 32),
+      approvedGroundingProjectionSha256: projectionSha,
+    });
+    for (const draftId of persistedDraftIds) {
+      try {
+        await materialiseValidationForDraft(
+          {
+            draftId,
+            clubId: claim.clubId,
+            projectionRowId,
+            projection: materialised.projection,
+            authorization,
+          },
+          { prisma: db },
+        );
+      } catch (err) {
+        logger.warn("training.generation.validation_persist_failed", {
+          runId: claim.runId,
+          draftId,
+          error: (err as Error)?.message ?? String(err),
+        });
+      }
     }
   }
 
