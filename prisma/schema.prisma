@@ -17209,12 +17209,26 @@ model TrainingTranscriptSegment {
   sourceOrgMismatchJson        String   @default("[]")
   uncertaintyWarning           String?
 
+  // EP-TRAIN-4Y-Q §5 (2026-11-08) — reviewer-scoped attestation for
+  // segments whose pendingReview flag(s) block the 6C-10B converter.
+  // The ORIGINAL transcript body / timestamps / pendingReviewJson
+  // are NEVER rewritten; the attestation only annotates that an
+  // independent reviewer has verified the segment is reliable
+  // evidence. The projection materialiser (projection-and-validation-
+  // persistence.ts) clears the pendingReview on the projection it
+  // builds whenever reviewerAttestedAt is non-null. Toggle via
+  // POST /api/admin/training/transcript-segments/<id>/attest.
+  reviewerAttestedAt           DateTime?
+  reviewerAttestedByUserId     String?
+  reviewerAttestationNote      String?
+
   createdAt                    DateTime @default(now())
 
   // Idempotency: a given (club, build, index) exists at most once.
   @@unique([clubId, transcriptBuildId, segmentIndex])
 
   @@index([clubId, transcriptBuildId])
+  @@index([clubId, reviewerAttestedAt])
 }
 
 // -------------------------------------------------------------------

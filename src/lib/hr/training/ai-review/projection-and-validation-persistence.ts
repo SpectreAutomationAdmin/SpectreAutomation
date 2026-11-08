@@ -95,7 +95,10 @@ export async function materialiseGroundingProjection(
     );
   }
 
-  // 2. Load the eligible-segment rows ordered by index.
+  // 2. Load the eligible-segment rows ordered by index. The
+  //    `reviewerAttestedAt` column (EP-TRAIN-4Y-Q §5) lets the
+  //    materialiser clear pendingReview flags for segments an
+  //    independent reviewer has attested are reliable evidence.
   const segments = await db.trainingTranscriptSegment.findMany({
     where: {
       clubId: input.clubId,
@@ -110,6 +113,8 @@ export async function materialiseGroundingProjection(
       pendingReviewJson: true,
       sourceOrgMismatchJson: true,
       uncertaintyWarning: true,
+      reviewerAttestedAt: true,
+      reviewerAttestedByUserId: true,
     },
     orderBy: { segmentIndex: "asc" },
   });
@@ -126,6 +131,12 @@ export async function materialiseGroundingProjection(
       const parsed = JSON.parse(s.sourceOrgMismatchJson ?? "[]");
       if (Array.isArray(parsed)) sourceOrgMismatch = parsed.map(String);
     } catch {}
+    // EP-TRAIN-4Y-Q §5 — reviewer attestation clears pendingReview
+    // AND sourceOrgMismatch AND the uncertainty warning on the
+    // projection body. The underlying TrainingTranscriptSegment row
+    // is NEVER rewritten — this transformation only annotates the
+    // ephemeral GroundingProjection row.
+    const attested = s.reviewerAttestedAt !== null;
     return {
       passageId: s.segmentIndex,
       sourceSegmentIds: [s.segmentIndex],
@@ -133,11 +144,17 @@ export async function materialiseGroundingProjection(
       sourceEndSec: Number(s.endSec),
       text: s.text,
       citationHandle: `seg-${s.segmentIndex}`,
-      flags: {
-        pendingReview,
-        sourceOrgMismatch,
-        uncertaintyWarning: s.uncertaintyWarning ?? null,
-      },
+      flags: attested
+        ? {
+            pendingReview: [],
+            sourceOrgMismatch: [],
+            uncertaintyWarning: null,
+          }
+        : {
+            pendingReview,
+            sourceOrgMismatch,
+            uncertaintyWarning: s.uncertaintyWarning ?? null,
+          },
     };
   });
 
@@ -345,6 +362,82 @@ export async function materialiseValidationForDraft(
     validationId: validation.id,
     verdict: result.verdict,
     stage: result.stage,
+  };
+}
+
+/** EP-TRAIN-4Y-Q §6 — revalidate a single draft after transcript
+ *  attestations may have changed. Re-upserts the projection (which
+ *  re-reads attestations + rebuilds passages) and creates a new
+ *  TrainingQuestionAiValidation row reflecting the current verdict.
+ *  Idempotent on the projection (same sha256 if no attestations have
+ *  changed); always adds a fresh validation row so the UI can show
+ *  the latest verdict. */
+export async function revalidateDraft(
+  input: { readonly draftId: string },
+  opts: { prisma?: PrismaClient; now?: Date } = {},
+): Promise<{
+  readonly projectionRowId: string;
+  readonly validationId: string;
+  readonly verdict: "GROUNDED" | "REQUIRES_HUMAN_VERIFICATION" | "REJECTED";
+}> {
+  const db = opts.prisma ?? defaultPrisma;
+  const draft = await db.trainingQuestionAiDraft.findUnique({
+    where: { id: input.draftId },
+    select: {
+      id: true,
+      clubId: true,
+      courseId: true,
+      courseVersionId: true,
+      generationRun: {
+        select: {
+          id: true,
+          pilotAuthorizationId: true,
+          pilotAuthorizationFingerprint: true,
+          planIdentity: true,
+          assessmentPlanJson: true,
+        },
+      },
+    },
+  });
+  if (!draft) throw new Error(`revalidateDraft: draft ${input.draftId} not found`);
+  if (!draft.generationRun || !draft.generationRun.assessmentPlanJson) {
+    throw new Error(`revalidateDraft: draft ${input.draftId} has no generation-run plan`);
+  }
+  const plan = JSON.parse(draft.generationRun.assessmentPlanJson) as AssessmentPlanV1;
+  const materialised = await materialiseGroundingProjection(
+    {
+      clubId: draft.clubId,
+      courseId: draft.courseId,
+      courseVersionId: draft.courseVersionId,
+      plan,
+    },
+    { prisma: db, now: opts.now },
+  );
+  const authorization = synthesizePilotAuthorizationFromRun({
+    runId: draft.generationRun.id,
+    clubId: draft.clubId,
+    courseId: draft.courseId,
+    versionId: draft.courseVersionId,
+    plan,
+    pilotAuthorizationId: draft.generationRun.pilotAuthorizationId,
+    pilotAuthorizationFingerprint: draft.generationRun.pilotAuthorizationFingerprint,
+    approvedGroundingProjectionSha256: materialised.projectionSha256,
+    nowUtc: opts.now,
+  });
+  const result = await materialiseValidationForDraft(
+    {
+      draftId: draft.id,
+      clubId: draft.clubId,
+      projectionRowId: materialised.projectionRowId,
+      projection: materialised.projection,
+      authorization,
+    },
+    { prisma: db, now: opts.now },
+  );
+  return {
+    projectionRowId: materialised.projectionRowId,
+    validationId: result.validationId,
+    verdict: result.verdict,
   };
 }
 

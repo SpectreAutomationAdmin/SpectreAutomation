@@ -175,17 +175,18 @@ export default async function VersionEditorPage({
         </div>
         <div className="flex items-center gap-3">
           {isDraft && canAuthor && (
-            // EP-TRAIN-4Y-P §2 — the canonical editor is now the primary
-            // interface for AI-assisted training (see AiSuggestionsPanel
-            // further down the page). The legacy AI Workspace route
-            // remains accessible for archive / debug access, de-emphasised.
+            // EP-TRAIN-4Y-Q §10 — Preview-as-employee is the primary
+            // preview affordance in the unified editor. The legacy AI
+            // Workspace link has been removed from the manager workflow
+            // (the route remains for backward compat but is not linked).
             <Link
-              href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}/ai-workspace`}
-              className="text-[11px] text-stone-400 hover:text-stone-600 underline-offset-4 hover:underline"
-              data-testid="training-editor-ai-workspace-link"
-              title="Legacy AI Workspace (archive)"
+              href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}/preview-as-employee`}
+              className="btn btn-secondary btn-sm"
+              data-testid="training-editor-preview-as-employee"
+              target="_blank"
+              rel="noopener"
             >
-              Legacy AI workspace
+              Preview as employee →
             </Link>
           )}
           <span className={

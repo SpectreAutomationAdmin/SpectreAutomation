@@ -16496,10 +16496,19 @@ model TrainingTranscriptSegment {
   sourceOrgMismatchJson        String   @default("[]")
   uncertaintyWarning           String?
 
+  // EP-TRAIN-4Y-Q §5 (2026-11-08) — reviewer-scoped attestation for
+  // segments whose pendingReview flag(s) block the 6C-10B converter.
+  // Original transcript body / timestamps / pendingReviewJson are
+  // NEVER rewritten; attestation is additive provenance.
+  reviewerAttestedAt           DateTime?
+  reviewerAttestedByUserId     String?
+  reviewerAttestationNote      String?
+
   createdAt                    DateTime @default(now())
 
   @@unique([clubId, transcriptBuildId, segmentIndex])
   @@index([clubId, transcriptBuildId])
+  @@index([clubId, reviewerAttestedAt])
 }
 
 model TrainingGroundingProjection {

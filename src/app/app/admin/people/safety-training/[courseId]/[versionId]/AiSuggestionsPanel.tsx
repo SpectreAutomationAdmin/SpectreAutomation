@@ -1,18 +1,17 @@
-// EP-TRAIN-4Y-P §4 + §5 — AI-assisted suggestions, surfaced inline
-// in the canonical course editor so a manager never needs to open
-// the separate AI Workspace to discover what the pipeline produced.
+// EP-TRAIN-4Y-P §4+§5 + EP-TRAIN-4Y-Q §3+§4+§6+§7 — AI suggestions
+// surface inside the canonical course editor.
 //
-// Server component. Reads `TrainingTranscriptBuild`,
-// `TrainingQuestionAiGenerationRun`, and `TrainingQuestionAiDraft`
-// via Prisma. Emits state tiles + a per-draft list with direct
-// "Open review" links into the persisted-review surface — the
-// surface the lifecycle + approval service already consume.
-//
-// No mutations. No bulk approval. No promotion. The reviewer still
-// transitions each draft through the existing approval route.
+// Server component. Reads TrainingTranscriptBuild,
+// TrainingQuestionAiGenerationRun, TrainingQuestionAiDraft and (as of
+// 4Y-Q) each draft's cited TrainingTranscriptSegment rows (for the
+// per-segment `reviewerAttestedAt` fact) + the latest validation
+// errors. Hands per-draft rendering off to `AiDraftInlineActions`
+// (client component) so the manager can Attest / Revalidate /
+// Reject / Approve / Promote inline without navigating away.
 
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { AiDraftInlineActions } from "@/components/ai-training/AiDraftInlineActions";
 
 export async function AiSuggestionsPanel({
   clubId,
@@ -23,7 +22,7 @@ export async function AiSuggestionsPanel({
   readonly courseVersionId: string;
   readonly canReview: boolean;
 }): Promise<React.ReactElement> {
-  // ─── Transcript state (via the latest build for this video SHA).
+  // ─── Transcript state (latest build for this video SHA)
   const version = await prisma.trainingCourseVersion.findUnique({
     where: { id: courseVersionId },
     select: { videoSha256: true, videoDurationSec: true },
@@ -47,19 +46,30 @@ export async function AiSuggestionsPanel({
       })
     : 0;
 
-  // ─── Generation runs on this version.
+  // Available checkpoint destinations for promotion (editor-authored).
+  const checkpoints = await prisma.trainingCheckpoint.findMany({
+    where: { courseVersionId },
+    select: { id: true, atSecond: true, label: true },
+    orderBy: { atSecond: "asc" },
+  });
+  const checkpointOptions = checkpoints.map((c) => ({
+    id: c.id,
+    label: c.label ? `${c.label} · ${formatSec(c.atSecond)}` : formatSec(c.atSecond),
+  }));
+
+  // ─── Runs on this version (for the state tile).
   const runs = await prisma.trainingQuestionAiGenerationRun.findMany({
     where: { clubId, courseVersionId },
     orderBy: { requestedAt: "desc" },
+    take: 4,
     select: {
       id: true,
       executionStatus: true,
       requestedAt: true,
-      completedAt: true,
       _count: { select: { drafts: true } },
     },
-    take: 4,
   });
+  const latestRun = runs[0];
 
   // ─── Drafts attached to this version (all runs).
   const drafts = await prisma.trainingQuestionAiDraft.findMany({
@@ -79,35 +89,84 @@ export async function AiSuggestionsPanel({
     take: 60,
   });
 
-  // Group drafts by intended destination (checkpoint = has an atSec
-  // in the candidate; final = otherwise). Since the TrainingQuestionAiDraft
-  // model doesn't carry this on the row, we approximate by looking
-  // at the destination-of-promotion if available, and otherwise fall
-  // back to "proposed" counts from the generation run's plan. For
-  // discovery purposes we show by STATE first.
-  const byState = {
-    REQUIRES_HUMAN_REVIEW: drafts.filter((d) => d.state === "REQUIRES_HUMAN_REVIEW"),
-    APPROVED_DRAFT: drafts.filter((d) => d.state === "APPROVED_DRAFT"),
-    REJECTED: drafts.filter((d) => d.state === "REJECTED"),
-    EDITED_VALIDATION_STALE: drafts.filter((d) => d.state === "EDITED_VALIDATION_STALE"),
-    OTHER: drafts.filter(
-      (d) =>
-        ![
-          "REQUIRES_HUMAN_REVIEW",
-          "APPROVED_DRAFT",
-          "REJECTED",
-          "EDITED_VALIDATION_STALE",
-        ].includes(d.state),
-    ),
-  };
-
+  // Aggregate counts by state.
   const totalDrafts = drafts.length;
   const projectionBound = drafts.filter((d) => d.groundingProjectionId !== null).length;
   const validatedCount = drafts.filter((d) => d._count.validations > 0).length;
   const promotedCount = drafts.filter((d) => d.promotion !== null).length;
+  const byState = {
+    REQUIRES_HUMAN_REVIEW: drafts.filter((d) => d.state === "REQUIRES_HUMAN_REVIEW"),
+    APPROVED_DRAFT: drafts.filter((d) => d.state === "APPROVED_DRAFT"),
+    REJECTED: drafts.filter((d) => d.state === "REJECTED"),
+  };
 
-  const latestRun = runs[0];
-  const transcriptReady = latestBuild !== null;
+  // ─── For each actionable draft, resolve cited segments + latest
+  //     validation errors. We fetch these in parallel batches so the
+  //     editor's SSR render time stays bounded even on 48+ drafts.
+  const actionable = drafts
+    .filter(
+      (d) =>
+        d.state === "REQUIRES_HUMAN_REVIEW" ||
+        d.state === "APPROVED_DRAFT" ||
+        d.state === "REJECTED",
+    )
+    .slice(0, 30); // cap so SSR doesn't balloon; "see more" link below for the full queue
+  const actionableData = await Promise.all(
+    actionable.map(async (d) => {
+      const body = tryParseBody(d.draftJson);
+      const sourceSegmentIds: number[] = Array.isArray(body?.sourceSegmentIds)
+        ? body.sourceSegmentIds.filter((n: unknown) => typeof n === "number")
+        : [];
+      const [citedSegmentRows, latestValidation] = await Promise.all([
+        latestBuild
+          ? prisma.trainingTranscriptSegment.findMany({
+              where: {
+                clubId,
+                transcriptBuildId: latestBuild.id,
+                segmentIndex: { in: sourceSegmentIds },
+              },
+              select: {
+                id: true,
+                segmentIndex: true,
+                text: true,
+                reviewerAttestedAt: true,
+              },
+              orderBy: { segmentIndex: "asc" },
+            })
+          : Promise.resolve([]),
+        prisma.trainingQuestionAiValidation.findFirst({
+          where: { draftId: d.id, clubId },
+          orderBy: { createdAt: "desc" },
+          select: { verdict: true, errorsJson: true },
+        }),
+      ]);
+      let latestValidationErrors: { code: string; message: string }[] = [];
+      try {
+        const parsed = JSON.parse(latestValidation?.errorsJson ?? "[]");
+        if (Array.isArray(parsed)) {
+          latestValidationErrors = parsed
+            .filter((e) => typeof e?.code === "string")
+            .map((e) => ({
+              code: String(e.code),
+              message: typeof e.message === "string" ? e.message : "",
+            }));
+        }
+      } catch {}
+      return {
+        draft: d,
+        body,
+        sourceSegmentIds,
+        citedSegmentRows: citedSegmentRows.map((s) => ({
+          id: s.id,
+          segmentIndex: s.segmentIndex,
+          text: s.text.slice(0, 200),
+          reviewerAttestedAt: s.reviewerAttestedAt?.toISOString() ?? null,
+        })),
+        latestVerdict: latestValidation?.verdict ?? null,
+        latestValidationErrors,
+      };
+    }),
+  );
 
   return (
     <section
@@ -125,12 +184,8 @@ export async function AiSuggestionsPanel({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <StateTile
           label="Transcript"
-          value={
-            transcriptReady
-              ? `READY · ${segmentCount} segments`
-              : "Not yet transcribed"
-          }
-          tone={transcriptReady ? "emerald" : "stone"}
+          value={latestBuild ? `READY · ${segmentCount} segments` : "Not yet transcribed"}
+          tone={latestBuild ? "emerald" : "stone"}
           sub={
             latestBuild
               ? `${latestBuild.transcriberName ?? "transcriber"} · ${formatDate(latestBuild.producedAt)}`
@@ -167,11 +222,7 @@ export async function AiSuggestionsPanel({
               ? "emerald"
               : "amber"
           }
-          sub={
-            promotedCount > 0
-              ? `${promotedCount} promoted into the course`
-              : "No draft promoted yet"
-          }
+          sub={promotedCount > 0 ? `${promotedCount} promoted into the course` : "No draft promoted yet"}
         />
       </div>
 
@@ -183,61 +234,42 @@ export async function AiSuggestionsPanel({
         </p>
       )}
 
-      {byState.REQUIRES_HUMAN_REVIEW.length > 0 && canReview && (
-        <details className="group" open={false} data-testid="training-editor-ai-pending-list">
-          <summary className="cursor-pointer text-sm text-stone-800 hover:text-club-ink">
-            Review {byState.REQUIRES_HUMAN_REVIEW.length} pending AI-generated question
-            {byState.REQUIRES_HUMAN_REVIEW.length === 1 ? "" : "s"}
-          </summary>
-          <ul className="mt-3 space-y-2">
-            {byState.REQUIRES_HUMAN_REVIEW.slice(0, 20).map((d) => {
-              let preview = "";
-              try {
-                const body = JSON.parse(d.draftJson);
-                preview =
-                  typeof body.questionText === "string"
-                    ? body.questionText.replace(/\s+/g, " ").slice(0, 110) + "…"
-                    : "";
-              } catch {}
-              return (
-                <li
-                  key={d.id}
-                  className="flex items-start justify-between gap-3 rounded border border-stone-200 p-3"
-                  data-testid={`training-editor-ai-draft-row-${d.id}`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-stone-800 truncate">{preview || "(no preview)"}</p>
-                    <p className="mt-1 text-xs text-stone-500 font-mono">
-                      hash {d.contentHash.slice(0, 10)}… ·{" "}
-                      {d.groundingProjectionId ? "projection bound" : "projection missing"} ·{" "}
-                      {d._count.validations > 0 ? "validated" : "unvalidated"}
-                    </p>
-                  </div>
-                  <Link
-                    href={`/app/admin/ai-training/review/persisted?candidate=${d.id}`}
-                    className="btn btn-secondary btn-sm shrink-0"
-                    data-testid={`training-editor-ai-open-review-${d.id}`}
-                  >
-                    Open review
-                  </Link>
-                </li>
-              );
-            })}
-            {byState.REQUIRES_HUMAN_REVIEW.length > 20 && (
-              <li className="text-xs text-stone-500">
-                + {byState.REQUIRES_HUMAN_REVIEW.length - 20} more …
-              </li>
-            )}
-          </ul>
-        </details>
-      )}
-
-      {byState.APPROVED_DRAFT.length > 0 && (
-        <p className="text-xs text-emerald-700">
-          {byState.APPROVED_DRAFT.length} approved draft
-          {byState.APPROVED_DRAFT.length === 1 ? "" : "s"} are ready to promote into the active
-          course below.
-        </p>
+      {/* EP-TRAIN-4Y-Q §3+§4 — inline action rows per draft */}
+      {actionable.length > 0 && (
+        <div className="space-y-2" data-testid="training-editor-ai-inline-rows">
+          <p className="text-[11px] uppercase tracking-widest text-stone-500">
+            Review actions · attest → revalidate → approve → promote
+          </p>
+          {actionableData.map(({ draft, body, sourceSegmentIds, citedSegmentRows, latestVerdict, latestValidationErrors }) => (
+            <AiDraftInlineActions
+              key={draft.id}
+              draftId={draft.id}
+              contentHash={draft.contentHash}
+              state={draft.state}
+              questionText={extractFirstSentence(body?.questionText) || "(no question text)"}
+              options={Array.isArray(body?.options) ? body.options.slice(0, 4) : []}
+              explanation={typeof body?.explanation === "string" ? body.explanation : ""}
+              sourceSegmentIds={sourceSegmentIds}
+              citedSegmentRows={citedSegmentRows}
+              latestVerdict={latestVerdict}
+              latestValidationErrors={latestValidationErrors}
+              checkpointOptions={checkpointOptions}
+              reviewUrl={`/app/admin/ai-training/review/persisted?candidate=${draft.id}`}
+            />
+          ))}
+          {actionable.length < byState.REQUIRES_HUMAN_REVIEW.length + byState.APPROVED_DRAFT.length + byState.REJECTED.length && (
+            <p className="text-[11px] text-stone-500">
+              Showing first {actionable.length}. Total pending {byState.REQUIRES_HUMAN_REVIEW.length} ·
+              approved {byState.APPROVED_DRAFT.length} · rejected {byState.REJECTED.length}.
+              <Link
+                href="/app/admin/ai-training/review/persisted"
+                className="ml-2 underline underline-offset-4"
+              >
+                Full queue
+              </Link>
+            </p>
+          )}
+        </div>
       )}
     </section>
   );
@@ -267,6 +299,27 @@ function StateTile({
       {sub && <p className="mt-1 text-[11px] text-stone-500 truncate">{sub}</p>}
     </div>
   );
+}
+
+function tryParseBody(j: string): any | null {
+  try {
+    return JSON.parse(j);
+  } catch {
+    return null;
+  }
+}
+
+function extractFirstSentence(s: string | undefined | null): string {
+  if (!s || typeof s !== "string") return "";
+  const idx = s.search(/[.?!]\s/);
+  const head = idx > 0 ? s.slice(0, idx + 1) : s;
+  return head.replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function formatSec(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function formatDate(d: Date | null | undefined): string {
