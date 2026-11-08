@@ -29,7 +29,7 @@
 
 import { createHash } from "node:crypto";
 
-export const DEDUP_RULES_VERSION = "dedup-v1" as const;
+export const DEDUP_RULES_VERSION = "dedup-v2" as const;
 
 export const EXACT_SHINGLE = 1.0;
 // PARAPHRASE_SHINGLE applies to the multi-shingle Jaccard (1+2+3-grams
@@ -42,6 +42,23 @@ export const PARAPHRASE_OPTION_OVERLAP = 0.5;
 export const PARAPHRASE_ANSWER_OVERLAP = 0.6;
 export const PARAPHRASE_EXPLANATION = 0.5;
 export const TOPIC_CANDIDATE_SHINGLE = 0.3;
+
+// EP-TRAIN-4Y-N (2026-11-08) — grounded near-duplicate rule.
+// Two drafts citing overlapping transcript segments AND whose
+// correct-answer / explanation / shingle signal overlaps non-trivially
+// are flagged as TOPIC_CANDIDATE even when the shingle alone would
+// return DISTINCT (as happened with 4Y-M draft 1 vs draft 2 — both
+// cited segment [4] with "last 4 digits of SIN" but shingle was only
+// 0.23 because the first draft embedded the options in questionText).
+//
+// Requires the candidate to supply `sourceSegmentIds`. When absent
+// (legacy priors from pre-4Y-N runs that didn't track this field),
+// the rule is silently inactive and the original shingle-based
+// classifier applies.
+export const GROUNDED_SEGMENT_OVERLAP = 0.5;
+export const GROUNDED_SUPPORTING_ANSWER = 0.4;
+export const GROUNDED_SUPPORTING_EXPLANATION = 0.4;
+export const GROUNDED_SUPPORTING_SHINGLE = 0.15;
 
 export type DedupVerdict =
   | "EXACT_DUP"
@@ -56,6 +73,10 @@ export interface DuplicateSignalEvidence {
   readonly answerTokenJaccard: number;
   readonly explanationJaccard: number;
   readonly sharedTokens: readonly string[];
+  /** EP-TRAIN-4Y-N (2026-11-08) — Jaccard of cited sourceSegmentIds
+   *  between the candidate and the prior. 0 when either side omits
+   *  the field (legacy priors). */
+  readonly sourceSegmentJaccard: number;
 }
 
 export interface QuestionCandidate {
@@ -64,6 +85,10 @@ export interface QuestionCandidate {
   readonly options: readonly { readonly text: string; readonly isCorrect: boolean }[];
   readonly explanation?: string;
   readonly destination?: string; // "cp-cg-1" / "final" — crosses are decisions
+  /** EP-TRAIN-4Y-N (2026-11-08) — citations into the transcript.
+   *  Used by the grounded near-duplicate rule. Optional for
+   *  backward-compatibility with legacy persisted candidates. */
+  readonly sourceSegmentIds?: readonly number[];
 }
 
 export interface DedupDecision {
@@ -138,7 +163,7 @@ export function multiShingles(text: string): Set<string> {
   return out;
 }
 
-function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+function jaccard<T>(a: ReadonlySet<T>, b: ReadonlySet<T>): number {
   if (a.size === 0 && b.size === 0) return 1;
   let inter = 0;
   for (const x of a) if (b.has(x)) inter++;
@@ -188,6 +213,14 @@ export function evaluatePair(
 
   const shared = sharedTokenList(candShingles, priShingles);
 
+  // EP-TRAIN-4Y-N — cited-segment Jaccard. Inactive when either side
+  // omits the field (pre-4Y-N persisted drafts don't carry the field).
+  const candSegs = new Set<number>(candidate.sourceSegmentIds ?? []);
+  const priSegs = new Set<number>(prior.sourceSegmentIds ?? []);
+  const sourceSegmentJaccard = (candSegs.size > 0 && priSegs.size > 0)
+    ? jaccard(candSegs, priSegs)
+    : 0;
+
   let verdict: DedupVerdict = "DISTINCT";
   let explanation = "";
 
@@ -207,9 +240,23 @@ export function evaluatePair(
   } else if (shingleScore >= TOPIC_CANDIDATE_SHINGLE) {
     verdict = "TOPIC_CANDIDATE";
     explanation = `shingle ${shingleScore.toFixed(2)} within topic-candidate band (${TOPIC_CANDIDATE_SHINGLE}–${PARAPHRASE_SHINGLE})`;
+  } else if (
+    // EP-TRAIN-4Y-N grounded near-duplicate — conservative: requires
+    // overlapping cited evidence AND at least one supporting signal.
+    sourceSegmentJaccard >= GROUNDED_SEGMENT_OVERLAP &&
+    (answerScore >= GROUNDED_SUPPORTING_ANSWER ||
+     explanationScore >= GROUNDED_SUPPORTING_EXPLANATION ||
+     shingleScore >= GROUNDED_SUPPORTING_SHINGLE)
+  ) {
+    verdict = "TOPIC_CANDIDATE";
+    const reasons: string[] = [`cited-segment Jaccard ${sourceSegmentJaccard.toFixed(2)} ≥ ${GROUNDED_SEGMENT_OVERLAP}`];
+    if (answerScore >= GROUNDED_SUPPORTING_ANSWER) reasons.push(`+ correct-answer ${answerScore.toFixed(2)} ≥ ${GROUNDED_SUPPORTING_ANSWER}`);
+    if (explanationScore >= GROUNDED_SUPPORTING_EXPLANATION) reasons.push(`+ explanation ${explanationScore.toFixed(2)} ≥ ${GROUNDED_SUPPORTING_EXPLANATION}`);
+    if (shingleScore >= GROUNDED_SUPPORTING_SHINGLE) reasons.push(`+ shingle ${shingleScore.toFixed(2)} ≥ ${GROUNDED_SUPPORTING_SHINGLE}`);
+    explanation = `grounded near-duplicate: ${reasons.join(" ")}`;
   } else {
     verdict = "DISTINCT";
-    explanation = `shingle ${shingleScore.toFixed(2)} below topic threshold ${TOPIC_CANDIDATE_SHINGLE}`;
+    explanation = `shingle ${shingleScore.toFixed(2)} below topic threshold ${TOPIC_CANDIDATE_SHINGLE}; cited-segment overlap ${sourceSegmentJaccard.toFixed(2)}`;
   }
 
   return {
@@ -224,6 +271,7 @@ export function evaluatePair(
       answerTokenJaccard: Math.round(answerScore * 1000) / 1000,
       explanationJaccard: Math.round(explanationScore * 1000) / 1000,
       sharedTokens: shared,
+      sourceSegmentJaccard: Math.round(sourceSegmentJaccard * 1000) / 1000,
     },
     explanation,
   };
@@ -255,6 +303,7 @@ export function evaluateAgainstPriors(
         shingleJaccard: 0, optionJaccard: 0,
         answerTokenJaccard: 0, explanationJaccard: 0,
         sharedTokens: [],
+        sourceSegmentJaccard: 0,
       },
       explanation: "no prior questions to compare against",
     };

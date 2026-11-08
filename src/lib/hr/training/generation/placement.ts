@@ -309,6 +309,7 @@ export function buildTopicAwareAssessmentPlan(
         },
         generatedAt: (input.now ?? new Date()).toISOString(),
         generatedByUserId: input.generatedByUserId ?? null,
+        generationPromptContract: "ctx-v1",
       },
       boundaries: [],
       shortfalls,
@@ -403,6 +404,11 @@ export function buildTopicAwareAssessmentPlan(
     },
     generatedAt: (input.now ?? new Date()).toISOString(),
     generatedByUserId: input.generatedByUserId ?? null,
+    // EP-TRAIN-4Y-N (2026-11-08) — mark this plan as targeting the
+    // context-aware worker prompt contract. The worker reads this
+    // field to switch to per-checkpoint LO + windowed-transcript
+    // prompt construction.
+    generationPromptContract: "ctx-v1",
   };
 
   return {

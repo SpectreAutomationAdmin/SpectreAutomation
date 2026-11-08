@@ -23,8 +23,8 @@ function q(text: string, correct: string, others: string[] = ["Wrong A", "Wrong 
 }
 
 describe("EP-TRAIN-6D-4X — dedup rules version", () => {
-  it("exports a stable rules version string", () => {
-    expect(DEDUP_RULES_VERSION).toBe("dedup-v1");
+  it("exports a stable rules version string (EP-TRAIN-4Y-N bumped to dedup-v2)", () => {
+    expect(DEDUP_RULES_VERSION).toBe("dedup-v2");
   });
 });
 

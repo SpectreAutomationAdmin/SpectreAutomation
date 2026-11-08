@@ -52,6 +52,21 @@ export interface AssessmentPlanFinalAssessment {
   readonly coverageLearningObjectiveIds: readonly string[];
 }
 
+/** EP-TRAIN-4Y-N (2026-11-08) — worker-side prompt construction
+ *  contract this plan was BUILT to drive. The value is participating
+ *  in `planIdentityHash` (via canonicalise of the whole plan), so
+ *  bumping it produces a new plan hash and allows a new generation
+ *  run against the same (clubId, courseVersionId, transcriptBuild).
+ *
+ *  - omitted / undefined (legacy / pre-4Y-N)       → worker uses
+ *    the flat per-group prompt (`buildSystemPrompt(kind, target)`);
+ *    this is what the 4Y-M pilot ran on.
+ *  - "ctx-v1"                                      → worker builds
+ *    a per-checkpoint context-aware prompt (LO title + checkpoint
+ *    timestamp + windowed transcript + prior-topic-avoidance hints)
+ *    and a separate course-level final-assessment prompt. */
+export type GenerationPromptContract = "ctx-v1";
+
 export interface AssessmentPlanV1 {
   readonly schemaVersion: typeof ASSESSMENT_PLAN_SCHEMA_VERSION;
   readonly courseVersionId: string;
@@ -69,6 +84,7 @@ export interface AssessmentPlanV1 {
   };
   readonly generatedAt: string;
   readonly generatedByUserId: string | null;
+  readonly generationPromptContract?: GenerationPromptContract;
 }
 
 // ─── Validator ──────────────────────────────────────────────────────
@@ -327,6 +343,8 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     },
     generatedAt: (input.now ?? new Date()).toISOString(),
     generatedByUserId: input.generatedByUserId ?? null,
+    // EP-TRAIN-4Y-N (2026-11-08) — see GenerationPromptContract.
+    generationPromptContract: "ctx-v1",
   };
   return plan;
 }

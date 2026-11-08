@@ -79,14 +79,21 @@ export interface HandlerDeps {
   readonly fetchImpl?: typeof fetch;
   readonly env?: NodeJS.ProcessEnv;
   readonly prisma?: PrismaClient;
-  /** Returns the raw segment text for citing. Tenant-scoped at the
-   *  caller. Injected so tests can supply synthetic transcripts
-   *  without a DB round-trip. */
+  /** Returns the raw segment text + timing for citing. Tenant-scoped
+   *  at the caller. Injected so tests can supply synthetic transcripts
+   *  without a DB round-trip. `startSec` + `endSec` enable the 4Y-N
+   *  per-checkpoint windowing (checkpoint questions must assess only
+   *  content shown before their `atSec`). */
   readonly loadTranscriptSegments?: (args: {
     readonly clubId: string;
     readonly resolvedTranscriptBuildId: string;
     readonly segmentIndices: readonly number[];
-  }) => Promise<readonly { readonly segmentIndex: number; readonly text: string }[]>;
+  }) => Promise<readonly {
+    readonly segmentIndex: number;
+    readonly text: string;
+    readonly startSec: number;
+    readonly endSec: number;
+  }[]>;
 }
 
 export async function handleGenerateJob(
@@ -115,8 +122,10 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
 
-  // Load transcript texts (citeable).
-  let segments: readonly { segmentIndex: number; text: string }[];
+  // Load transcript texts + timing (citeable). EP-TRAIN-4Y-N adds
+  // `startSec`/`endSec` so the per-checkpoint windowing can filter
+  // out content shown AFTER the checkpoint moment.
+  let segments: readonly { segmentIndex: number; text: string; startSec: number; endSec: number }[];
   try {
     const loader = deps.loadTranscriptSegments ?? defaultLoadSegments(db);
     segments = await loader({
@@ -133,15 +142,60 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
 
-  // Build transcript representation for the prompt. Filter with the
-  // full worker exclusion set (plan-level + runtime grounding hygiene)
-  // so Whisper duplication + end-of-video hallucination don't reach
-  // the model.
-  const transcriptText = segments
+  // Filter segments to the worker exclusion set (plan-level +
+  // runtime grounding hygiene) so Whisper duplication + end-of-video
+  // hallucination don't reach the model.
+  const eligibleSegments = [...segments]
     .filter((s) => !WORKER_EXCLUDED_SEGMENT_INDICES.has(s.segmentIndex))
-    .sort((a, b) => a.segmentIndex - b.segmentIndex)
+    .sort((a, b) => a.segmentIndex - b.segmentIndex);
+
+  // Full-course transcript text — used by FINAL_ASSESSMENT groups and
+  // (for legacy / non-ctx-v1 plans) all groups.
+  const fullTranscriptText = eligibleSegments
     .map((s) => `[${s.segmentIndex}] ${s.text}`)
     .join("\n");
+
+  // EP-TRAIN-4Y-N (2026-11-08) — context-aware prompt contract.
+  // When the plan declares `generationPromptContract: "ctx-v1"`, the
+  // worker produces per-checkpoint windowed transcripts + per-group
+  // system prompts referencing the LO + checkpoint timestamp.
+  const useCtxV1 = plan.generationPromptContract === "ctx-v1";
+  const loById = new Map(plan.learningObjectives.map((lo) => [lo.id, lo]));
+  const sortedCheckpoints = [...plan.proposedCheckpointGroups].sort((a, b) => a.atSec - b.atSec);
+  const checkpointOrderIndex = new Map<string, number>(
+    sortedCheckpoints.map((g, i) => [g.id, i]),
+  );
+  const videoEndSec = eligibleSegments.length > 0
+    ? Math.max(...eligibleSegments.map((s) => s.endSec))
+    : 0;
+
+  function windowForCheckpoint(cgId: string, atSec: number): typeof eligibleSegments {
+    // Window = segments whose endSec ≤ atSec (fully shown before
+    // the checkpoint). Lower bound = the prior checkpoint's atSec
+    // (so each checkpoint focuses on NEW material); first checkpoint
+    // uses 0.
+    const idx = checkpointOrderIndex.get(cgId) ?? 0;
+    const lowerSec = idx > 0 ? sortedCheckpoints[idx - 1].atSec : 0;
+    return eligibleSegments.filter(
+      (s) => s.startSec >= lowerSec && s.endSec <= atSec,
+    );
+  }
+
+  function windowTextFor(window: typeof eligibleSegments): string {
+    return window.map((s) => `[${s.segmentIndex}] ${s.text}`).join("\n");
+  }
+
+  function priorTopicHints(drafts: typeof generatedDrafts, max = 12): string[] {
+    // Compact hints: first 10 words of each prior question text,
+    // bounded to the last `max` entries so the prompt doesn't balloon
+    // on a long plan.
+    const recent = drafts.slice(-max);
+    return recent.map((d) => {
+      const first10 = d.draft.questionText.trim().split(/\s+/).slice(0, 10).join(" ");
+      return `• "${first10}${first10.length < d.draft.questionText.length ? "…" : ""}"`;
+    });
+  }
+
 
   // Iterate plan groups (checkpoints + final).
   const generatedDrafts: {
@@ -164,22 +218,29 @@ export async function handleGenerateJob(
   let totalPromptTokens = 0;
   let totalOutputTokens = 0;
 
+  // Preserve the full checkpoint-group data (LO ids, atSec) and
+  // compose it with resolved LO + windowed transcript at prompt
+  // time. The FINAL_ASSESSMENT group carries the course-wide LO
+  // coverage from the plan.
   const groups: {
     id: string;
     kind: "CHECKPOINT" | "FINAL_ASSESSMENT";
     target: number;
     atSec?: number;
+    learningObjectiveIds: readonly string[];
   }[] = [
     ...plan.proposedCheckpointGroups.map((g) => ({
       id: g.id,
       kind: "CHECKPOINT" as const,
       target: g.targetQuestionCount,
       atSec: g.atSec,
+      learningObjectiveIds: g.learningObjectiveIds,
     })),
     {
       id: "final",
       kind: "FINAL_ASSESSMENT" as const,
       target: plan.proposedFinalAssessment.targetQuestionCount,
+      learningObjectiveIds: plan.proposedFinalAssessment.coverageLearningObjectiveIds,
     },
   ];
 
@@ -230,13 +291,51 @@ export async function handleGenerateJob(
         fingerprintSecret,
       });
 
+      // EP-TRAIN-4Y-N (2026-11-08) — build the per-group prompt + the
+      // transcript window the model sees, based on the plan's
+      // generation-prompt contract.
+      let systemPromptForGroup: string;
+      let transcriptForGroup: string;
+      let windowSegmentIds: readonly number[] = plan.eligibleSegmentIds;
+      if (useCtxV1 && g.kind === "CHECKPOINT" && typeof g.atSec === "number") {
+        const window = windowForCheckpoint(g.id, g.atSec);
+        windowSegmentIds = window.map((s) => s.segmentIndex);
+        const los = g.learningObjectiveIds
+          .map((id) => loById.get(id))
+          .filter((lo): lo is NonNullable<typeof lo> => lo !== undefined);
+        systemPromptForGroup = buildCheckpointSystemPromptCtxV1({
+          atSec: g.atSec,
+          target: g.target,
+          los: los.map((lo) => ({ id: lo.id, title: lo.title })),
+          windowSegmentIds,
+          videoEndSec,
+          priorTopics: priorTopicHints(generatedDrafts),
+        });
+        transcriptForGroup = window.length > 0 ? windowTextFor(window) : fullTranscriptText;
+      } else if (useCtxV1 && g.kind === "FINAL_ASSESSMENT") {
+        const los = g.learningObjectiveIds
+          .map((id) => loById.get(id))
+          .filter((lo): lo is NonNullable<typeof lo> => lo !== undefined);
+        systemPromptForGroup = buildFinalSystemPromptCtxV1({
+          target: g.target,
+          los: los.map((lo) => ({ id: lo.id, title: lo.title })),
+          videoEndSec,
+          priorTopics: priorTopicHints(generatedDrafts),
+        });
+        transcriptForGroup = fullTranscriptText;
+      } else {
+        // Legacy (pre-4Y-N) path — kept behaviourally identical.
+        systemPromptForGroup = buildSystemPrompt(g.kind, g.target);
+        transcriptForGroup = fullTranscriptText;
+      }
+
       const modalResponse = await callModalGenerate(
         {
           requestId: groupRequestId,
           pilotAuthorization: pilotAuth,
           modelVariant: "qwen-2.5-7b-instruct-awq",
-          systemPrompt: buildSystemPrompt(g.kind, g.target),
-          transcript: transcriptText,
+          systemPrompt: systemPromptForGroup,
+          transcript: transcriptForGroup,
           constraints: {
             proposalKind: g.kind === "CHECKPOINT" ? "QUESTION_CHECKPOINT_BOUND" : "QUESTION_FINAL_ASSESSMENT",
             maxQuestions: g.target,
@@ -275,13 +374,16 @@ export async function handleGenerateJob(
         const candidateContentHash = sha256Hex(canonicalise(canonicalBody));
 
         // Dedup against EVERY previously-kept candidate across all
-        // groups (checkpoints + final) in this plan.
+        // groups (checkpoints + final) in this plan. EP-TRAIN-4Y-N:
+        // `sourceSegmentIds` participates in the grounded near-dup
+        // rule inside `evaluatePair`.
         const priors: QuestionCandidate[] = generatedDrafts.map((gd) => ({
           id: gd.contentHash,
           questionText: gd.draft.questionText,
           options: gd.draft.options,
           explanation: gd.draft.explanation,
           destination: gd.group,
+          sourceSegmentIds: gd.draft.sourceSegmentIds,
         }));
         const candidate: QuestionCandidate = {
           id: candidateContentHash,
@@ -289,6 +391,7 @@ export async function handleGenerateJob(
           options: p.options,
           explanation: p.explanation,
           destination: g.id,
+          sourceSegmentIds: p.sourceSegmentIds,
         };
         const decision = evaluateAgainstPriors(candidate, priors);
 
@@ -439,12 +542,92 @@ export async function handleGenerateJob(
   }
 }
 
+function formatTimestamp(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 function buildSystemPrompt(kind: "CHECKPOINT" | "FINAL_ASSESSMENT", target: number): string {
-  // Deterministic prompt — keeps tests stable + avoids LLM drift.
+  // Legacy prompt (pre-4Y-N) — kept for plans that don't declare
+  // `generationPromptContract: "ctx-v1"`. Deterministic, stable,
+  // identical per group; this was what produced the 32 duplicate
+  // checkpoint questions in 4Y-M. New plans use the ctx-v1
+  // branches below.
   if (kind === "CHECKPOINT") {
     return `You are a training-content authoring assistant. Produce up to ${target} multiple-choice questions suitable for a mid-video knowledge checkpoint. Cite only the transcript segments provided. Do NOT invent facts. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Each question MUST cite at least one transcript segment id.`;
   }
   return `You are a training-content authoring assistant. Produce up to ${target} multiple-choice questions suitable for the final course assessment. Cite only the transcript segments provided. Do NOT invent facts. Each question MUST cite at least one transcript segment id.`;
+}
+
+/** EP-TRAIN-4Y-N (2026-11-08) — context-aware checkpoint prompt.
+ *  Exported for offline fixture tests. */
+export function buildCheckpointSystemPromptCtxV1(args: {
+  readonly atSec: number;
+  readonly target: number;
+  readonly los: readonly { readonly id: string; readonly title: string }[];
+  readonly windowSegmentIds: readonly number[];
+  readonly videoEndSec: number;
+  readonly priorTopics: readonly string[];
+}): string {
+  const atStr = formatTimestamp(args.atSec);
+  const totalStr = formatTimestamp(args.videoEndSec);
+  const loLines = args.los.length > 0
+    ? args.los.map((lo) => `  • ${lo.title}`).join("\n")
+    : "  • (none assigned for this checkpoint)";
+  const windowStr = args.windowSegmentIds.length > 0
+    ? `[${args.windowSegmentIds.join(", ")}]`
+    : "(empty)";
+  const priorBlock = args.priorTopics.length > 0
+    ? `\n7. The following question topics have ALREADY been generated for earlier checkpoints — do NOT ask a question that duplicates or paraphrases any of these:\n${args.priorTopics.join("\n")}`
+    : "";
+  return `You are a training-content authoring assistant for Spectre, a training platform used by private golf and country clubs.
+
+Produce up to ${args.target} multiple-choice question${args.target === 1 ? "" : "s"} for a mid-video knowledge checkpoint placed at ${atStr} into a ${totalStr} training video.
+
+Checkpoint learning objective${args.los.length === 1 ? "" : "s"}:
+${loLines}
+
+Evidence window — the transcript segments shown BEFORE this checkpoint moment, which are the ONLY content the employee has seen so far:
+  segment ids: ${windowStr}
+
+Constraints:
+1. Assess ONLY material covered in the evidence window. Do NOT ask about anything later in the course that the employee has not yet watched.
+2. Each question MUST cite at least one transcript segment id that appears in the evidence window.
+3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim.
+4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
+5. Keep the question focused on the LISTED learning objective(s), not peripheral content.
+6. Prefer a question that tests APPLICATION or JUDGMENT (what should the employee do?) over bare recall when the source material supports it.${priorBlock}`;
+}
+
+/** EP-TRAIN-4Y-N (2026-11-08) — context-aware final-assessment prompt.
+ *  Exported for offline fixture tests. */
+export function buildFinalSystemPromptCtxV1(args: {
+  readonly target: number;
+  readonly los: readonly { readonly id: string; readonly title: string }[];
+  readonly videoEndSec: number;
+  readonly priorTopics: readonly string[];
+}): string {
+  const totalStr = formatTimestamp(args.videoEndSec);
+  const loLines = args.los.length > 0
+    ? args.los.map((lo) => `  • ${lo.title}`).join("\n")
+    : "  • (none)";
+  const priorBlock = args.priorTopics.length > 0
+    ? `\n6. The following question topics have ALREADY been generated for earlier checkpoints. You MAY reinforce an important concept ONLY if your question tests a meaningfully different application or decision; do NOT verbatim-restate or paraphrase any of these:\n${args.priorTopics.join("\n")}`
+    : "";
+  return `You are a training-content authoring assistant for Spectre, a training platform used by private golf and country clubs.
+
+Produce up to ${args.target} multiple-choice question${args.target === 1 ? "" : "s"} for the FINAL assessment of a ${totalStr} training course. Final-assessment questions sit at the END of the course after the employee has watched all content.
+
+Course-level coverage learning objectives:
+${loLines}
+
+Constraints:
+1. Prioritize important POLICIES, PROCEDURES, and EMPLOYEE DECISIONS the learner must retain after training — not trivia.
+2. Each question MUST cite at least one transcript segment id from the full course transcript provided.
+3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Diverse question types are encouraged across the final-assessment set.
+4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
+5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.${priorBlock}`;
 }
 
 async function safeFail(
@@ -495,9 +678,15 @@ function defaultLoadSegments(db: PrismaClient) {
         transcriptBuildId: build.id,
         segmentIndex: { in: [...args.segmentIndices] },
       },
-      select: { segmentIndex: true, text: true },
+      select: { segmentIndex: true, text: true, startSec: true, endSec: true },
       orderBy: [{ segmentIndex: "asc" }],
     });
-    return rows;
+    // Decimal → number for the handler's segment-window arithmetic.
+    return rows.map(r => ({
+      segmentIndex: r.segmentIndex,
+      text: r.text,
+      startSec: Number(r.startSec),
+      endSec: Number(r.endSec),
+    }));
   };
 }
