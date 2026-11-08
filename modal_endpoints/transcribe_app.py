@@ -56,6 +56,13 @@ image = (
         "av>=12",
         "fastapi>=0.110",
         "huggingface-hub>=0.24",
+        # EP-TRAIN-4Y-I §4 fix — faster-whisper 1.0.3's utils.py imports
+        # `requests`, but the package does not declare it as a direct dep.
+        # Pre-fix: container boot raised ModuleNotFoundError at
+        # `@modal.enter()` → task hit 120s timeout → signed 500 →
+        # worker couldn't record FAILED (pre-existing P2002 on terminal
+        # slot) → job stuck.
+        "requests>=2.31",
     )
 )
 
@@ -164,12 +171,13 @@ def _audio_passthrough(data: bytes) -> bytes:
     image=image,
     secrets=secrets,
     timeout=120,
-    # EP-TRAIN-4Y-F §3 — Gate 1 default. Removing this env entry (and
-    # redeploying) activates Gate 2 live inference. The ASGI handler
-    # checks this env var BEFORE calling .remote(), so the GPU
-    # container NEVER boots during Gate 1 — the no-inference gate is
-    # enforced at the CPU boundary, not inside the GPU container.
-    env={"SPECTRE_GATE_1_NO_INFERENCE": "1"},
+    # EP-TRAIN-4Y-G §3 — Gate 2 activation.
+    # The `env={"SPECTRE_GATE_1_NO_INFERENCE": "1"}` line was removed
+    # on 2026-11-07 to activate live inference under founder-authorized
+    # Gate 2. The CPU-boundary guard (`_run_whisper` check) still works
+    # if the env var is ever re-set externally — set
+    # `SPECTRE_GATE_1_NO_INFERENCE=1` via `modal secret create` + redeploy
+    # to re-enter Gate 1 mode without a code change.
 )
 @modal.asgi_app()
 def api():
