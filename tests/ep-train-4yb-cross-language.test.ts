@@ -103,7 +103,7 @@ function fromB64(s: string): Buffer {
 
 describe("EP-TRAIN-4Y-B-VERIFY §4 — cross-language vectors (TypeScript)", () => {
   it("fixture is the versioned one this test is pinned against", () => {
-    expect(fixture.fixtureVersion).toBe("4yb-verify-v1");
+    expect(fixture.fixtureVersion).toBe("4yk-v1");
     expect(fixture.contractVersion).toBe(CONTRACT_VERSION);
   });
 

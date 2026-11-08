@@ -35,7 +35,7 @@ import os
 from typing import Any
 
 
-FIXTURE_VERSION = "4yb-verify-v1"
+FIXTURE_VERSION = "4yk-v1"
 
 # Deterministic synthetic secrets — NOT production. 32 bytes each,
 # ASCII-only so the fixture file renders cleanly. DO NOT reuse these
@@ -45,12 +45,52 @@ RESPONSE_HMAC_KEY = b"test-response-hmac-key-000000000"
 FINGERPRINT_SECRET = b"test-fingerprint-secret-00000000"
 
 
+# JS Number.MAX_SAFE_INTEGER. Floats within this range whose
+# fractional part is zero stringify identically to their int form
+# across Python and JavaScript. Outside the range the two languages
+# disagree (JS has only f64; Python has unbounded int), and no
+# Whisper/Qwen field ever reaches that scale.
+_JS_SAFE_INT = (1 << 53) - 1
+
+
+def _normalise_whole_floats(value: Any) -> Any:
+    """Match production `canonicalise` (EP-TRAIN-4Y-K).
+
+    JavaScript cannot distinguish `2` from `2.0` after JSON.parse;
+    JSON.stringify emits `"2"` for both. Python's `json.dumps` emits
+    `"2.0"` for the Python float `2.0`. For a Whisper transcript
+    where a segment boundary falls on an exact second (startSec:0.0,
+    endSec:2.0, avgConfidence:1.0), the two sides' canonical output
+    diverges and the response-HMAC digest cannot agree.
+
+    The fix is to normalise float-with-zero-fractional-part to int
+    on the Python side before serialising. This mirrors the
+    production fix in `modal_endpoints/shared/auth.py`.
+
+    Any ground-truth generator used to verify PRODUCTION code must
+    apply the same normalisation, because the fixture's job is to
+    pre-compute the bytes both implementations MUST produce.
+    """
+    if isinstance(value, float):
+        if value.is_integer() and -_JS_SAFE_INT <= value <= _JS_SAFE_INT:
+            return int(value)
+        return value
+    if isinstance(value, list):
+        return [_normalise_whole_floats(x) for x in value]
+    if isinstance(value, tuple):
+        return tuple(_normalise_whole_floats(x) for x in value)
+    if isinstance(value, dict):
+        return {k: _normalise_whole_floats(v) for k, v in value.items()}
+    return value
+
+
 def canonicalise(value: Any) -> str:
-    # RFC-8785 JCS equivalent on Python stdlib. ensure_ascii=False
-    # keeps Unicode characters raw (UTF-8 encoded for hashing).
-    # allow_nan=False refuses NaN/Infinity (matches TS TypeError).
+    # RFC-8785 JCS equivalent on Python stdlib, + EP-TRAIN-4Y-K
+    # whole-float normalisation. ensure_ascii=False keeps Unicode
+    # characters raw (UTF-8 encoded for hashing). allow_nan=False
+    # refuses NaN/Infinity (matches TS TypeError).
     return json.dumps(
-        value,
+        _normalise_whole_floats(value),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -127,6 +167,61 @@ def build_canonical_vectors() -> list[dict]:
             "c13-same-content-different-input-order",
             {"c": 3, "a": 1, "b": 2},
             "same semantic content as different input key order must canonicalise identically to {'a':1,'b':2,'c':3}",
+        ),
+        # EP-TRAIN-4Y-K — whole-float normalisation. Each of these must
+        # canonicalise identically to the equivalent integer value, so
+        # a Python-signed response verifies on the TS side.
+        _canonical_vector(
+            "c14-whole-float-zero",
+            {"n": 0.0},
+            "EP-TRAIN-4Y-K: float 0.0 normalises to int 0 so Python emits `0` (matching JS)",
+        ),
+        _canonical_vector(
+            "c15-whole-float-positive",
+            {"startSec": 2.0, "endSec": 5.0},
+            "EP-TRAIN-4Y-K: whole-number float boundaries (Whisper segment edges on exact seconds) normalise to ints",
+        ),
+        _canonical_vector(
+            "c16-whole-float-clamp-endpoint",
+            {"avgConfidence": 1.0},
+            "EP-TRAIN-4Y-K: avg_logprob clamp endpoint (float 1.0) normalises to int 1",
+        ),
+        _canonical_vector(
+            "c17-non-whole-float-preserved",
+            {"startSec": 0.5, "endSec": 1.75},
+            "EP-TRAIN-4Y-K negative control: true-fractional floats are NOT normalised (0.5 stays 0.5)",
+        ),
+        _canonical_vector(
+            "c18-mixed-int-float-in-same-object",
+            {"intField": 2, "floatField": 2.5, "wholeFloatField": 2.0},
+            "EP-TRAIN-4Y-K: ints untouched, fractional floats preserved, whole floats normalised",
+        ),
+        _canonical_vector(
+            "c19-negative-whole-float",
+            {"n": -3.0},
+            "EP-TRAIN-4Y-K: negative whole floats also normalise",
+        ),
+        _canonical_vector(
+            "c20-whisper-shaped-segment",
+            {
+                "segments": [
+                    {"id": 0, "startSec": 0.0, "endSec": 2.0, "text": "hello", "avgConfidence": 1.0},
+                    {"id": 1, "startSec": 2.0, "endSec": 4.52, "text": "world", "avgConfidence": 0.93},
+                ],
+                "durationSec": 642.0,
+            },
+            "EP-TRAIN-4Y-K: representative Whisper transcript — a mix of whole-float boundaries, true-fractional floats, and ints",
+        ),
+        # Unicode robustness.
+        _canonical_vector(
+            "c21-unicode-transcript-u2028-u2029",
+            {"text": "line sep paragraph"},
+            "LINE SEPARATOR (U+2028) + PARAGRAPH SEPARATOR (U+2029) emit as raw UTF-8 on both Python json.dumps(ensure_ascii=False) and modern JS JSON.stringify (ES2019+)",
+        ),
+        _canonical_vector(
+            "c22-unicode-non-bmp-emoji",
+            {"text": "ready \U0001F600 go"},
+            "Non-BMP emoji (U+1F600) round-trips as the same 4-byte UTF-8 sequence on both sides",
         ),
     ]
 
@@ -337,6 +432,45 @@ def build_response_vectors() -> list[dict]:
         f"response-sig-v1.4yb-v1.spectre.training.generate.v1.r-vector-2.200.{body_digest}"
     ).encode("utf-8")
     signature = hmac_b64(RESPONSE_HMAC_KEY, signed_message)
+    # EP-TRAIN-4Y-K — Realistic transcribe-200 response with Whole-
+    # number floats (mirrors the live 2026-11-08 Silver Springs pilot
+    # payload shape that caused MODAL_HMAC_INVALID before this fix).
+    transcribe_resp = {
+        "contractVersion": "4yb-v1",
+        "operation": "spectre.training.transcribe.v1",
+        "requestId": "r-transcribe-whole-float",
+        "modelVariant": "faster-whisper-large-v3",
+        "durationSec": 642.0,
+        "audioSha256": "a" * 64,
+        "segments": [
+            {"id": 0, "startSec": 0.0, "endSec": 2.0, "text": "welcome to orientation", "avgConfidence": 1.0},
+            {"id": 1, "startSec": 2.0, "endSec": 4.52, "text": "today we review the standards", "avgConfidence": 0.93},
+        ],
+        "elapsedMs": {"coldBoot": 10000, "transcribe": 105700},
+    }
+    t_body = canonicalise(transcribe_resp)
+    t_digest = sha256_hex(t_body)
+    t_signed_msg = (
+        f"response-sig-v1.4yb-v1.spectre.training.transcribe.v1.r-transcribe-whole-float.200.{t_digest}"
+    ).encode("utf-8")
+    t_sig = hmac_b64(RESPONSE_HMAC_KEY, t_signed_msg)
+
+    # EP-TRAIN-4Y-K — Signed ERROR response (the Modal `_signed_error`
+    # path). Verifier must pass over the same canonical form even
+    # when httpStatus is 500.
+    err_resp = {
+        "contractVersion": "4yb-v1",
+        "operation": "spectre.training.transcribe.v1",
+        "requestId": "r-error-signed",
+        "error": {"code": "REQUEST_BODY_INVALID", "message": "something went wrong"},
+    }
+    e_body = canonicalise(err_resp)
+    e_digest = sha256_hex(e_body)
+    e_signed_msg = (
+        f"response-sig-v1.4yb-v1.spectre.training.transcribe.v1.r-error-signed.500.{e_digest}"
+    ).encode("utf-8")
+    e_sig = hmac_b64(RESPONSE_HMAC_KEY, e_signed_msg)
+
     return [
         {
             "name": "resp1-generate-200",
@@ -352,6 +486,36 @@ def build_response_vectors() -> list[dict]:
             "expectedResponseBodyDigest": body_digest,
             "expectedResponseSignedMessage": signed_message.decode("utf-8"),
             "expectedResponseSignature": signature,
+        },
+        {
+            "name": "resp2-transcribe-200-whole-float-segments",
+            "description": "EP-TRAIN-4Y-K: realistic Whisper response with whole-number float segment boundaries; whole-float normalisation must bring Python output byte-identical to TS",
+            "input": {
+                "responseBody": transcribe_resp,
+                "operation": "spectre.training.transcribe.v1",
+                "requestId": "r-transcribe-whole-float",
+                "httpStatus": 200,
+                "responseHmacKeyB64": base64.b64encode(RESPONSE_HMAC_KEY).decode("ascii"),
+            },
+            "expectedCanonicalResponseBody": t_body,
+            "expectedResponseBodyDigest": t_digest,
+            "expectedResponseSignedMessage": t_signed_msg.decode("utf-8"),
+            "expectedResponseSignature": t_sig,
+        },
+        {
+            "name": "resp3-transcribe-signed-error-500",
+            "description": "EP-TRAIN-4Y-K: signed ERROR response (Modal `_signed_error` path); verifier must trust the signature + reject attacker-forged failure codes",
+            "input": {
+                "responseBody": err_resp,
+                "operation": "spectre.training.transcribe.v1",
+                "requestId": "r-error-signed",
+                "httpStatus": 500,
+                "responseHmacKeyB64": base64.b64encode(RESPONSE_HMAC_KEY).decode("ascii"),
+            },
+            "expectedCanonicalResponseBody": e_body,
+            "expectedResponseBodyDigest": e_digest,
+            "expectedResponseSignedMessage": e_signed_msg.decode("utf-8"),
+            "expectedResponseSignature": e_sig,
         },
     ]
 

@@ -1,5 +1,5 @@
 {
-  "fixtureVersion": "4yb-verify-v1",
+  "fixtureVersion": "4yk-v1",
   "contractVersion": "4yb-v1",
   "notes": [
     "All expected values pre-computed OFFLINE with Python stdlib.",
@@ -148,6 +148,107 @@
       },
       "expectedCanonical": "{\"a\":1,\"b\":2,\"c\":3}",
       "expectedSha256Hex": "e6a3385fb77c287a712e7f406a451727f0625041823ecf23bea7ef39b2e39805"
+    },
+    {
+      "name": "c14-whole-float-zero",
+      "description": "EP-TRAIN-4Y-K: float 0.0 normalises to int 0 so Python emits `0` (matching JS)",
+      "input": {
+        "n": 0.0
+      },
+      "expectedCanonical": "{\"n\":0}",
+      "expectedSha256Hex": "f3013f933b9fb80ab6d995e7ad9da36f683837ba1d81e950c943d40111eac2f0"
+    },
+    {
+      "name": "c15-whole-float-positive",
+      "description": "EP-TRAIN-4Y-K: whole-number float boundaries (Whisper segment edges on exact seconds) normalise to ints",
+      "input": {
+        "startSec": 2.0,
+        "endSec": 5.0
+      },
+      "expectedCanonical": "{\"endSec\":5,\"startSec\":2}",
+      "expectedSha256Hex": "64840b1038ad51694c37dfa358ca7c9d232a31766877491a0a9d76c5752d2eff"
+    },
+    {
+      "name": "c16-whole-float-clamp-endpoint",
+      "description": "EP-TRAIN-4Y-K: avg_logprob clamp endpoint (float 1.0) normalises to int 1",
+      "input": {
+        "avgConfidence": 1.0
+      },
+      "expectedCanonical": "{\"avgConfidence\":1}",
+      "expectedSha256Hex": "39e71188f53bc94bdb39c22b8b4d86418030ca59aa2529830857c8e920275855"
+    },
+    {
+      "name": "c17-non-whole-float-preserved",
+      "description": "EP-TRAIN-4Y-K negative control: true-fractional floats are NOT normalised (0.5 stays 0.5)",
+      "input": {
+        "startSec": 0.5,
+        "endSec": 1.75
+      },
+      "expectedCanonical": "{\"endSec\":1.75,\"startSec\":0.5}",
+      "expectedSha256Hex": "0b3c1b8af736eb1fe4cf9018236a826e06416e966fb7a3e245bc9442402ef46f"
+    },
+    {
+      "name": "c18-mixed-int-float-in-same-object",
+      "description": "EP-TRAIN-4Y-K: ints untouched, fractional floats preserved, whole floats normalised",
+      "input": {
+        "intField": 2,
+        "floatField": 2.5,
+        "wholeFloatField": 2.0
+      },
+      "expectedCanonical": "{\"floatField\":2.5,\"intField\":2,\"wholeFloatField\":2}",
+      "expectedSha256Hex": "57edfd333352891a209821801ea80dab48cdc6f4b68ff2db0733eff99f767077"
+    },
+    {
+      "name": "c19-negative-whole-float",
+      "description": "EP-TRAIN-4Y-K: negative whole floats also normalise",
+      "input": {
+        "n": -3.0
+      },
+      "expectedCanonical": "{\"n\":-3}",
+      "expectedSha256Hex": "186b4f63e3a917b120d5f23488301f7a5aef207cea8ebfbfd5a149c08f5fff53"
+    },
+    {
+      "name": "c20-whisper-shaped-segment",
+      "description": "EP-TRAIN-4Y-K: representative Whisper transcript — a mix of whole-float boundaries, true-fractional floats, and ints",
+      "input": {
+        "segments": [
+          {
+            "id": 0,
+            "startSec": 0.0,
+            "endSec": 2.0,
+            "text": "hello",
+            "avgConfidence": 1.0
+          },
+          {
+            "id": 1,
+            "startSec": 2.0,
+            "endSec": 4.52,
+            "text": "world",
+            "avgConfidence": 0.93
+          }
+        ],
+        "durationSec": 642.0
+      },
+      "expectedCanonical": "{\"durationSec\":642,\"segments\":[{\"avgConfidence\":1,\"endSec\":2,\"id\":0,\"startSec\":0,\"text\":\"hello\"},{\"avgConfidence\":0.93,\"endSec\":4.52,\"id\":1,\"startSec\":2,\"text\":\"world\"}]}",
+      "expectedSha256Hex": "56c42317e41459049fdddec576bbfe7c9e852948aabfc939652579c6345fddfd"
+    },
+    {
+      "name": "c21-unicode-transcript-u2028-u2029",
+      "description": "LINE SEPARATOR (U+2028) + PARAGRAPH SEPARATOR (U+2029) emit as raw UTF-8 on both Python json.dumps(ensure_ascii=False) and modern JS JSON.stringify (ES2019+)",
+      "input": {
+        "text": "line sep paragraph"
+      },
+      "expectedCanonical": "{\"text\":\"line sep paragraph\"}",
+      "expectedSha256Hex": "8e6993a5245e26cf4f81aebf1647f14b848576564006c5a090de3ca3f16ae61b"
+    },
+    {
+      "name": "c22-unicode-non-bmp-emoji",
+      "description": "Non-BMP emoji (U+1F600) round-trips as the same 4-byte UTF-8 sequence on both sides",
+      "input": {
+        "text": "ready 😀 go"
+      },
+      "expectedCanonical": "{\"text\":\"ready 😀 go\"}",
+      "expectedSha256Hex": "0c91534995929682f51df373f1e6f7b8378812bc119c47af911a3510e0ea9147"
     }
   ],
   "fingerprintVectors": [
@@ -350,6 +451,71 @@
       "expectedResponseBodyDigest": "b3d5ac85743ad7469aa907124297aaac638454236d048e2c3e312b958334fa4a",
       "expectedResponseSignedMessage": "response-sig-v1.4yb-v1.spectre.training.generate.v1.r-vector-2.200.b3d5ac85743ad7469aa907124297aaac638454236d048e2c3e312b958334fa4a",
       "expectedResponseSignature": "45U_FMHnRVUsyhnL1T7B9bRZsn2LaArFz2p3Rw1LKks"
+    },
+    {
+      "name": "resp2-transcribe-200-whole-float-segments",
+      "description": "EP-TRAIN-4Y-K: realistic Whisper response with whole-number float segment boundaries; whole-float normalisation must bring Python output byte-identical to TS",
+      "input": {
+        "responseBody": {
+          "contractVersion": "4yb-v1",
+          "operation": "spectre.training.transcribe.v1",
+          "requestId": "r-transcribe-whole-float",
+          "modelVariant": "faster-whisper-large-v3",
+          "durationSec": 642.0,
+          "audioSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "segments": [
+            {
+              "id": 0,
+              "startSec": 0.0,
+              "endSec": 2.0,
+              "text": "welcome to orientation",
+              "avgConfidence": 1.0
+            },
+            {
+              "id": 1,
+              "startSec": 2.0,
+              "endSec": 4.52,
+              "text": "today we review the standards",
+              "avgConfidence": 0.93
+            }
+          ],
+          "elapsedMs": {
+            "coldBoot": 10000,
+            "transcribe": 105700
+          }
+        },
+        "operation": "spectre.training.transcribe.v1",
+        "requestId": "r-transcribe-whole-float",
+        "httpStatus": 200,
+        "responseHmacKeyB64": "dGVzdC1yZXNwb25zZS1obWFjLWtleS0wMDAwMDAwMDA="
+      },
+      "expectedCanonicalResponseBody": "{\"audioSha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contractVersion\":\"4yb-v1\",\"durationSec\":642,\"elapsedMs\":{\"coldBoot\":10000,\"transcribe\":105700},\"modelVariant\":\"faster-whisper-large-v3\",\"operation\":\"spectre.training.transcribe.v1\",\"requestId\":\"r-transcribe-whole-float\",\"segments\":[{\"avgConfidence\":1,\"endSec\":2,\"id\":0,\"startSec\":0,\"text\":\"welcome to orientation\"},{\"avgConfidence\":0.93,\"endSec\":4.52,\"id\":1,\"startSec\":2,\"text\":\"today we review the standards\"}]}",
+      "expectedResponseBodyDigest": "1e40ca1ce2646ea5b32acdf86f3d21c42a92e1e97942855a28a46c8ecc89fbec",
+      "expectedResponseSignedMessage": "response-sig-v1.4yb-v1.spectre.training.transcribe.v1.r-transcribe-whole-float.200.1e40ca1ce2646ea5b32acdf86f3d21c42a92e1e97942855a28a46c8ecc89fbec",
+      "expectedResponseSignature": "yCEcHQJzpyvie7Ts6BFFmVn-gBT6KksofCgEsL33OnI"
+    },
+    {
+      "name": "resp3-transcribe-signed-error-500",
+      "description": "EP-TRAIN-4Y-K: signed ERROR response (Modal `_signed_error` path); verifier must trust the signature + reject attacker-forged failure codes",
+      "input": {
+        "responseBody": {
+          "contractVersion": "4yb-v1",
+          "operation": "spectre.training.transcribe.v1",
+          "requestId": "r-error-signed",
+          "error": {
+            "code": "REQUEST_BODY_INVALID",
+            "message": "something went wrong"
+          }
+        },
+        "operation": "spectre.training.transcribe.v1",
+        "requestId": "r-error-signed",
+        "httpStatus": 500,
+        "responseHmacKeyB64": "dGVzdC1yZXNwb25zZS1obWFjLWtleS0wMDAwMDAwMDA="
+      },
+      "expectedCanonicalResponseBody": "{\"contractVersion\":\"4yb-v1\",\"error\":{\"code\":\"REQUEST_BODY_INVALID\",\"message\":\"something went wrong\"},\"operation\":\"spectre.training.transcribe.v1\",\"requestId\":\"r-error-signed\"}",
+      "expectedResponseBodyDigest": "9bbd653afa92b1cfe844eb3b8753c8cc8db7df19729ee0821622ca3a03c7729c",
+      "expectedResponseSignedMessage": "response-sig-v1.4yb-v1.spectre.training.transcribe.v1.r-error-signed.500.9bbd653afa92b1cfe844eb3b8753c8cc8db7df19729ee0821622ca3a03c7729c",
+      "expectedResponseSignature": "NSuLltrO6p5D9JAOS5aQbvUeJO3aNGfZ8nt18THvbIM"
     }
   ],
   "timestampBoundaryVectors": [

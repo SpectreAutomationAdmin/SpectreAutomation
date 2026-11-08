@@ -57,7 +57,7 @@ FIXTURE_NOW_SEC = 1_762_521_900  # 2026-11-07T08:05:00Z (5 min into TTL)
 
 class FixtureVersionTest(unittest.TestCase):
     def test_pinned_version(self):
-        self.assertEqual(FIXTURE["fixtureVersion"], "4yb-verify-v1")
+        self.assertEqual(FIXTURE["fixtureVersion"], "4yk-v1")
         self.assertEqual(FIXTURE["contractVersion"], auth.CONTRACT_VERSION)
 
 

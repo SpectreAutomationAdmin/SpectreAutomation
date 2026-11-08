@@ -43,6 +43,53 @@ DEFAULT_REPLAY_WINDOW_SEC = 900
 # ---------------------------------------------------------------- canonical
 
 
+def _normalise_whole_floats(value: Any) -> Any:
+    """EP-TRAIN-4Y-K (2026-11-08) — bridge the JS/Python int-vs-float
+    asymmetry that broke the live Whisper pilot's response HMAC.
+
+    JavaScript's `JSON.stringify` cannot preserve the "whole-number
+    float" shape — `JSON.parse("2.0")` yields the primitive `2`, and
+    `JSON.stringify(2)` emits `"2"`. Python's `json.dumps` instead
+    emits `"2.0"` for the Python float `2.0`. For any value Whisper
+    emits where a segment boundary falls on an exact second (or
+    `avg_logprob` saturates at the clamp endpoints), the two sides
+    canonicalise differently and their HMAC-SHA256 digests disagree.
+
+    The LIVE 2026-11-08 pilot pinned this at byte index 18 of the
+    response body (Python `642.0` → TS `642`); see
+    `docs/training/ai-generation/PHASE-4Y-K-ACCEPTANCE.md` §3.
+
+    This pre-processor recursively descends the value tree and
+    rewrites every Python `float` whose fractional part is zero AND
+    whose magnitude is within the JS safe-integer range
+    (±2**53 − 1) as an `int`. Floats outside that range stay as
+    floats (JS and Python already disagree on their stringification
+    at that scale, and no Whisper field ever reaches it — durations
+    are seconds, elapsedMs is bounded to hours). Non-finite numbers
+    propagate to `json.dumps(allow_nan=False)` which rejects them
+    consistently with TS's `TypeError` on `NaN` / `±Infinity`.
+    """
+    if isinstance(value, float):
+        # bool is a subclass of int in Python — NOT float, so booleans
+        # never land here. Must be an honest float.
+        if value.is_integer() and -_JS_SAFE_INT <= value <= _JS_SAFE_INT:
+            return int(value)
+        return value
+    if isinstance(value, list):
+        return [_normalise_whole_floats(x) for x in value]
+    if isinstance(value, tuple):
+        return tuple(_normalise_whole_floats(x) for x in value)
+    if isinstance(value, dict):
+        return {k: _normalise_whole_floats(v) for k, v in value.items()}
+    return value
+
+
+# JS Number.MAX_SAFE_INTEGER (2**53 − 1). Floats within this range
+# are exactly representable AND stringify identically across Python
+# and JavaScript once converted to int.
+_JS_SAFE_INT = (1 << 53) - 1
+
+
 def canonicalise(value: Any) -> str:
     """Deterministic JSON serialisation. Byte-identical to the
     TypeScript `canonicalise` output.
@@ -50,9 +97,18 @@ def canonicalise(value: Any) -> str:
     - Object keys sorted (lexicographic ASCII).
     - No whitespace around separators.
     - Arrays preserve element order.
+    - Whole-number floats within the JS safe-integer range are
+      normalised to ints so Python emits `2` where TS emits `2`
+      (see `_normalise_whole_floats`).
     - Non-finite numbers raise ValueError (matching TS TypeError).
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        _normalise_whole_floats(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def sha256_hex(data: str | bytes) -> str:
