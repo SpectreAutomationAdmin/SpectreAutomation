@@ -36,6 +36,10 @@ import type {
 import { validateTrainingQuestion } from "@/lib/training/ai-generation/pipeline";
 import type { AssessmentPlanV1 } from "@/lib/hr/training/generation/assessment-plan";
 import { logger } from "@/lib/observability/logger";
+import {
+  buildCanonicalProjectionBody,
+  projectionSha256,
+} from "./grounding-canonical";
 
 const VALIDATOR_VERSION = "6c-10b" as const;
 const VALIDATOR_SOURCE = "integrated-pipeline" as const;
@@ -158,6 +162,14 @@ export async function materialiseGroundingProjection(
     };
   });
 
+  const excludedPassages = input.plan.sourceEvidenceRequirements.excludedSegmentIndices.map(
+    (id) => ({
+      passageId: id,
+      sourceSegmentIds: [id],
+      reason: "plan_level_exclusion",
+    }),
+  );
+
   const projection: GroundingProjection = {
     schemaVersion: "training-grounding-v1",
     operation: "GENERATE_DRAFT_QUESTIONS",
@@ -167,19 +179,26 @@ export async function materialiseGroundingProjection(
     sourceVideoSha256: input.plan.sourceVideoSha256,
     resolvedTranscriptBuildId: input.plan.resolvedTranscriptBuildId,
     passages,
-    excludedPassages: input.plan.sourceEvidenceRequirements.excludedSegmentIndices.map(
-      (id) => ({
-        passageId: id,
-        sourceSegmentIds: [id],
-        reason: "plan_level_exclusion",
-      }),
-    ),
+    excludedPassages,
     sourceOrgMismatchFlagsPresent: passages.some((p) => p.flags.sourceOrgMismatch.length > 0),
     pendingReviewPresent: passages.some((p) => p.flags.pendingReview.length > 0),
   };
 
-  // 4. SHA-256 the canonical projection body.
-  const projectionSha256 = sha256Hex(canonicalise(projection));
+  // EP-TRAIN-4Y-S §9 — hash the SHARED canonical body (same shape the
+  // evidence-reader rebuilds from stored columns). The `projection`
+  // object above is kept intact for the return value (legacy consumers
+  // read `courseId` + per-row flag metadata off it), but the sha256 is
+  // computed off the canonical-body shape only.
+  const canonicalProjectionSha256 = projectionSha256(
+    buildCanonicalProjectionBody({
+      tenantId: input.clubId,
+      courseVersionId: input.courseVersionId,
+      sourceVideoSha256: input.plan.sourceVideoSha256,
+      resolvedTranscriptBuildId: input.plan.resolvedTranscriptBuildId,
+      passages,
+      excludedPassages,
+    }),
+  );
 
   // 5. Upsert row (idempotent).
   const now = opts.now ?? new Date();
@@ -188,13 +207,13 @@ export async function materialiseGroundingProjection(
       clubId_courseVersionId_sha256: {
         clubId: input.clubId,
         courseVersionId: input.courseVersionId,
-        sha256: projectionSha256,
+        sha256: canonicalProjectionSha256,
       },
     },
     create: {
       clubId: input.clubId,
       courseVersionId: input.courseVersionId,
-      sha256: projectionSha256,
+      sha256: canonicalProjectionSha256,
       sourceVideoSha256: input.plan.sourceVideoSha256,
       resolvedTranscriptBuildId: input.plan.resolvedTranscriptBuildId,
       passagesJson: JSON.stringify(projection.passages),
@@ -209,7 +228,7 @@ export async function materialiseGroundingProjection(
 
   return {
     projectionRowId: row.id,
-    projectionSha256,
+    projectionSha256: canonicalProjectionSha256,
     projection,
   };
 }

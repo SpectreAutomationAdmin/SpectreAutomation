@@ -44,6 +44,10 @@ import type { PrismaClient } from "@prisma/client";
 import type { Principal } from "@/lib/rbac";
 import { hasPermission } from "@/lib/rbac";
 import { canonicalise, sha256Hex } from "./content-hash";
+import {
+  buildCanonicalProjectionBody,
+  projectionSha256,
+} from "./grounding-canonical";
 
 export type EvidenceKind =
   | "authentic"
@@ -275,43 +279,33 @@ export async function resolveCandidateEvidence(
   }
 
   // Integrity check #2 — recompute the canonical body hash + compare.
-  // The canonical body MUST mirror the 4L writer's
-  // canonicalProjectionBody normalisation byte-for-byte, including the
-  // default-filled `flags: { pendingReview: [], sourceOrgMismatch: [],
-  // uncertaintyWarning: null }` shape the writer applies even when the
-  // input omits flags. The writer stores `JSON.stringify(input.passages)`
-  // RAW in passagesJson, so we normalise on the read side to match.
-  const normalisedPassages = passages.map((p) => {
-    const flags = (p.flags ?? {}) as Record<string, unknown>;
-    return {
-      passageId: p.passageId,
-      sourceSegmentIds: Array.isArray(p.sourceSegmentIds) ? [...p.sourceSegmentIds] : [],
-      sourceStartSec: p.sourceStartSec,
-      sourceEndSec: p.sourceEndSec,
-      text: p.text,
-      citationHandle: p.citationHandle,
-      flags: {
-        pendingReview: Array.isArray(flags.pendingReview) ? [...(flags.pendingReview as unknown[])] : [],
-        sourceOrgMismatch: Array.isArray(flags.sourceOrgMismatch) ? [...(flags.sourceOrgMismatch as unknown[])] : [],
-        uncertaintyWarning: flags.uncertaintyWarning ?? null,
-      },
-    };
-  });
-  const normalisedExcluded = (excluded ?? []).map((e) => ({
-    passageId: e.passageId,
-    sourceSegmentIds: Array.isArray(e.sourceSegmentIds) ? [...e.sourceSegmentIds] : [],
-    reason: (e as unknown as { reason?: unknown }).reason,
-  }));
-  const recomputedSha256 = sha256Hex(
-    canonicalise({
-      schemaVersion: "training-grounding-v1",
-      operation: "GENERATE_DRAFT_QUESTIONS",
+  // EP-TRAIN-4Y-S §9 — both writer and reader call the same helper
+  // (`buildCanonicalProjectionBody` + `projectionSha256`) so the stored
+  // sha256 is byte-stable across the materialiser → DB → reader loop.
+  const recomputedSha256 = projectionSha256(
+    buildCanonicalProjectionBody({
       tenantId: clubId,
       courseVersionId: projection.courseVersionId,
       sourceVideoSha256: projection.sourceVideoSha256,
       resolvedTranscriptBuildId: projection.resolvedTranscriptBuildId,
-      passages: normalisedPassages,
-      excludedPassages: normalisedExcluded,
+      passages: passages.map((p) => ({
+        passageId: Number(p.passageId),
+        sourceSegmentIds: Array.isArray(p.sourceSegmentIds)
+          ? (p.sourceSegmentIds as readonly number[])
+          : [],
+        sourceStartSec: Number(p.sourceStartSec),
+        sourceEndSec: Number(p.sourceEndSec),
+        text: String(p.text ?? ""),
+        citationHandle: String(p.citationHandle ?? ""),
+        flags: (p.flags ?? null) as never,
+      })),
+      excludedPassages: (excluded ?? []).map((e) => ({
+        passageId: Number(e.passageId),
+        sourceSegmentIds: Array.isArray(e.sourceSegmentIds)
+          ? (e.sourceSegmentIds as readonly number[])
+          : [],
+        reason: (e as unknown as { reason?: unknown }).reason,
+      })),
     }),
   );
   if (recomputedSha256 !== projection.sha256) {
