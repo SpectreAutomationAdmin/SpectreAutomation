@@ -16607,8 +16607,10 @@ model TrainingTranscriptionJob {
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
-  @@unique([clubId, courseVersionId, sourceVideoSha256, state])
-
+  // EP-TRAIN-4Y-J (2026-11-07) — active-uniqueness partial index.
+  // At most ONE row per (clubId, courseVersionId, sourceVideoSha256)
+  // in the active set (REQUESTED, QUEUED, RUNNING) — defined in raw
+  // SQL as a partial unique index. Terminal rows are unconstrained.
   @@index([clubId, state, requestedAt])
   @@index([clubId, courseVersionId, state])
   @@index([state, leaseExpiresAt])

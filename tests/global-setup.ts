@@ -114,6 +114,17 @@ async function applyPartialUniqueIndexes(dbPath: string): Promise<void> {
       `CREATE UNIQUE INDEX IF NOT EXISTS "ShiftOpportunity_shiftId_open_unique" ` +
         `ON "ShiftOpportunity" ("clubId", "shiftId") WHERE "state" = 'OPEN';`,
     );
+    // EP-TRAIN-4Y-J (2026-11-07) — TrainingTranscriptionJob active-uniqueness.
+    // Partial unique on (clubId, courseVersionId, sourceVideoSha256) scoped
+    // to the active set so multiple FAILED / CANCELLED rows can coexist for
+    // retry history. Replay here because Prisma's schema DSL can't declare
+    // a partial unique. The real migration SQL lives at
+    // prisma/migrations/20261107_ep_train_4y_j_transcription_active_uniqueness_fix/.
+    await client.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "TrainingTranscriptionJob_active_club_version_sha_key" ` +
+        `ON "TrainingTranscriptionJob" ("clubId", "courseVersionId", "sourceVideoSha256") ` +
+        `WHERE "state" IN ('REQUESTED', 'QUEUED', 'RUNNING');`,
+    );
   } finally {
     await client.$disconnect();
   }

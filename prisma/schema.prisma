@@ -17408,11 +17408,18 @@ model TrainingTranscriptionJob {
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
-  // One live row per (club, version, videoSha, state). Multiple
-  // FAILED / CANCELLED rows allowed as history; only one row may
-  // occupy each non-terminal state at a time.
-  @@unique([clubId, courseVersionId, sourceVideoSha256, state])
-
+  // EP-TRAIN-4Y-J (2026-11-07) — active-uniqueness partial index.
+  // At most ONE row per (clubId, courseVersionId, sourceVideoSha256)
+  // in the active set (REQUESTED, QUEUED, RUNNING) — defined in raw
+  // SQL as a partial unique index (Prisma cannot express partial
+  // uniques natively). Terminal rows (COMPLETED, FAILED, CANCELLED)
+  // are unconstrained, so a worker may `recordJobFailed()` on a video
+  // that already has an earlier FAILED or CANCELLED row for retry
+  // history. See the 4Y-J migration SQL.
+  //
+  // Previously (4V): @@unique([clubId, courseVersionId, sourceVideoSha256, state])
+  // That included "state" in the key and blocked terminal transitions
+  // when the target state slot was already occupied.
   @@index([clubId, state, requestedAt])
   @@index([clubId, courseVersionId, state])
   @@index([state, leaseExpiresAt])
