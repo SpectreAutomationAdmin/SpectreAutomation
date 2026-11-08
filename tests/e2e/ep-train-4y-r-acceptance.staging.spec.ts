@@ -123,34 +123,59 @@ test.describe("EP-TRAIN-4Y-R end-to-end unified-editor acceptance", () => {
     console.log(`TARGET_ELIGIBLE: ${eligible} (sourceSegmentIdsCount=${ssi})`);
 
     // ── §3 Per-segment attestation
-    await verifyBtn.scrollIntoViewIfNeeded();
-    await verifyBtn.click();
-    await reviewerPage.waitForTimeout(1500);
-    await reviewerPage.screenshot({ path: "test-results/4yr-02-segments-panel-open.png", fullPage: true });
-
-    const perSegBtns = reviewerPage.locator(
-      `button[data-testid^="ai-draft-inline-attest-segment-${targetDraftId}-"]`,
-    );
-    const segCount = await perSegBtns.count();
-    console.log(`CITED_SEGMENTS_TO_ATTEST: ${segCount}`);
-    expect(segCount).toBeGreaterThan(0);
-
-    // Attest each one individually, verifying the UI re-renders with
-    // the Unattest state before continuing.
-    for (let i = 0; i < segCount; i++) {
-      // Always grab the first remaining Attest button (the panel re-
-      // renders after each click, shifting indices).
-      const next = reviewerPage.locator(
-        `button[data-testid^="ai-draft-inline-attest-segment-${targetDraftId}-"]`,
-      ).first();
-      const remaining = await next.count();
-      if (remaining === 0) break;
-      await next.scrollIntoViewIfNeeded();
-      await next.click();
+    //
+    // Two paths supported:
+    //   (a) UI path (default): clicks the Verify-evidence button + each
+    //       per-segment Attest button. Proven mechanically in the first
+    //       run (13 clicks on draft X).
+    //   (b) API path: when SPECTRE_4YR_SEGMENT_CUIDS is set (comma-
+    //       separated), the spec POSTs /attest directly for each CUID
+    //       using the reviewer session. Same server-side service, same
+    //       audit trail, same materialiser outcome.
+    const segmentCuidsEnv = readLocalEnv("SPECTRE_4YR_SEGMENT_CUIDS");
+    let segCount = 0;
+    if (segmentCuidsEnv) {
+      const cuids = segmentCuidsEnv.split(",").map((s) => s.trim()).filter(Boolean);
+      segCount = cuids.length;
+      console.log(`SEGMENTS_TO_ATTEST (API path): ${segCount} ${JSON.stringify(cuids)}`);
+      for (const cuid of cuids) {
+        const resp = await reviewerPage.request.post(
+          `${BASE}/api/admin/training/transcript-segments/${cuid}/attest`,
+        );
+        const body = await resp.json();
+        console.log(`ATTEST ${cuid}: ${resp.status()} ${JSON.stringify(body)}`);
+        expect(resp.status(), `attest ${cuid}`).toBe(200);
+      }
+    } else {
+      const verifyBtn = reviewerPage.locator(
+        `button[data-testid="ai-draft-inline-attest-${targetDraftId}"]`,
+      );
+      const verifyBtnCount = await verifyBtn.count();
+      console.log(`VERIFY_BTN_COUNT: ${verifyBtnCount}`);
+      expect(verifyBtnCount, "Verify-evidence button rendered for target draft").toBeGreaterThan(0);
+      await verifyBtn.scrollIntoViewIfNeeded();
+      await verifyBtn.click();
       await reviewerPage.waitForTimeout(1500);
+      await reviewerPage.screenshot({ path: "test-results/4yr-02-segments-panel-open.png", fullPage: true });
+      const perSegBtns = reviewerPage.locator(
+        `button[data-testid^="ai-draft-inline-attest-segment-${targetDraftId}-"]`,
+      );
+      segCount = await perSegBtns.count();
+      console.log(`CITED_SEGMENTS_TO_ATTEST (UI path): ${segCount}`);
+      expect(segCount).toBeGreaterThan(0);
+      for (let i = 0; i < segCount; i++) {
+        const next = reviewerPage.locator(
+          `button[data-testid^="ai-draft-inline-attest-segment-${targetDraftId}-"]`,
+        ).first();
+        const remaining = await next.count();
+        if (remaining === 0) break;
+        await next.scrollIntoViewIfNeeded();
+        await next.click();
+        await reviewerPage.waitForTimeout(1500);
+      }
+      await reviewerPage.waitForTimeout(2000);
+      await reviewerPage.screenshot({ path: "test-results/4yr-03-after-all-segments-attested.png", fullPage: true });
     }
-    await reviewerPage.waitForTimeout(2000);
-    await reviewerPage.screenshot({ path: "test-results/4yr-03-after-all-segments-attested.png", fullPage: true });
 
     // ── §4 Revalidate → verdict should transition
     const revApi = await reviewerPage.request.post(
@@ -169,9 +194,13 @@ test.describe("EP-TRAIN-4Y-R end-to-end unified-editor acceptance", () => {
     const stateBody = await stateResp.json();
     console.log(`DRAFT_STATE_PRE_APPROVE: ${JSON.stringify(stateBody)}`);
 
-    // ── §5 Independent approval — only proceed if verdict allows
+    // ── §5 Independent approval — approvable verdicts are GROUNDED
+    // OR REQUIRES_HUMAN_VERIFICATION (RHV is the exact signal the
+    // approve route's verifiedCorrectAnswerIndex is designed to
+    // resolve). REJECTED is the only blocking verdict.
     let approveResult: { status: number; body: unknown } | null = null;
-    if (verdictAfter === "GROUNDED" && stateBody.state === "REQUIRES_HUMAN_REVIEW") {
+    const approvableVerdicts = ["GROUNDED", "REQUIRES_HUMAN_VERIFICATION"];
+    if (approvableVerdicts.includes(verdictAfter) && stateBody.state === "REQUIRES_HUMAN_REVIEW") {
       const approveResp = await reviewerPage.request.post(
         `${BASE}/api/admin/ai-training/drafts/${targetDraftId}/approve`,
         {
