@@ -224,11 +224,13 @@ class Qwen:
     image=image,
     secrets=secrets,
     timeout=120,
-    # EP-TRAIN-4Y-F §3 — Gate 1 default. Removing this env entry (and
-    # redeploying) activates Gate 2 live inference. CPU-boundary guard
-    # inside _run_qwen fires BEFORE .remote(), so the GPU container
-    # NEVER boots during Gate 1.
-    env={"SPECTRE_GATE_1_NO_INFERENCE": "1"},
+    # EP-TRAIN-4Y-L (2026-11-08) §4 — Gate 2 activation for Qwen.
+    # The `env={"SPECTRE_GATE_1_NO_INFERENCE": "1"}` line was removed
+    # under one authorized pilot. The CPU-boundary guard (`_run_qwen`
+    # check) still works if the env var is ever re-set externally — set
+    # `SPECTRE_GATE_1_NO_INFERENCE=1` via `modal secret create` + redeploy
+    # to re-enter Gate 1 mode without a code change. Matches the
+    # 2026-11-07 transcribe_app.py Gate 2 activation.
 )
 @modal.asgi_app()
 def api():
