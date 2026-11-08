@@ -98,6 +98,8 @@ export default function VideoUploader({
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const [state, setState] = useState<UploadState>({ kind: "idle" });
   const [uploadedShaHint, setUploadedShaHint] = useState<string | null>(null);
+  // EP-TRAIN-4Y-S §3 — drag-over styling for the dropzone.
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const hasCurrent = !!currentSha256;
   const previewSrc = hasCurrent
@@ -358,8 +360,33 @@ export default function VideoUploader({
 
       {!disabled && !isBusy && (
         <div
-          className="rounded-md border border-dashed border-stone-300 px-4 py-6 text-center cursor-pointer hover:border-stone-400"
+          className={`rounded-md border-2 border-dashed px-4 py-8 text-center cursor-pointer transition-colors ${
+            isDragOver
+              ? "border-club-green bg-club-green/5"
+              : "border-stone-300 hover:border-stone-400"
+          }`}
           onClick={() => inputRef.current?.click()}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragOver(true);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragOver(false);
+            const f = e.dataTransfer?.files?.[0];
+            if (f) startUpload(f);
+          }}
           data-testid="training-video-dropzone"
         >
           <input
@@ -374,11 +401,15 @@ export default function VideoUploader({
               e.target.value = "";
             }}
           />
-          <p className="text-sm text-stone-700">
-            {hasCurrent ? "Replace video" : "Upload training video"}
+          <div className="mx-auto mb-2 h-10 w-10 rounded-full bg-stone-100 text-stone-500 flex items-center justify-center">
+            {/* upload icon */}
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+          </div>
+          <p className="text-sm text-stone-800 font-medium">
+            {hasCurrent ? "Replace video" : "Drag &amp; drop or click to upload"}
           </p>
           <p className="mt-1 text-xs text-stone-500">
-            MP4 or WebM · up to {MAX_BYTES / (1024 * 1024)} MB
+            MP4, WebM or MOV · up to {MAX_BYTES / (1024 * 1024)} MB
           </p>
         </div>
       )}

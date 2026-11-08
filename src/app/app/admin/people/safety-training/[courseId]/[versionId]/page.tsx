@@ -34,6 +34,7 @@ import {
   deleteCheckpointAction,
 } from "../../_actions";
 import VideoUploader from "./VideoUploader";
+import CoursePrepProgress from "./CoursePrepProgress";
 import QuizEditor, { type TrainingQuestionType } from "./QuizEditor";
 import ApplicabilityPicker from "./ApplicabilityPicker";
 import PublishPanel from "./PublishPanel";
@@ -352,6 +353,16 @@ export default async function VersionEditorPage({
           disabled={readOnly}
         />
       </section>
+
+      {/* EP-TRAIN-4Y-S §4 — plain-language AI-preparation progress for
+          the manager. Only renders once a video has been uploaded; the
+          component polls idempotent status endpoints + auto-prepare,
+          so leaving + returning preserves state. */}
+      {version.videoSha256 && (
+        <div className="mt-6">
+          <CoursePrepProgress versionId={version.id} hasVideo={!!version.videoSha256} />
+        </div>
+      )}
 
       {/* EP-TRAIN-4Y-P §4 + §5 — AI suggestions surfaced in the canonical
           editor. Replaces the need to navigate to a separate AI Workspace
