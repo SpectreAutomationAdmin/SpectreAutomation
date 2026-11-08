@@ -41,15 +41,20 @@ image = (
     )
     .apt_install("git")
     .pip_install(
-        # torch 2.3.1 matches autoawq 0.2.6's hard dependency pin.
-        # Attempting 2.4.x breaks dependency resolution.
+        # EP-TRAIN-4Y-M (2026-11-08) — explicit pins to resolve the
+        # autoawq/transformers drift surfaced in 4Y-L. `autoawq==0.2.6`
+        # imports `transformers.modeling_utils.shard_checkpoint`, which
+        # was removed in transformers 4.47. Pin transformers to the last
+        # 4.46.x release (contains `shard_checkpoint`). torch stays at
+        # 2.3.1 per autoawq 0.2.6's hard dependency pin. accelerate +
+        # huggingface-hub upper-bounded to their 4.46-era compatibles.
         "torch==2.3.1",
-        "transformers>=4.45,<4.50",
+        "transformers==4.46.3",
         "autoawq==0.2.6",
-        "accelerate>=0.33",
-        "lm-format-enforcer>=0.10",
+        "accelerate>=0.33,<1.0",
+        "huggingface-hub>=0.24,<0.27",
+        "lm-format-enforcer>=0.10,<0.11",
         "fastapi>=0.110",
-        "huggingface-hub>=0.24",
         "pydantic>=2",
     )
 )

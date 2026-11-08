@@ -15,8 +15,18 @@ import { canonicalise } from "../ai-review/content-hash";
 
 export const ASSESSMENT_PLAN_SCHEMA_VERSION = "training-assessment-plan-v1" as const;
 
-/** Segments 16 + 17 are permanently excluded (Staff Orientation
- *  pilot policy; mirrors EXCLUDED_SEGMENT_INDICES in 4L + 4M). */
+/** Plan-level excluded segments. Enforced by `validateAssessmentPlan`
+ *  AND consumed by `buildBaselineAssessmentPlan` /
+ *  `buildTopicAwareAssessmentPlan` when NEW plans are built.
+ *
+ *  Any segment in this set is rejected from `eligibleSegmentIds` at
+ *  plan-creation + plan-validation time. Changing this set invalidates
+ *  pre-existing assessment plans whose `eligibleSegmentIds` contain
+ *  the newly-added indices, so the set is kept stable (16, 17) across
+ *  4Y-M. New grounding-hygiene exclusions live in
+ *  `RUNTIME_EXCLUDED_SEGMENT_INDICES` (worker-handler.ts) which is
+ *  applied as a second-defence filter at prompt + proposal time
+ *  without re-validating stored plans. */
 export const EXCLUDED_SEGMENT_INDICES: ReadonlySet<number> = Object.freeze(new Set([16, 17]));
 
 export interface AssessmentPlanLearningObjective {

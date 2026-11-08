@@ -35,6 +35,33 @@ import {
   type AssessmentPlanV1,
   EXCLUDED_SEGMENT_INDICES,
 } from "./assessment-plan";
+
+/** EP-TRAIN-4Y-M (2026-11-08) — runtime-only grounding-hygiene filter.
+ *  Applied at prompt-build + proposal-validation time inside this
+ *  handler. Not consumed by plan-build or plan-validate, so it does
+ *  NOT invalidate pre-existing assessment plans whose stored
+ *  `eligibleSegmentIds` contain these indices.
+ *
+ *  68–82 — 15 consecutive "Thank you." Whisper duplication artifacts
+ *    within 237.18–242.04 s on the Silver Springs orientation transcript
+ *    (each segment ≤0.02–0.26 s duration). Pure repetition artifact.
+ *  160, 161 — End-of-video Whisper hallucination at 634.93–636.03 s
+ *    (multi-script garble mixing Korean + Portuguese + Turkish + CJK
+ *    glyphs with English). Segment 162 is coherent English and remains
+ *    eligible.
+ *  Union with EXCLUDED_SEGMENT_INDICES gives the full worker-time
+ *  exclusion set. */
+const RUNTIME_EXCLUDED_SEGMENT_INDICES: ReadonlySet<number> = new Set([
+  68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
+  160, 161,
+]);
+
+/** Full set actually applied by this handler: plan-level exclusions
+ *  union runtime hygiene exclusions. */
+const WORKER_EXCLUDED_SEGMENT_INDICES: ReadonlySet<number> = new Set<number>([
+  ...EXCLUDED_SEGMENT_INDICES,
+  ...RUNTIME_EXCLUDED_SEGMENT_INDICES,
+]);
 import {
   evaluateAgainstPriors,
   DEDUP_RULES_VERSION,
@@ -106,9 +133,12 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
 
-  // Build transcript representation for the prompt.
+  // Build transcript representation for the prompt. Filter with the
+  // full worker exclusion set (plan-level + runtime grounding hygiene)
+  // so Whisper duplication + end-of-video hallucination don't reach
+  // the model.
   const transcriptText = segments
-    .filter((s) => !EXCLUDED_SEGMENT_INDICES.has(s.segmentIndex))
+    .filter((s) => !WORKER_EXCLUDED_SEGMENT_INDICES.has(s.segmentIndex))
     .sort((a, b) => a.segmentIndex - b.segmentIndex)
     .map((s) => `[${s.segmentIndex}] ${s.text}`)
     .join("\n");
@@ -192,7 +222,7 @@ export async function handleGenerateJob(
           employeeAssignmentProhibited: true,
           databaseWritesProhibited: false,
           automaticRetriesProhibited: false,
-          excludedSegmentIds: Array.from(EXCLUDED_SEGMENT_INDICES),
+          excludedSegmentIds: Array.from(WORKER_EXCLUDED_SEGMENT_INDICES).sort((a, b) => a - b),
           scope: `generate:${claim.runId}:${g.id}`,
         },
         ttlSec: 3600,
@@ -231,7 +261,7 @@ export async function handleGenerateJob(
       // boundary).
       const eligible = new Set(plan.eligibleSegmentIds);
       for (const p of modalResponse.proposals) {
-        const citedOk = p.sourceSegmentIds.every((id) => eligible.has(id) && !EXCLUDED_SEGMENT_INDICES.has(id));
+        const citedOk = p.sourceSegmentIds.every((id) => eligible.has(id) && !WORKER_EXCLUDED_SEGMENT_INDICES.has(id));
         if (!citedOk) continue; // skip ungrounded proposals
 
         // Compute canonical body + content hash for dedup + persist.
