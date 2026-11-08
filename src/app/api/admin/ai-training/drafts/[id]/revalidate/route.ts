@@ -31,12 +31,17 @@ export async function POST(
     id: principal.id,
   });
 
-  // Accept either the dedicated revalidate perm OR the approve perm
-  // (reviewers have both). Mirror the "forbidden → not_found" pattern
-  // so cross-tenant probes cannot enumerate.
+  // Revalidation is non-destructive — it re-runs the deterministic
+  // validator and writes a fresh TrainingQuestionAiValidation row.
+  // Accept any of: the dedicated revalidate perm, the approve perm,
+  // OR the general training write perm (held by the course author).
+  // The author needs to be able to revalidate after attesting segments
+  // without needing full reviewer privileges. Separation of duties is
+  // still enforced at APPROVE time, not at revalidate.
   const authorized =
     hasPermission(principal, clubId, "hr:training:ai:revalidate") ||
-    hasPermission(principal, clubId, "hr:training:ai:approve");
+    hasPermission(principal, clubId, "hr:training:ai:approve") ||
+    hasPermission(principal, clubId, "hr:training:write");
   if (!authorized) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }

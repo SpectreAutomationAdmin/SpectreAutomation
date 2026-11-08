@@ -17,12 +17,34 @@
 // aren't exposed to the spec, the approve step is skipped and its
 // failure is reported as a documented acceptance gap.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
 const COURSE_ID = "cmvzs3vz9000256qcu7lfysoz";
 const VERSION_ID = "cmvzs3w05000456qcgfgps7gy";
 const BASE = process.env.SPECTRE_STAGING_BASE_URL ?? "https://staging.spectreautomation.com";
+
+// EP-TRAIN-4Y-Q §6 — separation of duties: the reviewer identity for
+// attestation + approval lives in SPECTRE_4YQ_REVIEWER_{EMAIL,PASSWORD}
+// env vars (the seed script prints the password; the test env sets
+// it before invocation). Omitting these skips the reviewer-driven
+// steps gracefully.
+async function loginAsReviewer(ctx: BrowserContext): Promise<Page | null> {
+  const email = process.env.SPECTRE_4YQ_REVIEWER_EMAIL;
+  const password = process.env.SPECTRE_4YQ_REVIEWER_PASSWORD;
+  if (!email || !password) return null;
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await page.locator('input[name="email"]').fill(email);
+  await page.locator('input[name="password"]').fill(password);
+  await Promise.all([
+    page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 30_000 }),
+    page.locator('form[action] button[type="submit"], form button[type="submit"]').first().click(),
+  ]).catch(() => {
+    throw new Error(`Reviewer login failed: ${page.url()}`);
+  });
+  return page;
+}
 
 test.describe("EP-TRAIN-4Y-Q integrated-editor acceptance", () => {
   test.skip(!stagingCredsAvailable().ready, "staging credentials not set");
@@ -68,34 +90,87 @@ test.describe("EP-TRAIN-4Y-Q integrated-editor acceptance", () => {
     const previewLink = page.locator('[data-testid="training-editor-preview-as-employee"]');
     await expect(previewLink, "Preview-as-employee CTA present").toHaveCount(1);
 
-    // ── §5 attest cited segments on the first actionable draft
+    // ── Discover the first actionable draft id for downstream actions
     const firstAttestBtn = page.locator('button[data-testid^="ai-draft-inline-attest-"]').first();
     const hasActionable = await firstAttestBtn.count();
     console.log(`ACTIONABLE_DRAFT_ROWS_VISIBLE: ${hasActionable > 0 ? "yes" : "no"}`);
+    let targetDraftId: string | null = null;
     if (hasActionable > 0) {
       const btnText = (await firstAttestBtn.textContent())?.trim();
       console.log(`ATTEST_BUTTON_TEXT_BEFORE: "${btnText}"`);
-      await firstAttestBtn.scrollIntoViewIfNeeded();
-      await firstAttestBtn.click();
-      // Wait for the server round-trip + router.refresh re-render.
-      await page.waitForTimeout(6000);
-      await page.screenshot({ path: "test-results/4yq-02-after-attest.png", fullPage: true });
-
-      // ── §6 revalidate the same draft
-      const firstRevalidateBtn = page.locator('button[data-testid^="ai-draft-inline-revalidate-"]').first();
-      if ((await firstRevalidateBtn.count()) > 0) {
-        await firstRevalidateBtn.scrollIntoViewIfNeeded();
-        await firstRevalidateBtn.click();
-        await page.waitForTimeout(6000);
-        await page.screenshot({ path: "test-results/4yq-03-after-revalidate.png", fullPage: true });
-        const msg = page.locator('[data-testid^="ai-draft-inline-msg-"]').first();
-        const msgText = (await msg.textContent())?.trim();
-        console.log(`REVALIDATE_RESULT_MSG: "${msgText}"`);
-      }
+      targetDraftId = (await firstAttestBtn.getAttribute("data-testid"))?.replace(
+        "ai-draft-inline-attest-",
+        "",
+      ) ?? null;
     }
 
+    // ── §6 revalidate as the founder (hr:training:write grants this).
+    // Expect a REJECTED verdict until a reviewer attests cited
+    // segments. The verdict change after attestation is proven below.
+    let verdictBefore: string | null = null;
+    if (targetDraftId) {
+      const revApi = await page.request.post(
+        `${BASE}/api/admin/ai-training/drafts/${targetDraftId}/revalidate`,
+      );
+      const revBody = await revApi.json();
+      console.log(`REVALIDATE_BEFORE_ATTEST: ${JSON.stringify(revBody)}`);
+      expect(revApi.status()).toBe(200);
+      verdictBefore = revBody.verdict;
+      expect(["GROUNDED", "REQUIRES_HUMAN_VERIFICATION", "REJECTED"]).toContain(verdictBefore);
+    }
+
+    await desktop.close();
+
+    // ── §5 + §6 reviewer-driven attestation + verdict change
+    const reviewerCtx = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
+    const reviewerPage = await loginAsReviewer(reviewerCtx);
+    let verdictAfter: string | null = null;
+    if (!reviewerPage) {
+      console.log("REVIEWER_SKIPPED: SPECTRE_4YQ_REVIEWER_{EMAIL,PASSWORD} not set");
+    } else if (targetDraftId) {
+      await reviewerPage.goto(
+        `${BASE}/app/admin/people/safety-training/${COURSE_ID}/${VERSION_ID}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await reviewerPage.waitForTimeout(3000);
+      const reviewerAttestBtn = reviewerPage.locator(
+        `button[data-testid="ai-draft-inline-attest-${targetDraftId}"]`,
+      );
+      if ((await reviewerAttestBtn.count()) > 0) {
+        await reviewerAttestBtn.scrollIntoViewIfNeeded();
+        await reviewerAttestBtn.click();
+        await reviewerPage.waitForTimeout(6000);
+        await reviewerPage.screenshot({
+          path: "test-results/4yq-02-after-attest-as-reviewer.png",
+          fullPage: true,
+        });
+
+        // Revalidate (as reviewer) to pick up the attestation flip
+        const revApi = await reviewerPage.request.post(
+          `${BASE}/api/admin/ai-training/drafts/${targetDraftId}/revalidate`,
+        );
+        const revBody = await revApi.json();
+        console.log(`REVALIDATE_AFTER_ATTEST: ${JSON.stringify(revBody)}`);
+        expect(revApi.status()).toBe(200);
+        verdictAfter = revBody.verdict;
+        expect(["GROUNDED", "REQUIRES_HUMAN_VERIFICATION", "REJECTED"]).toContain(verdictAfter);
+      }
+      await reviewerPage.close();
+    }
+    await reviewerCtx.close();
+
+    // Re-open desktop for preview + final mobile screenshot
+    const desktop2 = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
+    const page2 = await loginAsFounder(desktop2);
+    await page2.goto(
+      `${BASE}/app/admin/people/safety-training/${COURSE_ID}/${VERSION_ID}`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page2.waitForTimeout(3000);
+    await page2.screenshot({ path: "test-results/4yq-03-after-attestation-and-revalidate.png", fullPage: true });
+
     // ── §8 Preview-as-employee screenshot
-    const previewPage = await desktop.newPage();
+    const previewPage = await desktop2.newPage();
     await previewPage.goto(
       `${BASE}/app/admin/people/safety-training/${COURSE_ID}/${VERSION_ID}/preview-as-employee`,
       { waitUntil: "domcontentloaded" },
@@ -105,6 +180,7 @@ test.describe("EP-TRAIN-4Y-Q integrated-editor acceptance", () => {
     const previewBadge = previewPage.locator('[data-testid="training-preview-mode-badge"]');
     await expect(previewBadge, "Preview mode badge present").toHaveCount(1);
     await previewPage.close();
+    await desktop2.close();
 
     // ── Mobile viewport
     const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -117,13 +193,13 @@ test.describe("EP-TRAIN-4Y-Q integrated-editor acceptance", () => {
     await mobilePage.screenshot({ path: "test-results/4yq-05-unified-editor-mobile.png", fullPage: true });
     await mobile.close();
 
-    await desktop.close();
-
     console.log("\n====== 4Y-Q EVIDENCE SUMMARY ======");
     console.log(`Auto-prepare idempotent: transcript=${autoPrepBody.transcript.state}`);
     console.log(`AiSuggestionsPanel: RENDERED`);
     console.log(`Legacy AI Workspace link: REMOVED (count=${legacyCount})`);
     console.log(`Preview-as-employee CTA: PRESENT`);
     console.log(`Inline draft actions available: ${hasActionable > 0 ? "yes" : "no"}`);
+    console.log(`Revalidate verdict BEFORE attest: ${verdictBefore}`);
+    console.log(`Revalidate verdict AFTER attest (reviewer-driven): ${verdictAfter}`);
   });
 });

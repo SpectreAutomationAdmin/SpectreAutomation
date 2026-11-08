@@ -43,6 +43,7 @@ async function main() {
         email: REVIEWER_EMAIL,
         name: "EP-TRAIN-4Y-Q Reviewer",
         passwordHash,
+        role: "TRAINING_AI_REVIEWER", // deprecated-but-required convenience field
       },
     });
   } else {
