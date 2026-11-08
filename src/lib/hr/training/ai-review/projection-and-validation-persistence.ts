@@ -434,6 +434,21 @@ export async function revalidateDraft(
     },
     { prisma: db, now: opts.now },
   );
+  // EP-TRAIN-4Y-R §6 — the promote path's integrity check compares
+  // `projection.sha256` against `draft.groundingProjectionSha256`. On
+  // original generation these are aligned; on re-materialisation (via
+  // attestation), the new projection has a new sha256 while the draft
+  // still carries the pre-attestation scalar. Keep them in sync so the
+  // promote-route integrity check passes after legitimate attestation.
+  await db.trainingQuestionAiDraft.updateMany({
+    where: {
+      id: draft.id,
+      // Guard against racing writers: only update if the scalar is
+      // currently stale (or if the FK moved).
+      NOT: { groundingProjectionSha256: materialised.projectionSha256 },
+    },
+    data: { groundingProjectionSha256: materialised.projectionSha256 },
+  });
   return {
     projectionRowId: materialised.projectionRowId,
     validationId: result.validationId,
