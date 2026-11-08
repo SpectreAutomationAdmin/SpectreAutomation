@@ -50,7 +50,18 @@ export async function makeSignedTrainingVideoUrl(
   // @ts-expect-error — adapter interface varies by implementation.
   if (typeof storage.signUrl === "function") {
     // @ts-expect-error — adapter interface varies by implementation.
-    return storage.signUrl(version.videoStorageKey, input.ttlSec);
+    const url = await storage.signUrl(version.videoStorageKey, input.ttlSec);
+    // EP-TRAIN-4Y-G diagnostic — log length + prefix only (not full
+    // signed URL, since it carries bounded auth material). Operator
+    // confirms URL shape in worker logs without leaking the signature.
+    const { logger } = await import("@/lib/observability/logger");
+    logger.info("training.video.signed-url", {
+      storageKey: version.videoStorageKey,
+      clubId: input.clubId,
+      urlLength: typeof url === "string" ? url.length : null,
+      urlHostAndPath: typeof url === "string" ? url.split("?")[0] : null,
+    });
+    return url;
   }
   // Fallback: an unsigned path. Should only hit in local / mock paths.
   return `/__dev-fallback/${version.videoStorageKey}`;

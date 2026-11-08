@@ -158,12 +158,20 @@ def _handle_transcribe_request(
             response_hmac_key=response_hmac_key,
         )
     except Exception as exc:  # pragma: no cover - inference layer
+        # EP-TRAIN-4Y-G diagnostics — surface the actual exception
+        # type + message in the signed response (operator-visible) +
+        # print the traceback to stderr so Modal logs carry it.
+        import traceback, sys
+        tb = traceback.format_exc()
+        print("TRANSCRIBE_INFERENCE_EXCEPTION", repr(exc), file=sys.stderr)
+        print(tb, file=sys.stderr, flush=True)
+        detail = f"{type(exc).__name__}: {str(exc)[:220]}"
         return _signed_error(
             operation=OPERATION_TRANSCRIBE,
             request_id=body["requestId"],
             http_status=500,
             code=FailureCode.REQUEST_BODY_INVALID,  # closest classification
-            message=f"Inference failed: {type(exc).__name__}",
+            message=f"Inference failed: {detail}",
             response_hmac_key=response_hmac_key,
         )
 
