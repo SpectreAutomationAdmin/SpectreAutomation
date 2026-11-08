@@ -81,29 +81,41 @@ export function AiDraftInlineActions(props: InlineDraftProps): React.ReactElemen
     return fetch(url, { method: "DELETE" });
   }
 
-  async function handleAttestCited(): Promise<void> {
+  const [segmentPanelOpen, setSegmentPanelOpen] = useState(false);
+
+  async function handleAttestSingleSegment(seg: InlineDraftProps["citedSegmentRows"][number]): Promise<void> {
     setErr(null);
     setMsg(null);
-    setBusy("attest");
+    setBusy(`attest-${seg.id}`);
     try {
-      let attested = 0;
-      let skipped = 0;
-      for (const seg of props.citedSegmentRows) {
-        if (seg.reviewerAttestedAt !== null) {
-          skipped++;
-          continue;
-        }
-        const r = await postJson(
-          `/api/admin/training/transcript-segments/${seg.id}/attest`,
-          { note: `EP-TRAIN-4Y-Q attestation for draft ${props.draftId.slice(0, 10)}` },
-        );
-        if (!r.ok) {
-          const body = (await r.json().catch(() => ({}))) as { error?: string; message?: string };
-          throw new Error(`segment ${seg.segmentIndex}: ${body.error ?? r.status}`);
-        }
-        attested++;
+      const r = await postJson(
+        `/api/admin/training/transcript-segments/${seg.id}/attest`,
+        { note: `EP-TRAIN-4Y-R per-segment attestation for draft ${props.draftId.slice(0, 10)}, segment ${seg.segmentIndex}` },
+      );
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string; message?: string };
+        throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
       }
-      setMsg(`Attested ${attested} segment${attested === 1 ? "" : "s"}${skipped ? ` (${skipped} already attested)` : ""}.`);
+      setMsg(`Segment ${seg.segmentIndex} attested.`);
+      startTransition(() => router.refresh());
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleUnattestSingleSegment(seg: InlineDraftProps["citedSegmentRows"][number]): Promise<void> {
+    setErr(null);
+    setMsg(null);
+    setBusy(`unattest-${seg.id}`);
+    try {
+      const r = await deleteJson(`/api/admin/training/transcript-segments/${seg.id}/attest`);
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string; message?: string };
+        throw new Error(body.message ?? body.error ?? `HTTP ${r.status}`);
+      }
+      setMsg(`Segment ${seg.segmentIndex} unattested.`);
       startTransition(() => router.refresh());
     } catch (e) {
       setErr((e as Error).message);
@@ -262,14 +274,17 @@ export function AiDraftInlineActions(props: InlineDraftProps): React.ReactElemen
       <div className="flex flex-wrap gap-2">
         {props.state === "REQUIRES_HUMAN_REVIEW" && (
           <>
+            {/* EP-TRAIN-4Y-R §3 — per-segment attestation only.
+                Reviewer must decide each segment individually. */}
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              disabled={pending || busy !== null || unattestedCount === 0}
-              onClick={handleAttestCited}
+              onClick={() => setSegmentPanelOpen((v) => !v)}
               data-testid={`ai-draft-inline-attest-${props.draftId}`}
             >
-              {busy === "attest" ? "Attesting…" : `Attest ${unattestedCount} cited segment${unattestedCount === 1 ? "" : "s"}`}
+              {segmentPanelOpen ? "Hide" : "Verify"} evidence (
+              {props.citedSegmentRows.filter((s) => s.reviewerAttestedAt !== null).length}/
+              {props.citedSegmentRows.length} attested)
             </button>
             <button
               type="button"
@@ -328,6 +343,70 @@ export function AiDraftInlineActions(props: InlineDraftProps): React.ReactElemen
           <span className="text-xs text-red-700">Rejected — excluded from course assembly.</span>
         )}
       </div>
+
+      {/* EP-TRAIN-4Y-R §3 — per-segment attestation panel. Each row
+          shows the transcript passage + explicit Attest / Unattest
+          controls. The reviewer MUST decide each segment individually;
+          no batch button. */}
+      {segmentPanelOpen && props.citedSegmentRows.length > 0 && (
+        <div
+          className="mt-2 rounded border border-stone-300 bg-stone-50/60 p-3 space-y-2"
+          data-testid={`ai-draft-inline-segments-panel-${props.draftId}`}
+        >
+          <p className="text-[11px] uppercase tracking-widest text-stone-500">
+            Verify each cited segment against the video, then attest it. Each decision is tied
+            to that exact segment and its current transcript revision.
+          </p>
+          {props.citedSegmentRows.map((seg) => {
+            const attested = seg.reviewerAttestedAt !== null;
+            return (
+              <div
+                key={seg.id}
+                className={
+                  "flex items-start gap-3 rounded border p-2 " +
+                  (attested
+                    ? "border-emerald-200 bg-emerald-50/40"
+                    : "border-amber-200 bg-amber-50/40")
+                }
+                data-testid={`ai-draft-inline-segment-row-${props.draftId}-${seg.segmentIndex}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] text-stone-500 font-mono">
+                    seg {seg.segmentIndex}{" "}
+                    {attested && (
+                      <span className="text-emerald-700">
+                        · attested {seg.reviewerAttestedAt}
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-1 text-xs text-stone-800">{seg.text}</p>
+                </div>
+                {attested ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm shrink-0"
+                    disabled={pending || busy !== null}
+                    onClick={() => handleUnattestSingleSegment(seg)}
+                    data-testid={`ai-draft-inline-unattest-segment-${props.draftId}-${seg.segmentIndex}`}
+                  >
+                    {busy === `unattest-${seg.id}` ? "…" : "Unattest"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm shrink-0"
+                    disabled={pending || busy !== null}
+                    onClick={() => handleAttestSingleSegment(seg)}
+                    data-testid={`ai-draft-inline-attest-segment-${props.draftId}-${seg.segmentIndex}`}
+                  >
+                    {busy === `attest-${seg.id}` ? "…" : "Attest segment"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {err && (
         <p

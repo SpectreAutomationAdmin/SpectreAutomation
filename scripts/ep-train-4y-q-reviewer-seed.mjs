@@ -44,12 +44,18 @@ async function main() {
         name: "EP-TRAIN-4Y-Q Reviewer",
         passwordHash,
         role: "TRAINING_AI_REVIEWER", // deprecated-but-required convenience field
+        // EP-TRAIN-4Y-R §2 — persist clubId so the admin layout's
+        // tenant-resolution + active-club middleware pick this club
+        // on first navigation. Without it the reviewer session
+        // cannot reach the canonical editor because the layout
+        // fallback redirect loops.
+        clubId: CLUB_ID,
       },
     });
   } else {
     await prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash },
+      data: { passwordHash, clubId: CLUB_ID, role: "TRAINING_AI_REVIEWER" },
     });
   }
 

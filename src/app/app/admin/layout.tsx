@@ -18,6 +18,12 @@ const ADMIN_ROLES = new Set([
   "SUPER_ADMIN", "CLUB_ADMIN", "GENERAL_MANAGER", "CONTROLLER", "FINANCE_ADMIN",
   "DEPARTMENT_MANAGER", "PRO_SHOP_MANAGER", "F_AND_B_MANAGER", "EVENT_MANAGER",
   "PAYROLL_ADMIN", "STAFF", "AUDITOR_READ_ONLY", "BOARD_READ_ONLY",
+  // EP-TRAIN-4Y-R §2 — the dedicated training-reviewer role is admin-
+  // side (reviewer operates the admin AI-training surfaces). Without
+  // this entry, a TRAINING_AI_REVIEWER session redirects to /app/member
+  // which in turn redirects back → infinite loop (observed in 4Y-Q
+  // acceptance). Adding it to the allowed set is the authorised fix.
+  "TRAINING_AI_REVIEWER",
 ]);
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
