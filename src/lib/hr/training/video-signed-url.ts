@@ -43,7 +43,17 @@ export async function makeSignedTrainingVideoUrl(
   if (!version.videoStorageKey) {
     throw new NotFoundError("TrainingCourseVersion", input.courseVersionId);
   }
-  const storage = await resolveDocumentStorage(input.clubId);
+  // EP-TRAIN-4Y-H §3 FIX — resolveDocumentStorage expects `{clubId}`,
+  // not the clubId string directly. Before this fix, `args.clubId`
+  // inside the resolveDocumentStorage closure evaluated to undefined
+  // (string.clubId === undefined), and the S3 adapter's `signUrl`
+  // prepended "clubs/undefined/" to the presigned URL path →
+  // signed URL pointed at a non-existent key → R2 returned 404 →
+  // the Modal transcriber failed every transcription attempt with
+  // REQUEST_BODY_INVALID. Verified by comparing a worker-side
+  // probe-generated URL (correct double-prefix → 200) against the
+  // worker-handler-generated URL (`clubs/undefined/` → 404).
+  const storage = await resolveDocumentStorage({ clubId: input.clubId });
   // The storage adapter exposes `signUrl` for time-bounded URLs. For
   // the in-memory adapter (dev / test) this returns a non-signed URL
   // that still works for the local read path.
