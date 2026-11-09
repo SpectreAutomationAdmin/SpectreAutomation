@@ -41,6 +41,10 @@ import {
 } from "./approval-guard";
 import { writeStateTransition, TransitionBlockedError } from "./transactional-audit";
 import { canonicalise, sha256Hex } from "./content-hash";
+import {
+  checkEmployeeFacingText,
+  codesForAudit,
+} from "./question-text-sanitizer";
 
 export type ApprovalRejectionCode =
   | "VERIFIED_ANSWER_MISSING"
@@ -52,6 +56,11 @@ export type ApprovalRejectionCode =
   | "EVIDENCE_ATTESTATION_MISSING"
   | "IDEMPOTENCY_CONFLICT"
   | "APPROVAL_GUARD_BLOCKED"
+  // EP-TRAIN-4Y-AA §7 — employee-facing question-text or option-text
+  // contains internal pipeline terminology (transcript references,
+  // segment ids, embedded answer keys, unresolved [Placeholder]s).
+  // Reviewer must discard or edit the draft before it can be approved.
+  | "EMPLOYEE_FACING_TEXT_LEAKAGE"
   | "TRANSITION_BLOCKED";
 
 /** Error shape callers (API route handlers) should turn into HTTP
@@ -346,6 +355,30 @@ export async function approveTrainingQuestionCandidate(
       // 2. Parse the draft's immutable options. The server derives the
       //    option text from here — NEVER from a client payload.
       const parsed = parseDraftJsonStrict(draft.draftJson);
+
+      // EP-TRAIN-4Y-AA §7 — employee-facing text sanitiser. Refuses
+      // approval of any draft whose questionText or options still
+      // contain internal pipeline terminology ("according to the
+      // transcript", "Segment IDs: [...]", "**Correct Answer:** A",
+      // template placeholders like "[Last Name]", etc.). This covers
+      // pre-AA drafts already in the DB — new drafts are filtered at
+      // worker-persist time by the same sanitiser. Discard + regen is
+      // the remediation; audit records the exact finding codes.
+      const sanitised = checkEmployeeFacingText({
+        questionText: parsed.questionText,
+        options: parsed.options.map((o) => ({ text: o.text })),
+      });
+      if (!sanitised.ok) {
+        throw new ApprovalRejectedError(
+          "EMPLOYEE_FACING_TEXT_LEAKAGE",
+          "Approval blocked: the question or an option still contains internal pipeline terminology (e.g. transcript references, segment ids, embedded answer keys). Discard this draft and regenerate.",
+          409,
+          {
+            findingCodes: codesForAudit(sanitised),
+            findings: sanitised.findings,
+          },
+        );
+      }
 
       // 3. Question-type + cardinality checks.
       if (

@@ -74,6 +74,13 @@ import {
   type QuestionCandidate,
 } from "./dedup";
 import { canonicalise, sha256Hex } from "../ai-review/content-hash";
+// EP-TRAIN-4Y-AA §7 — employee-facing text sanitiser. Applied inside
+// the per-group loop below so internal pipeline terminology never
+// lands in the DB.
+import {
+  checkEmployeeFacingText,
+  codesForAudit,
+} from "../ai-review/question-text-sanitizer";
 import {
   issuePilotAuthorization,
   ModalContractError,
@@ -305,8 +312,39 @@ export async function handleGenerateJob(
     decision: DedupDecision;
     kept: boolean;
   }> = [];
+  // EP-TRAIN-4Y-AA §8 — per-group diagnostic ledger. Written to
+  // shortfallReasonJson so future shortfalls are diagnosable without a
+  // GPU re-run. Every field is truthful — if Modal returned zero
+  // proposals, `proposalCountFromModal` is zero; the three drop
+  // counters describe why each unaccepted proposal disappeared.
+  const perGroupDiagnostics: Array<{
+    group: string;
+    kind: "CHECKPOINT" | "FINAL_ASSESSMENT";
+    requestedCount: number;
+    proposalCountFromModal: number;
+    groundingDroppedCount: number;
+    groundingDropReasons: Array<{
+      proposalIndex: number;
+      citedSegmentIds: number[];
+      citedOutsideEligible: number[];
+      citedExcluded: number[];
+    }>;
+    sanitizerDroppedCount: number;
+    sanitizerDropReasons: Array<{
+      proposalIndex: number;
+      findingCodes: string;
+    }>;
+    dedupDroppedCount: number;
+    persistedCount: number;
+    modalElapsedMs: number;
+    modalPromptTokens: number;
+    modalOutputTokens: number;
+  }> = [];
   let shortfallCount = 0;
   let dedupDropCount = 0;
+  // EP-TRAIN-4Y-AA §7 — cumulative sanitiser drop counter, surfaced
+  // alongside shortfallCount so the acceptance report reconciles.
+  let sanitizerDropCount = 0;
   // EP-TRAIN-4Y-Z §3 — seed with the metadata-call cost so the
   // pilot-budget guard inside the group loop, and the terminal
   // `recordGenerationCompleted`, see a truthful cumulative figure.
@@ -493,14 +531,67 @@ export async function handleGenerateJob(
         shortfallCount += g.target - modalResponse.proposals.length;
       }
 
+      // EP-TRAIN-4Y-AA §8 — seed the per-group diagnostic row. The
+      // counts below are incremented in the proposal loop; the modal
+      // counters are set now.
+      const diag: (typeof perGroupDiagnostics)[number] = {
+        group: g.id,
+        kind: g.kind,
+        requestedCount: g.target,
+        proposalCountFromModal: modalResponse.proposals.length,
+        groundingDroppedCount: 0,
+        groundingDropReasons: [],
+        sanitizerDroppedCount: 0,
+        sanitizerDropReasons: [],
+        dedupDroppedCount: 0,
+        persistedCount: 0,
+        modalElapsedMs: modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.generate,
+        modalPromptTokens: modalResponse.tokenCounts.prompt,
+        modalOutputTokens: modalResponse.tokenCounts.output,
+      };
+      perGroupDiagnostics.push(diag);
+
       // Light validation: ensure cited segments are inside the
       // plan's eligibleSegmentIds (full grounding-validator is the
       // next layer in; this handler only enforces the plan's
       // boundary).
       const eligible = new Set(plan.eligibleSegmentIds);
-      for (const p of modalResponse.proposals) {
-        const citedOk = p.sourceSegmentIds.every((id) => eligible.has(id) && !WORKER_EXCLUDED_SEGMENT_INDICES.has(id));
-        if (!citedOk) continue; // skip ungrounded proposals
+      for (let pi = 0; pi < modalResponse.proposals.length; pi++) {
+        const p = modalResponse.proposals[pi];
+        const citedOutside = p.sourceSegmentIds.filter((id) => !eligible.has(id));
+        const citedExcluded = p.sourceSegmentIds.filter((id) => WORKER_EXCLUDED_SEGMENT_INDICES.has(id));
+        const citedOk = citedOutside.length === 0 && citedExcluded.length === 0;
+        if (!citedOk) {
+          // EP-TRAIN-4Y-AA §8 — record WHY this proposal was skipped.
+          diag.groundingDroppedCount++;
+          diag.groundingDropReasons.push({
+            proposalIndex: pi,
+            citedSegmentIds: [...p.sourceSegmentIds],
+            citedOutsideEligible: citedOutside,
+            citedExcluded,
+          });
+          continue;
+        }
+
+        // EP-TRAIN-4Y-AA §7 — sanitiser drop BEFORE dedup. A
+        // proposal that passes grounding but carries internal
+        // pipeline terminology ("according to the transcript",
+        // "Segment IDs: [...]", "[Last Name]", etc.) is discarded
+        // so it never reaches persistence.
+        const san = checkEmployeeFacingText({
+          questionText: p.questionText,
+          options: p.options.map((o) => ({ text: o.text })),
+          explanation: p.explanation ?? null,
+        });
+        if (!san.ok) {
+          diag.sanitizerDroppedCount++;
+          sanitizerDropCount++;
+          diag.sanitizerDropReasons.push({
+            proposalIndex: pi,
+            findingCodes: codesForAudit(san),
+          });
+          continue;
+        }
 
         // Compute canonical body + content hash for dedup + persist.
         const canonicalBody = {
@@ -540,6 +631,7 @@ export async function handleGenerateJob(
         dedupLog.push({ group: g.id, candidateContentHash, decision, kept: !isDuplicate });
         if (isDuplicate) {
           dedupDropCount++;
+          diag.dedupDroppedCount++;
           continue;
         }
 
@@ -550,6 +642,7 @@ export async function handleGenerateJob(
           contentHash: candidateContentHash,
           dedupDecision: decision,
         });
+        diag.persistedCount++;
       }
 
       // Renew lease between groups.
@@ -762,22 +855,51 @@ export async function handleGenerateJob(
         promptTokenCount: totalPromptTokens,
         outputTokenCount: totalOutputTokens,
         groundingProjectionSha256: projectionSha,
-        shortfallReasonJson: (shortfallCount > 0 || dedupDropCount > 0 || dedupLog.length > 0)
+        // EP-TRAIN-4Y-AA §8 — always emit the shortfall JSON when any
+        // group ran (`perGroupDiagnostics.length > 0`) so a run with
+        // zero FA proposals is diagnosable too. The old code only
+        // emitted when shortfall/dedup had entries, which hid the
+        // 4Y-Z FA-shortfall root cause.
+        shortfallReasonJson: (
+          shortfallCount > 0 ||
+          dedupDropCount > 0 ||
+          dedupLog.length > 0 ||
+          sanitizerDropCount > 0 ||
+          perGroupDiagnostics.length > 0
+        )
           ? JSON.stringify({
-              schemaVersion: "shortfall-v1",
+              // Bumped — perGroupDiagnostics field added. v1 consumers
+              // (destination resolver, existing acceptance reports) read
+              // only dedupDecisions and are unaffected.
+              schemaVersion: "shortfall-v2",
               targetCount: plan.totalTargetQuestionCount,
               generatedCount: persistedCount,
               shortfall: shortfallCount,
               dedupDropCount,
+              // EP-TRAIN-4Y-AA §7 — proposals dropped at the employee-
+              // facing text sanitiser (BEFORE dedup, AFTER grounding).
+              sanitizerDropCount,
               dedupRulesVersion: DEDUP_RULES_VERSION,
               dedupDecisions: dedupLog,
-              reason: shortfallCount > 0 && dedupDropCount > 0
-                ? "model returned fewer grounded candidates than target and duplicates dropped"
-                : shortfallCount > 0
-                  ? "model returned fewer grounded candidates than target"
-                  : dedupDropCount > 0
-                    ? "duplicates dropped by dedup pipeline"
-                    : "candidates flagged for manager review as topic-related",
+              // EP-TRAIN-4Y-AA §8 — the per-group diagnostic ledger.
+              // One row per group that ran. `proposalCountFromModal`
+              // is the exact number of proposals Modal returned;
+              // `groundingDropReasons` shows the segment-id mismatch
+              // on each ungrounded proposal; `sanitizerDropReasons`
+              // surfaces the finding-code bundle; `dedupDroppedCount`
+              // + `persistedCount` reconcile against `dedupDecisions`.
+              perGroupDiagnostics,
+              reason: (
+                shortfallCount > 0 && dedupDropCount > 0
+                  ? "model returned fewer grounded candidates than target and duplicates dropped"
+                  : shortfallCount > 0
+                    ? "model returned fewer grounded candidates than target"
+                    : dedupDropCount > 0
+                      ? "duplicates dropped by dedup pipeline"
+                      : sanitizerDropCount > 0
+                        ? "proposals dropped by employee-facing text sanitiser"
+                        : "candidates flagged for manager review as topic-related"
+              ),
             })
           : undefined,
       },

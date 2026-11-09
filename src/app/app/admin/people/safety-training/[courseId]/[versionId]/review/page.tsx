@@ -1,22 +1,22 @@
 // EP-TRAIN-4Y-S §5+§6+§7+§8 — Manager Review (video-first authoring).
-//
-// Purpose: the manager-facing surface for an AI-prepared course. The
-// existing admin editor page remains for deep authoring; this page is
-// the one the founder's directive asks to lead with — a focused,
-// guided review of the AI's proposals, one question at a time, with
-// the video + timeline on the left and the question pane on the right.
+// EP-TRAIN-4Y-AA §2+§5 (2026-11-09) — reads course-level AI metadata
+// (title + description) directly from TrainingCourse so the review
+// surface shows the Qwen-written description, not the version's
+// transcript introduction. Also resolves each draft's generation-plan
+// destination (CHECKPOINT vs FINAL_ASSESSMENT) from the run's
+// shortfallReasonJson so the Checkpoints / Final-assessment tabs
+// filter authentically.
 //
 // Data loaded server-side (tenant-scoped at every query):
-//   - Course + version + checkpoints + (promoted) questions
-//   - AI drafts for this version via the existing read service
+//   - Course row (title, description, AI attribution)
+//   - Version row (publish settings, video, checkpoints)
+//   - Latest generation run (for the shortfallReasonJson → destination map)
+//   - AI drafts with their resolved destination kind
 //
 // Actions on the client call the existing approve / reject / promote
 // routes — no new mutation paths are introduced here. Separation of
-// duties is unchanged: a CLUB_ADMIN promotes already-approved drafts
-// but cannot approve; a TRAINING_AI_REVIEWER approves but cannot
-// promote. Both can discard.
+// duties is unchanged.
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
@@ -24,6 +24,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { listCheckpointsForVersion } from "@/lib/hr/training/checkpoints";
 import { checkPublishReadiness } from "@/lib/hr/training/courses";
+import { annotateDraftsWithDestination } from "@/lib/hr/training/generation/destination-resolver";
 import ManagerReviewClient from "./ManagerReviewClient";
 
 export const runtime = "nodejs";
@@ -43,7 +44,16 @@ export default async function ManagerReviewPage({
   const version = await prisma.trainingCourseVersion.findFirst({
     where: { id: params.versionId, course: { id: params.courseId, clubId } },
     include: {
-      course: { select: { id: true, code: true, title: true } },
+      course: {
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          description: true,
+          aiMetadataAttributionSource: true,
+          aiMetadataAttributedTitle: true,
+        },
+      },
     },
   });
   if (!version) redirect("/app/admin/people/safety-training");
@@ -55,9 +65,7 @@ export default async function ManagerReviewPage({
   const checkpoints = await listCheckpointsForVersion(version.id);
   const readiness = await checkPublishReadiness(version.id);
 
-  // Resolve audience summary for the pre-publish review card. The
-  // version's applicability is one of three modes — mirror the
-  // existing editor's branching.
+  // Audience summary for the pre-publish review card.
   type AudienceSummary = {
     kind: "everyone" | "scoped" | "explicit";
     deptCount: number;
@@ -85,9 +93,19 @@ export default async function ManagerReviewPage({
     readinessReasons: readiness.reasons,
   };
 
-  // Pull AI drafts for this version. Tenant scope is enforced via the
-  // (clubId, courseVersionId) filter; the state filter avoids rendering
-  // archived / failed noise.
+  // EP-TRAIN-4Y-AA §5 — load the latest generation run so the
+  // shortfallReasonJson (contentHash → group map) can resolve each
+  // draft's destination. A version with no run leaves every draft
+  // UNKNOWN which the client still renders safely.
+  const latestRun = await prisma.trainingQuestionAiGenerationRun.findFirst({
+    where: { clubId, courseVersionId: version.id },
+    orderBy: { requestedAt: "desc" },
+    select: { id: true, shortfallReasonJson: true },
+  });
+
+  // Pull AI drafts for this version. Tenant scope enforced via
+  // (clubId, courseVersionId); the state filter avoids archived /
+  // failed noise.
   type ClientDraft = {
     id: string;
     state: string;
@@ -97,6 +115,8 @@ export default async function ManagerReviewPage({
     sourceSegmentIds: number[];
     correctOptionIndex: number;
     isPromoted: boolean;
+    destination: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN";
+    planGroupKey: string | null;
   };
   let drafts: ClientDraft[] = [];
   if (canRead) {
@@ -119,10 +139,24 @@ export default async function ManagerReviewPage({
         id: true,
         state: true,
         draftJson: true,
-        promotion: { select: { questionId: true } },
+        contentHash: true,
+        promotion: { select: { questionId: true, destination: true } },
       },
       take: 100,
     });
+
+    // EP-TRAIN-4Y-AA §5 — resolve destination for every draft BEFORE
+    // mapping to the client shape. Post-promotion rows prefer the
+    // sidecar's immutable `destination`; pre-promotion rows fall back
+    // to the shortfallReasonJson resolver.
+    const annotated = annotateDraftsWithDestination({
+      drafts: rows.map((r) => ({ id: r.id, contentHash: r.contentHash })),
+      shortfallReasonJson: latestRun?.shortfallReasonJson ?? null,
+    });
+    const destById = new Map(
+      annotated.map((a) => [a.draft.id, { kind: a.destination, groupKey: a.planGroupKey }] as const),
+    );
+
     drafts = rows.map((d) => {
       let body: {
         questionText?: unknown;
@@ -143,6 +177,16 @@ export default async function ManagerReviewPage({
           break;
         }
       }
+      // Promotion sidecar wins when present — it's the immutable
+      // post-approval destination — otherwise use the resolver's
+      // output (which reads shortfallReasonJson).
+      const promoDest = d.promotion?.destination as
+        | "CHECKPOINT"
+        | "FINAL_ASSESSMENT"
+        | undefined;
+      const resolved = destById.get(d.id);
+      const destination: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" =
+        promoDest ?? resolved?.kind ?? "UNKNOWN";
       return {
         id: d.id,
         state: d.state,
@@ -159,31 +203,28 @@ export default async function ManagerReviewPage({
           : [],
         correctOptionIndex: correctIndex,
         isPromoted: d.state === "APPROVED_DRAFT" && !!d.promotion?.questionId,
+        destination,
+        planGroupKey: resolved?.groupKey ?? null,
       };
     });
   }
 
+  // EP-TRAIN-4Y-AA §2 — the course-level AI title + description are
+  // the authoritative source for the review header. Fall back to the
+  // version's values only when the course row is somehow empty (a
+  // pre-4Y-X course that never saw a Qwen metadata write).
+  const headerTitle = version.course.title;
+  const headerDescription =
+    version.course.description && version.course.description.trim().length > 0
+      ? version.course.description
+      : version.description ?? "";
+
   return (
     <div className="max-w-[1400px]">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <Link
-            href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}`}
-            className="text-sm text-stone-500 hover:text-club-ink"
-          >
-            ← Course editor
-          </Link>
-          <h1 className="page-title mt-2">{version.course.title}</h1>
-          <p className="text-sm text-stone-500 mt-1">
-            Review the questions Spectre generated from your video. Accept
-            what&apos;s correct; discard what doesn&apos;t fit.
-          </p>
-        </div>
-      </div>
       <ManagerReviewClient
         versionId={version.id}
-        courseTitle={version.course.title}
-        courseDescription={version.description ?? ""}
+        courseTitle={headerTitle}
+        courseDescription={headerDescription}
         videoStorageKey={version.videoStorageKey ?? null}
         videoDurationSec={version.videoDurationSec ?? null}
         videoUrl={
