@@ -120,6 +120,19 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
           done.push("generate-assessment");
           current = "ready";
           done.push("ready");
+          // EP-TRAIN-4Y-T §4+§5 — fire grounded metadata generation
+          // once generation is COMPLETED. Idempotent on the server:
+          // only applies when the course is still provisional; a
+          // manager-edited title is never overwritten. Call is
+          // fire-and-forget; the UI will re-render on the next
+          // router.refresh when the server page picks up the new
+          // course title/code.
+          void fetch(
+            `/api/admin/training/versions/${versionId}/generate-metadata`,
+            { method: "POST", cache: "no-store" },
+          ).catch(() => {
+            /* non-fatal; the manager can trigger from the review surface */
+          });
         } else {
           current = "generate-objectives";
         }
