@@ -94,6 +94,41 @@ export async function GET(
   });
 
   if (!job) {
+    // EP-TRAIN-4Y-U §4 — when no job exists for this courseVersionId
+    // but the uploaded video's sha256 already has a resolved transcript
+    // build (e.g. the same video was previously transcribed under a
+    // different course), surface COMPLETED so the UI treats transcript
+    // as ready. Downstream metadata generation + the manual question-
+    // generation trigger both operate off the build, not the job.
+    const existingBuild = await prisma.trainingTranscriptBuild.findFirst({
+      where: { clubId, sourceVideoSha256: version.videoSha256 },
+      orderBy: { producedAt: "desc" },
+      select: {
+        id: true,
+        resolvedTranscriptBuildId: true,
+        producedAt: true,
+        transcriberName: true,
+        transcriberModelName: true,
+      },
+    });
+    if (existingBuild) {
+      const segmentCount = await prisma.trainingTranscriptSegment.count({
+        where: { clubId, transcriptBuildId: existingBuild.id },
+      });
+      return NextResponse.json({
+        state: "COMPLETED",
+        jobId: null,
+        reason: "existing_build_reused",
+        transcript: {
+          buildId: existingBuild.id,
+          resolvedTranscriptBuildId: existingBuild.resolvedTranscriptBuildId,
+          producedAt: existingBuild.producedAt,
+          transcriberName: existingBuild.transcriberName,
+          transcriberModelName: existingBuild.transcriberModelName,
+          segmentCount,
+        },
+      });
+    }
     return NextResponse.json({ state: "NOT_STARTED" });
   }
 

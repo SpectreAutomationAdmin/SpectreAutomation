@@ -97,21 +97,22 @@ export async function POST(
       { status: 409 },
     );
   }
+  // EP-TRAIN-4Y-U §8 — pending-review is about evidence grounding
+  // for AI-generated question DRAFTS (segments the reviewer must
+  // attest before they can serve as citation evidence). It is NOT
+  // about whether the transcript text is readable. Use every
+  // non-empty segment for title/description extraction. The earlier
+  // filter was dropping 100% of the Silver Springs shared build's
+  // segments because they carry pending-review markers from the
+  // attestation workflow, leading to NO_USABLE_TRANSCRIPT on every
+  // provisional course that reuses that video.
   const segments = await prisma.trainingTranscriptSegment.findMany({
     where: { transcriptBuildId: build.id, clubId },
     orderBy: { segmentIndex: "asc" },
-    select: { segmentIndex: true, text: true, pendingReviewJson: true },
+    select: { segmentIndex: true, text: true },
   });
   const usableSegments = segments
-    .filter((s) => {
-      // Skip pending-review when the pending flag is populated.
-      try {
-        const p = JSON.parse(s.pendingReviewJson ?? "[]");
-        return Array.isArray(p) ? p.length === 0 : true;
-      } catch {
-        return true;
-      }
-    })
+    .filter((s) => (s.text ?? "").trim().length > 0)
     .map((s) => ({ segmentIndex: s.segmentIndex, text: s.text }));
 
   if (usableSegments.length === 0) {
