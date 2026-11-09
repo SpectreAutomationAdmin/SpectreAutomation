@@ -478,6 +478,30 @@ export async function handleGenerateJob(
         (err as Error)?.message ?? String(err),
         retryable,
       );
+      // EP-TRAIN-4Y-W §6 — retry governance.
+      //
+      // Before 4Y-W, this handler returned `{status: "FAILED"}` on
+      // a retryable error. The queue runOne wrapper treats a normal
+      // return as "job succeeded" and does NOT schedule a retry. But
+      // `safeFail(retryable=true)` + `recordGenerationFailed` have
+      // already moved the TrainingQuestionAiGenerationRun to QUEUED,
+      // expecting the BackgroundJob to be re-queued with backoff. The
+      // two contracts were decoupled: the run would sit in QUEUED
+      // forever, no retry would occur, and (worse) no GPU cost would
+      // be billed on a retry we never asked for.
+      //
+      // Fix: throw on retryable errors so the queue's runOne catch
+      // block records a JobFailure + reschedules the BackgroundJob
+      // with exponential backoff. The retry budget is enforced in
+      // BOTH places: BackgroundJob.maxAttempts caps queue retries,
+      // and TrainingQuestionAiGenerationRun.maxAttempts caps the
+      // Spectre lifecycle. Non-retryable errors still return
+      // cleanly below so the BackgroundJob terminates immediately.
+      if (retryable) {
+        throw new Error(
+          `TRAINING_GENERATE_QUESTIONS retryable failure (${code}): ${(err as Error)?.message ?? String(err)}`,
+        );
+      }
       return { status: "FAILED" };
     }
   }
