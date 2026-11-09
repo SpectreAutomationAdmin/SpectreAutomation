@@ -176,6 +176,15 @@ export default async function VersionEditorPage({
         </div>
         <div className="flex items-center gap-3">
           {isDraft && canAuthor && (
+            <Link
+              href={`/app/admin/people/safety-training/${params.courseId}/${params.versionId}/review`}
+              className="btn btn-primary btn-sm"
+              data-testid="training-editor-manager-review"
+            >
+              Manager review →
+            </Link>
+          )}
+          {isDraft && canAuthor && (
             // EP-TRAIN-4Y-Q §10 — Preview-as-employee is the primary
             // preview affordance in the unified editor. The legacy AI
             // Workspace link has been removed from the manager workflow
