@@ -109,6 +109,23 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
       } else if (t.state === "COMPLETED") {
         done.push("ingest");
         done.push("transcribe");
+        // EP-TRAIN-4Y-U §8 — fire grounded metadata generation as
+        // soon as the transcript is COMPLETED, independent of
+        // whether question generation has started or finished. The
+        // deterministic metadata path only needs the transcript, so
+        // title + description should populate even if generation
+        // hasn't been queued yet. Idempotent on the server (returns
+        // COURSE_ALREADY_FINALISED once the course has been edited).
+        // The 4Y-T version only fired this after generation
+        // COMPLETED — that left provisional courses with an empty
+        // transcript-ready state showing "Untitled training course"
+        // indefinitely when the generation queue was stuck.
+        void fetch(
+          `/api/admin/training/versions/${versionId}/generate-metadata`,
+          { method: "POST", cache: "no-store" },
+        ).catch(() => {
+          /* non-fatal; the review surface can retrigger */
+        });
         // Generation: NOT_STARTED / QUEUED / RUNNING / COMPLETED / FAILED
         if (g.state === "NOT_STARTED" || g.state === "QUEUED") {
           current = "generate-objectives";
@@ -120,19 +137,6 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
           done.push("generate-assessment");
           current = "ready";
           done.push("ready");
-          // EP-TRAIN-4Y-T §4+§5 — fire grounded metadata generation
-          // once generation is COMPLETED. Idempotent on the server:
-          // only applies when the course is still provisional; a
-          // manager-edited title is never overwritten. Call is
-          // fire-and-forget; the UI will re-render on the next
-          // router.refresh when the server page picks up the new
-          // course title/code.
-          void fetch(
-            `/api/admin/training/versions/${versionId}/generate-metadata`,
-            { method: "POST", cache: "no-store" },
-          ).catch(() => {
-            /* non-fatal; the manager can trigger from the review surface */
-          });
         } else {
           current = "generate-objectives";
         }
@@ -197,6 +201,13 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
 
   // status.kind === "ok"
   const doneSet = new Set<StageId>(status.done);
+  // EP-TRAIN-4Y-U §4 — transcript ready but generation hasn't been
+  // enqueued. Show an explicit button so the manager can authorise
+  // the Qwen run themselves, and surface "this is your next action"
+  // messaging truthfully.
+  const transcriptReady = doneSet.has("transcribe");
+  const generationStuckAtObjectives =
+    transcriptReady && status.current === "generate-objectives";
   return (
     <section
       className="card card-body"
@@ -208,6 +219,9 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
         Spectre is getting your course ready. You can leave this page and
         come back &mdash; progress is saved.
       </p>
+      {generationStuckAtObjectives && (
+        <ManualGenerationTrigger versionId={versionId} />
+      )}
       <ol className="mt-4 space-y-2">
         {STAGES.map((s) => {
           const isDone = doneSet.has(s.id);
@@ -244,5 +258,91 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
         </p>
       )}
     </section>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// EP-TRAIN-4Y-U §4 — explicit manual trigger for AI question
+// generation. Appears when the transcript has completed but no
+// generation run has been queued yet. Calls the existing
+// /versions/[id]/generate endpoint, which enqueues the real
+// TRAINING_GENERATE_QUESTIONS job (same path used from the deep
+// editor). The manager's click IS the authorisation moment for the
+// GPU run — Spectre never auto-triggers Qwen without an explicit
+// action.
+// ──────────────────────────────────────────────────────────────────
+
+function ManualGenerationTrigger({ versionId }: { versionId: string }) {
+  const router = useRouter();
+  const [status, setStatus] = useState<"idle" | "firing" | "queued" | "error">("idle");
+  const [message, setMessage] = useState<string | null>(null);
+
+  const fire = useCallback(async () => {
+    setStatus("firing");
+    setMessage(null);
+    try {
+      const resp = await fetch(
+        `/api/admin/training/versions/${versionId}/generate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      const body = await resp.json();
+      if (!resp.ok) {
+        setStatus("error");
+        setMessage(body?.message ?? `Generation request failed (${resp.status}).`);
+        return;
+      }
+      setStatus("queued");
+      setMessage(
+        body.idempotent
+          ? "Generation is already underway."
+          : "Question generation queued. This takes a few minutes — leave the tab open or come back later.",
+      );
+      router.refresh();
+    } catch (err) {
+      setStatus("error");
+      setMessage((err as Error)?.message ?? "Network error.");
+    }
+  }, [versionId, router]);
+
+  if (status === "queued") {
+    return (
+      <div
+        className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+        data-testid="training-prep-generation-queued"
+      >
+        {message}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2"
+      data-testid="training-prep-manual-generation"
+    >
+      <p className="text-sm text-amber-900">
+        Transcript is ready. Click below to generate the knowledge-check and
+        final-assessment questions. This uses Spectre&apos;s AI generator and
+        takes a few minutes.
+      </p>
+      {message && status === "error" && (
+        <p className="mt-2 text-sm text-red-700" role="alert">
+          {message}
+        </p>
+      )}
+      <button
+        type="button"
+        className="mt-2 btn btn-primary btn-sm"
+        onClick={fire}
+        disabled={status === "firing"}
+        data-testid="training-prep-run-generation"
+      >
+        {status === "firing" ? "Queueing…" : "Begin AI question generation"}
+      </button>
+    </div>
   );
 }

@@ -42,13 +42,23 @@ export default async function CourseUploadEntry({
   });
   if (!version) redirect("/app/admin/people/safety-training");
 
-  // If the video is already uploaded, the upload step is done — jump
-  // directly to Manager Review.
-  if (version.videoSha256) {
+  // EP-TRAIN-4Y-U §6 — only auto-redirect to review once AI
+  // preparation has actually produced reviewable drafts. If the
+  // video is uploaded but generation hasn't produced drafts, stay
+  // on the preparation page so the manager sees the real pipeline
+  // state (CoursePrepProgress below the dropzone).
+  const draftCount = version.videoSha256
+    ? await prisma.trainingQuestionAiDraft.count({
+        where: { clubId, courseVersionId: version.id },
+      })
+    : 0;
+  if (version.videoSha256 && draftCount > 0) {
     redirect(
       `/app/admin/people/safety-training/${params.courseId}/${params.versionId}/review`,
     );
   }
+
+  const videoPresent = !!version.videoSha256;
 
   return (
     <div className="max-w-[920px]">
@@ -59,36 +69,50 @@ export default async function CourseUploadEntry({
         ← Choose format
       </Link>
       <div className="mt-3 mb-6">
-        <h1 className="page-title">Upload your training video</h1>
+        <h1 className="page-title">
+          {videoPresent ? "Preparing your course" : "Upload your training video"}
+        </h1>
         <p className="mt-1 text-sm text-stone-500">
-          Drag a video onto the dropzone below or click to browse. Spectre will
-          transcribe the video and prepare the course automatically — you&apos;ll
-          review the generated title, description, and questions in the next step.
+          {videoPresent ? (
+            <>
+              The video has uploaded. Spectre is preparing the course now &mdash;
+              transcription, title and description, knowledge checkpoints, and
+              final-assessment questions. You can leave this page and come back;
+              progress is saved.
+            </>
+          ) : (
+            <>
+              Drag a video onto the dropzone below or click to browse. Spectre will
+              transcribe the video and prepare the course automatically &mdash; you&apos;ll
+              review the generated title, description, and questions in the next step.
+            </>
+          )}
         </p>
       </div>
 
-      <section className="card card-body" data-testid="training-upload-entry-dropzone-section">
-        <VideoUploader
-          versionId={version.id}
-          currentSha256={null}
-          currentMimeType={null}
-          currentSizeBytes={null}
-          durationSec={null}
-          disabled={false}
-        />
-      </section>
+      {!videoPresent && (
+        <section className="card card-body" data-testid="training-upload-entry-dropzone-section">
+          <VideoUploader
+            versionId={version.id}
+            currentSha256={null}
+            currentMimeType={null}
+            currentSizeBytes={null}
+            durationSec={null}
+            disabled={false}
+          />
+        </section>
+      )}
 
-      <div className="mt-6" data-testid="training-upload-entry-prep-placeholder">
-        {/* The progress component polls the status endpoints — before
-            upload it shows stage 1 ("Uploading video") as current with
-            every later stage pending. After upload completes, it
-            transitions through the stages as the worker makes progress. */}
-        <CoursePrepProgress versionId={version.id} hasVideo={false} />
+      <div
+        className={videoPresent ? "" : "mt-6"}
+        data-testid="training-upload-entry-prep-placeholder"
+      >
+        <CoursePrepProgress versionId={version.id} hasVideo={videoPresent} />
       </div>
 
       <p className="mt-4 text-xs text-stone-500">
-        Internal reference: <span className="font-mono">{version.course.code}</span>. The
-        real course code is generated from the AI title after preparation.
+        Internal reference: <span className="font-mono">{version.course.code}</span>.
+        {" "}The real course code is generated from the AI title after preparation.
       </p>
     </div>
   );

@@ -311,33 +311,37 @@ export default function ManagerReviewClient(props: Props) {
               No video uploaded yet.
             </div>
           )}
-          <div className="mt-3 text-xs text-stone-500">
-            Duration: {formatTime(props.videoDurationSec)}
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <span className="text-xs text-stone-500">
+              Duration: {formatTime(props.videoDurationSec)}
+            </span>
+            {props.checkpoints.length > 0 && (
+              <span className="text-xs text-stone-500">
+                {props.checkpoints.length} checkpoint{props.checkpoints.length === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
-        </section>
-
-        <section className="card card-body">
-          <h3 className="section-title text-sm">Checkpoints ({props.checkpoints.length})</h3>
-          {props.checkpoints.length === 0 ? (
-            <p className="text-xs text-stone-500 mt-2">
-              AI-proposed checkpoints will appear here once preparation completes.
-            </p>
-          ) : (
-            <ul className="mt-2 space-y-1" data-testid="manager-review-timeline-markers">
+          {/* EP-TRAIN-4Y-U §5 — checkpoint markers inline on the
+              timeline, not as a standalone card below the video. */}
+          {props.checkpoints.length > 0 && (
+            <div
+              className="mt-2 flex flex-wrap gap-1.5"
+              data-testid="manager-review-timeline-markers"
+            >
               {props.checkpoints.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    className="w-full text-left text-sm px-2 py-1 rounded hover:bg-stone-50"
-                    onClick={() => seekToCheckpoint(c.atSecond)}
-                    data-testid={`manager-review-timeline-marker-${c.id}`}
-                  >
-                    <span className="text-stone-500 font-mono text-xs">{formatTime(c.atSecond)}</span>
-                    <span className="ml-2">{c.title}</span>
-                  </button>
-                </li>
+                <button
+                  key={c.id}
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-xs text-stone-700 hover:border-club-green hover:bg-club-green/5 transition-colors"
+                  onClick={() => seekToCheckpoint(c.atSecond)}
+                  data-testid={`manager-review-timeline-marker-${c.id}`}
+                  title={c.title}
+                >
+                  <span className="font-mono text-stone-500">{formatTime(c.atSecond)}</span>
+                  <span className="max-w-[160px] truncate">{c.title}</span>
+                </button>
               ))}
-            </ul>
+            </div>
           )}
         </section>
       </div>
@@ -470,16 +474,41 @@ export default function ManagerReviewClient(props: Props) {
               </div>
             </>
           ) : (
-            <p className="text-sm text-stone-500" data-testid="manager-review-no-drafts">
-              No AI-generated questions yet. They&apos;ll appear here once preparation completes.
-            </p>
+            // EP-TRAIN-4Y-U §6 — truthful broken-link gate. Instead
+            // of pretending the review is ready, point the manager
+            // back to the preparation surface where the actual pipeline
+            // state is visible. The CoursePrepProgress component on
+            // that page shows which stage is pending.
+            <div
+              className="space-y-3 text-sm text-stone-700"
+              data-testid="manager-review-no-drafts"
+            >
+              <p className="font-medium text-stone-900">AI preparation hasn&apos;t produced questions yet.</p>
+              <p className="text-stone-500">
+                This usually means transcription or question generation hasn&apos;t completed
+                for this course. Return to the preparation page to see the current stage.
+              </p>
+              <a
+                href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}/upload`}
+                className="inline-block btn btn-primary btn-sm"
+                data-testid="manager-review-return-to-prep"
+              >
+                ← Return to preparation
+              </a>
+            </div>
           )}
         </section>
 
+        {/* EP-TRAIN-4Y-U §5 — the standalone Approval Status and
+            Before-You-Publish cards are removed from this stage. The
+            manager's completion-review state is governed by the
+            Training Requirements → Publish Review flow, not surfaced
+            here. Preview-as-employee remains reachable from the
+            editor + preview-review step. */}
         {totalInMode > 0 && (
           <div className="card card-body text-xs text-stone-500">
             <div className="flex items-center justify-between">
-              <span>{totalInMode} AI-generated questions in queue</span>
+              <span>{totalInMode} AI-generated question{totalInMode === 1 ? "" : "s"} in queue</span>
               <a
                 href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}/preview-as-employee`}
                 className="text-club-green hover:underline"
@@ -490,17 +519,6 @@ export default function ManagerReviewClient(props: Props) {
             </div>
           </div>
         )}
-
-        {/* ── §10 Approval & course assembly status ── */}
-        <ApprovalStatusCard drafts={activeDrafts} />
-
-        {/* ── §12 Pre-publish review summary ── */}
-        <PrePublishSummary
-          config={props.publishConfig}
-          canPublish={props.canPublish}
-          courseId={props.courseId}
-          versionId={props.versionId}
-        />
       </div>
     </div>
   );
