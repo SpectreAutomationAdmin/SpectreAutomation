@@ -60,8 +60,13 @@ export async function POST(
     );
   }
 
+  // EP-TRAIN-4Y-U — a course is "still provisional" if EITHER the
+  // title is at the placeholder OR the code still carries the
+  // AUTO-DRAFT prefix. A manager-visible title is the authoritative
+  // signal; if the title is still the placeholder, metadata hasn't
+  // landed yet regardless of what the code looks like.
   const isProvisional =
-    version.course.title === PROVISIONAL_TITLE &&
+    version.course.title === PROVISIONAL_TITLE ||
     version.course.code.startsWith(PROVISIONAL_CODE_PREFIX);
 
   // EP-TRAIN-4Y-T §5 short-circuit: if the course has already been
@@ -131,25 +136,30 @@ export async function POST(
   // Apply the generated metadata. The provisional-guard check above
   // already returned early for non-provisional courses — so reaching
   // this point means the course is still at AUTO-DRAFT placeholders.
+  //
+  // EP-TRAIN-4Y-U fix: the Manager Review UI reads course.title /
+  // course.description from the TrainingCourse row, not from the
+  // TrainingCourseVersion row that `updateDraft` writes to. Apply
+  // title + description + code to the course row AND version.description
+  // via updateDraft (for version-scoped audit + posting-guard).
   let applied = false;
   {
     try {
+      // Mirror description onto the version row for version-scoped
+      // consumers; title is the course-level field.
       await updateDraft(principal, version.id, {
-        title: metadata.title,
         description: metadata.description,
       });
-      // Course code update requires a dedicated path (createCourse
-      // set it from the input). We update the course row directly
-      // here because `updateDraft` is version-scoped. The code
-      // regex guard below mirrors the service's normaliseCode.
-      // Collision-safe retry: on P2002 (unique conflict on
-      // (clubId, code)), swap in a fresh 6-hex suffix.
       let codeAttempt = metadata.code;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await prisma.trainingCourse.update({
             where: { id: version.courseId },
-            data: { code: codeAttempt },
+            data: {
+              title: metadata.title,
+              description: metadata.description,
+              code: codeAttempt,
+            },
           });
           break;
         } catch (err) {
