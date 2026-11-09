@@ -64,6 +64,21 @@ export async function POST(
     version.course.title === PROVISIONAL_TITLE &&
     version.course.code.startsWith(PROVISIONAL_CODE_PREFIX);
 
+  // EP-TRAIN-4Y-T §5 short-circuit: if the course has already been
+  // established (title + code are not the AUTO-DRAFT placeholders),
+  // we NEVER overwrite — so there is no need to pay the transcript
+  // read cost. Return applied=false with the explicit skipped reason
+  // so callers see the stable, idempotent response regardless of
+  // transcript state.
+  if (!isProvisional) {
+    return NextResponse.json({
+      ok: true,
+      applied: false,
+      skippedReason: "COURSE_ALREADY_FINALISED",
+      metadata: null,
+    });
+  }
+
   // Load the resolved transcript via the existing build + segment
   // rows. We filter out segments the ingestion marked pending-review;
   // metadata is based ONLY on reliable evidence.
@@ -112,10 +127,11 @@ export async function POST(
 
   const metadata = await generateCourseMetadata({ segments: usableSegments });
 
-  // Apply ONLY when the course is still provisional — never silently
-  // overwrite a manager-established code/title (§5).
+  // Apply the generated metadata. The provisional-guard check above
+  // already returned early for non-provisional courses — so reaching
+  // this point means the course is still at AUTO-DRAFT placeholders.
   let applied = false;
-  if (isProvisional) {
+  {
     try {
       await updateDraft(principal, version.id, {
         title: metadata.title,
@@ -171,7 +187,7 @@ export async function POST(
   return NextResponse.json({
     ok: true,
     applied,
-    skippedReason: !isProvisional ? "COURSE_ALREADY_FINALISED" : null,
+    skippedReason: null,
     metadata,
   });
 }
