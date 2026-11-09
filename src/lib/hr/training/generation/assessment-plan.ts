@@ -239,6 +239,19 @@ export interface BuildPlanInput {
   readonly generatedByUserId?: string | null;
   /** Deterministic timestamp for testing; defaults to new Date(). */
   readonly now?: Date;
+  // EP-TRAIN-4Y-V (2026-11-09) — narrow, safe overrides for pilot
+  // call sites that need an exact split (e.g. the founder pilot
+  // asked for 5 checkpoint + 10 final-assessment questions). When
+  // BOTH are provided they bypass the 30/70 ratio and set the
+  // total to their sum; validation + segment-cap still apply.
+  readonly checkpointCount?: number;
+  readonly finalCount?: number;
+  /** "DEFAULT" keeps the pre-existing group chunking (up to 2
+   *  questions per group). "ONE_PER_GROUP" produces N separate
+   *  checkpoint groups of 1 question each at N evenly spaced
+   *  timestamps — matches the "5 timestamped checkpoints" reading
+   *  of the pilot directive. Defaults to "DEFAULT". */
+  readonly checkpointGroupStrategy?: "DEFAULT" | "ONE_PER_GROUP";
 }
 
 /**
@@ -255,7 +268,29 @@ export interface BuildPlanInput {
  * fewer eligible segments than would support the target count.
  */
 export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPlanV1 {
-  const target = Math.max(1, Math.min(20, input.targetTotalQuestions ?? 6));
+  // EP-TRAIN-4Y-V (2026-11-09) — explicit split overrides for pilots.
+  // When BOTH checkpointCount and finalCount are provided, they drive
+  // the plan shape directly; `targetTotalQuestions` is ignored. When
+  // only one is provided, we fall back to the ratio split (defensive).
+  const hasExplicitSplit =
+    typeof input.checkpointCount === "number" &&
+    typeof input.finalCount === "number";
+  if (hasExplicitSplit) {
+    if (input.checkpointCount! < 0 || input.finalCount! < 0) {
+      throw new Error(
+        `buildBaselineAssessmentPlan: checkpointCount + finalCount must be non-negative (got ${input.checkpointCount}/${input.finalCount}).`,
+      );
+    }
+    const sum = input.checkpointCount! + input.finalCount!;
+    if (sum < 1 || sum > 20) {
+      throw new Error(
+        `buildBaselineAssessmentPlan: checkpointCount + finalCount must be 1-20 (got ${sum}).`,
+      );
+    }
+  }
+  const target = hasExplicitSplit
+    ? input.checkpointCount! + input.finalCount!
+    : Math.max(1, Math.min(20, input.targetTotalQuestions ?? 6));
   const eligibleSegments = input.segments
     .filter((s) => !EXCLUDED_SEGMENT_INDICES.has(s.segmentIndex))
     .sort((a, b) => a.segmentIndex - b.segmentIndex);
@@ -292,32 +327,60 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     }
   }
 
-  // Count split: 30% checkpoint / 70% final (floor + ceil to preserve target).
-  const checkpointTarget = Math.floor(target * 0.3);
-  const finalTarget = target - checkpointTarget;
+  // Count split. Explicit overrides win; otherwise fall back to the
+  // 30%/70% ratio used since 4W.
+  const checkpointTarget = hasExplicitSplit
+    ? input.checkpointCount!
+    : Math.floor(target * 0.3);
+  const finalTarget = hasExplicitSplit
+    ? input.finalCount!
+    : target - checkpointTarget;
 
+  const groupStrategy = input.checkpointGroupStrategy ?? "DEFAULT";
   const proposedCheckpointGroups: AssessmentPlanCheckpointGroup[] = [];
-  const groupCount = Math.max(1, Math.min(learningObjectives.length, Math.ceil(checkpointTarget / 2)));
+  // Group count:
+  //   - ONE_PER_GROUP → one group per question (N groups of 1).
+  //   - DEFAULT       → prior 4W behaviour (up to ceil(N/2) groups,
+  //                     capped at #learningObjectives).
+  const groupCount =
+    groupStrategy === "ONE_PER_GROUP"
+      ? checkpointTarget
+      : Math.max(1, Math.min(learningObjectives.length, Math.ceil(checkpointTarget / 2)));
   const stepSec = input.videoDurationSec && input.videoDurationSec > 0
     ? input.videoDurationSec / (groupCount + 1)
     : 30;
-  if (checkpointTarget > 0) {
-    for (let i = 0; i < groupCount; i++) {
-      const loAssignment = learningObjectives[Math.min(i, learningObjectives.length - 1)];
-      proposedCheckpointGroups.push({
-        id: `cg-${i + 1}`,
-        atSec: Math.round(stepSec * (i + 1)),
-        learningObjectiveIds: [loAssignment.id],
-        targetQuestionCount: Math.max(1, Math.floor(checkpointTarget / groupCount)),
-      });
-    }
-    // Re-distribute any remainder onto the first group so the sum
-    // matches checkpointTarget.
-    let allocated = 0;
-    for (const cg of proposedCheckpointGroups) allocated += cg.targetQuestionCount;
-    if (allocated !== checkpointTarget && proposedCheckpointGroups.length > 0) {
-      const delta = checkpointTarget - allocated;
-      (proposedCheckpointGroups[0] as { targetQuestionCount: number }).targetQuestionCount += delta;
+  if (checkpointTarget > 0 && groupCount > 0) {
+    if (groupStrategy === "ONE_PER_GROUP") {
+      // N groups of exactly 1 question each at evenly spaced
+      // timestamps. Each group targets the single LO closest to its
+      // atSec (approximated by index).
+      for (let i = 0; i < groupCount; i++) {
+        const loAssignment = learningObjectives[Math.min(i, learningObjectives.length - 1)];
+        proposedCheckpointGroups.push({
+          id: `cg-${i + 1}`,
+          atSec: Math.round(stepSec * (i + 1)),
+          learningObjectiveIds: [loAssignment.id],
+          targetQuestionCount: 1,
+        });
+      }
+    } else {
+      // DEFAULT (legacy) — up to 2 questions per group, remainder
+      // on first group.
+      for (let i = 0; i < groupCount; i++) {
+        const loAssignment = learningObjectives[Math.min(i, learningObjectives.length - 1)];
+        proposedCheckpointGroups.push({
+          id: `cg-${i + 1}`,
+          atSec: Math.round(stepSec * (i + 1)),
+          learningObjectiveIds: [loAssignment.id],
+          targetQuestionCount: Math.max(1, Math.floor(checkpointTarget / groupCount)),
+        });
+      }
+      let allocated = 0;
+      for (const cg of proposedCheckpointGroups) allocated += cg.targetQuestionCount;
+      if (allocated !== checkpointTarget && proposedCheckpointGroups.length > 0) {
+        const delta = checkpointTarget - allocated;
+        (proposedCheckpointGroups[0] as { targetQuestionCount: number }).targetQuestionCount += delta;
+      }
     }
   }
 

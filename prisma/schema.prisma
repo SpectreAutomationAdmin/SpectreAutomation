@@ -13048,6 +13048,25 @@ model TrainingCourse {
   aiGenerationRuns TrainingQuestionAiGenerationRun[]
   aiQuestionDrafts TrainingQuestionAiDraft[]
 
+  // EP-TRAIN-4Y-V (2026-11-09) — AI-authored metadata attribution.
+  // When the deterministic or Qwen metadata generator writes title /
+  // description / code, it records the attribution timestamp + the
+  // generation run id (nullable when the deterministic path wrote
+  // it, since the deterministic path does not spawn a run). This is
+  // the authoritative "system authored, manager hasn't edited yet"
+  // signal — the Manager Review guards against overwrite by
+  // checking BOTH that attribution is set AND that the course's
+  // current title still matches what attribution recorded. Any
+  // write to TrainingCourse.title / description / code that does
+  // NOT originate from the metadata generator must clear this
+  // attribution (updateDraft already clears title/description by
+  // writing version-scoped copies; the admin course-edit path
+  // clears attribution explicitly — see course-identity-service).
+  aiMetadataAttributionAt      DateTime?
+  aiMetadataAttributionRunId   String?
+  aiMetadataAttributionSource  String?  // "deterministic" | "ai"
+  aiMetadataAttributedTitle    String?
+
   @@unique([clubId, code])
   @@index([clubId])
   @@index([clubId, category])

@@ -12859,6 +12859,14 @@ model TrainingCourse {
   aiGenerationRuns TrainingQuestionAiGenerationRun[]
   aiQuestionDrafts TrainingQuestionAiDraft[]
 
+  // EP-TRAIN-4Y-V (2026-11-09) — AI-authored metadata attribution.
+  // See the SQLite schema for the authoritative comment. Postgres
+  // mirror.
+  aiMetadataAttributionAt      DateTime?
+  aiMetadataAttributionRunId   String?
+  aiMetadataAttributionSource  String?
+  aiMetadataAttributedTitle    String?
+
   @@unique([clubId, code])
   @@index([clubId])
   @@index([clubId, category])

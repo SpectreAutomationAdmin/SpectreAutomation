@@ -15,6 +15,7 @@
 //
 // Permissions: `hr:training:write`. Tenant-scoped at every read.
 
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
@@ -49,7 +50,19 @@ export async function POST(
   const version = await prisma.trainingCourseVersion.findFirst({
     where: { id: versionId, course: { clubId } },
     include: {
-      course: { select: { id: true, code: true, title: true } },
+      course: {
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          clubId: true,
+          club: { select: { name: true } },
+          // EP-TRAIN-4Y-V (2026-11-09) — attribution signal.
+          aiMetadataAttributionAt: true,
+          aiMetadataAttributionSource: true,
+          aiMetadataAttributedTitle: true,
+        },
+      },
     },
   });
   if (!version) return NextResponse.json({ error: "not_found" }, { status: 404 });
@@ -60,21 +73,33 @@ export async function POST(
     );
   }
 
-  // EP-TRAIN-4Y-U — a course is "still provisional" if EITHER the
-  // title is at the placeholder OR the code still carries the
-  // AUTO-DRAFT prefix. A manager-visible title is the authoritative
-  // signal; if the title is still the placeholder, metadata hasn't
-  // landed yet regardless of what the code looks like.
-  const isProvisional =
+  // EP-TRAIN-4Y-V §4 — the authoritative "manager has finalised the
+  // course identity" signal is:
+  //   - attribution is set, AND the current title DIFFERS from the
+  //     attributed snapshot (the manager edited post-system-write);
+  //   - OR, with attribution unset, the course is no longer at the
+  //     string-level provisional placeholders (pre-4Y-V courses
+  //     the manager already edited before the attribution column
+  //     existed).
+  const atPlaceholderStrings =
     version.course.title === PROVISIONAL_TITLE ||
     version.course.code.startsWith(PROVISIONAL_CODE_PREFIX);
+  const attributionSet = version.course.aiMetadataAttributionAt !== null;
+  const titleMatchesAttributedSnapshot =
+    attributionSet &&
+    version.course.aiMetadataAttributedTitle !== null &&
+    version.course.aiMetadataAttributedTitle === version.course.title;
 
-  // EP-TRAIN-4Y-T §5 short-circuit: if the course has already been
-  // established (title + code are not the AUTO-DRAFT placeholders),
-  // we NEVER overwrite — so there is no need to pay the transcript
-  // read cost. Return applied=false with the explicit skipped reason
-  // so callers see the stable, idempotent response regardless of
-  // transcript state.
+  // "Provisional" here means "the system is still the one authoring
+  // course identity for this course." Either (a) we haven't attributed
+  // anything yet AND the strings are still the AUTO-DRAFT placeholders,
+  // or (b) we previously attributed AND the manager hasn't touched the
+  // title since that attribution (i.e. a retry overwrites our own
+  // earlier write — fine — but refuses to stomp a manager edit).
+  const isProvisional = attributionSet
+    ? titleMatchesAttributedSnapshot
+    : atPlaceholderStrings;
+
   if (!isProvisional) {
     return NextResponse.json({
       ok: true,
@@ -131,22 +156,38 @@ export async function POST(
     );
   }
 
-  const metadata = await generateCourseMetadata({ segments: usableSegments });
+  // EP-TRAIN-4Y-V §4 — try Qwen first (one Modal call, tightly
+  // scoped), fall back to deterministic if the AI path refuses or
+  // errors. The founder directive asks for Qwen, not merely
+  // deterministic extraction, so we prefer AI here. Deterministic is
+  // retained as the safety net — never let the manager stare at
+  // "Untitled training course" indefinitely.
+  const metadata = await generateCourseMetadata({
+    segments: usableSegments,
+    preferAi: true,
+    binding: {
+      clubId,
+      courseId: version.courseId,
+      courseVersionId: version.id,
+      sourceVideoSha256: version.videoSha256,
+      resolvedTranscriptBuildId: build.id,
+      approvedGroundingProjectionSha256: createHash("sha256")
+        .update(`metadata:${build.id}`)
+        .digest("hex"),
+      clubName: version.course.club?.name,
+    },
+  });
 
   // Apply the generated metadata. The provisional-guard check above
-  // already returned early for non-provisional courses — so reaching
-  // this point means the course is still at AUTO-DRAFT placeholders.
+  // already returned early for non-provisional courses.
   //
-  // EP-TRAIN-4Y-U fix: the Manager Review UI reads course.title /
-  // course.description from the TrainingCourse row, not from the
-  // TrainingCourseVersion row that `updateDraft` writes to. Apply
-  // title + description + code to the course row AND version.description
-  // via updateDraft (for version-scoped audit + posting-guard).
+  // EP-TRAIN-4Y-U fix: title + description + code live on the
+  // TrainingCourse row.
+  // EP-TRAIN-4Y-V fix: also record the attribution snapshot so a
+  // retry doesn't stomp a subsequent manager edit.
   let applied = false;
   {
     try {
-      // Mirror description onto the version row for version-scoped
-      // consumers; title is the course-level field.
       await updateDraft(principal, version.id, {
         description: metadata.description,
       });
@@ -159,13 +200,20 @@ export async function POST(
               title: metadata.title,
               description: metadata.description,
               code: codeAttempt,
+              aiMetadataAttributionAt: new Date(),
+              aiMetadataAttributionRunId: null,
+              aiMetadataAttributionSource: metadata.inferenceSource,
+              aiMetadataAttributedTitle: metadata.title,
             },
           });
           break;
         } catch (err) {
           if ((err as { code?: string })?.code === "P2002" && attempt < 2) {
-            const fresh = await generateCourseMetadata({ segments: usableSegments });
-            codeAttempt = fresh.code;
+            // Code collision — regenerate code only (title/description
+            // stay the same).
+            codeAttempt = `${codeAttempt.slice(0, 50)}_${Math.floor(Math.random() * 1_000_000)
+              .toString(16)
+              .toUpperCase()}`.slice(0, 64);
             continue;
           }
           throw err;

@@ -18,6 +18,11 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { audit } from "@/lib/audit";
+import {
+  buildPlanAndRequestGeneration,
+  BuildAndEnqueueRejected,
+} from "@/lib/hr/training/generation/enqueue-helper";
+import { logger } from "@/lib/observability/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -170,7 +175,45 @@ export async function POST(
         runId: existingRun.id,
       };
     } else {
-      report.generation = { state: "WOULD_ENQUEUE" };
+      // EP-TRAIN-4Y-V §5 — auto-trigger. Transcript is ready AND no
+      // run exists → enqueue the default-plan generation run NOW so
+      // the manager does not have to click a button. Idempotency is
+      // guaranteed by the (clubId, courseVersionId, transcriptBuildId,
+      // planIdentity) partial-unique index: repeated polls from the
+      // browser never create duplicate runs.
+      //
+      // The default plan (targetTotalQuestions=6) is used. The pilot
+      // 5+10 plan is NOT auto-triggered — pilot calls go through
+      // /generate with explicit overrides. When this auto-trigger
+      // wins the planIdentity race over an explicit pilot call, the
+      // pilot caller sees a DUPLICATE_LIVE_RUN rejection and must
+      // cancel the default run first.
+      try {
+        const result = await buildPlanAndRequestGeneration(principal, {
+          clubId,
+          courseVersionId: versionId,
+        });
+        report.generation = {
+          state: result.idempotent ? "ALREADY_QUEUED" : "WOULD_ENQUEUE",
+          runId: result.generationRunId,
+        };
+      } catch (err) {
+        if (err instanceof BuildAndEnqueueRejected) {
+          // Non-fatal: a legitimate rejection (missing transcript,
+          // version not draft, cost cap) is reported as WOULD_ENQUEUE
+          // for the UI's progress indicator, and the rejection code
+          // gets logged for operator diagnosis. We don't propagate
+          // the 4xx — the orchestration report is informational.
+          logger.info("training.auto_prepare.auto_trigger.rejected", {
+            clubId,
+            courseVersionId: versionId,
+            rejectionCode: err.rejectionCode,
+          });
+          report.generation = { state: "WOULD_ENQUEUE" };
+        } else {
+          throw err;
+        }
+      }
     }
   }
 

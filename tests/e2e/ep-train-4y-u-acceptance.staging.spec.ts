@@ -53,10 +53,12 @@ test.describe("EP-TRAIN-4Y-U acceptance — review simplification + truthful pro
     expect(page.url()).toContain(`/${VERSION_ID}/upload`);
     // Preparation progress is visible with a current stage.
     await expect(page.locator('[data-testid="training-prep-progress"]')).toBeVisible({ timeout: 15_000 });
-    // Manual GPU-authorisation trigger must be visible because the
-    // transcript is ready but the generation run was never queued.
-    await expect(page.locator('[data-testid="training-prep-manual-generation"]')).toBeVisible();
-    await expect(page.locator('[data-testid="training-prep-run-generation"]')).toBeVisible();
+    // EP-TRAIN-4Y-V §5 — question generation now auto-triggers on
+    // transcript COMPLETED; the manual button was removed. Assert
+    // the progress stages render; the auto-trigger side effect (a
+    // new TrainingQuestionAiGenerationRun) is proven by the 4Y-V
+    // acceptance spec, not here.
+    await expect(page.locator('[data-testid="training-prep-stage-transcribe"]')).toBeVisible();
     await page.screenshot({ path: "test-results/4yu-01-founder-upload-truthful.png", fullPage: true });
     await ctx.close();
   });
