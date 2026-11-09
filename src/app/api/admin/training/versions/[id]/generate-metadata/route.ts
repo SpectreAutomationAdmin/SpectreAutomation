@@ -15,7 +15,6 @@
 //
 // Permissions: `hr:training:write`. Tenant-scoped at every read.
 
-import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
@@ -156,26 +155,20 @@ export async function POST(
     );
   }
 
-  // EP-TRAIN-4Y-V §4 — try Qwen first (one Modal call, tightly
-  // scoped), fall back to deterministic if the AI path refuses or
-  // errors. The founder directive asks for Qwen, not merely
-  // deterministic extraction, so we prefer AI here. Deterministic is
-  // retained as the safety net — never let the manager stare at
-  // "Untitled training course" indefinitely.
+  // EP-TRAIN-4Y-V §4 — this HTTP-side route is the deterministic
+  // fallback path only. Qwen-sourced metadata is produced inside the
+  // worker handler (`handleGenerateJob`) when the pilot or auto-
+  // trigger fires a question-generation run — the worker has the
+  // Modal fingerprint + HMAC secrets; the web app does not, and the
+  // founder directive explicitly forbids secret rotation. The worker
+  // writes the attribution row with inferenceSource="ai" when it
+  // produces Qwen metadata; this route only runs when the manager (or
+  // the browser poll loop) wants the course to leave the provisional
+  // placeholders BEFORE the worker has had a chance — in which case
+  // deterministic extraction is the right fallback.
   const metadata = await generateCourseMetadata({
     segments: usableSegments,
-    preferAi: true,
-    binding: {
-      clubId,
-      courseId: version.courseId,
-      courseVersionId: version.id,
-      sourceVideoSha256: version.videoSha256,
-      resolvedTranscriptBuildId: build.id,
-      approvedGroundingProjectionSha256: createHash("sha256")
-        .update(`metadata:${build.id}`)
-        .digest("hex"),
-      clubName: version.course.club?.name,
-    },
+    preferAi: false,
   });
 
   // Apply the generated metadata. The provisional-guard check above

@@ -160,6 +160,28 @@ export async function handleGenerateJob(
     .map((s) => `[${s.segmentIndex}] ${s.text}`)
     .join("\n");
 
+  // EP-TRAIN-4Y-V §4 — Qwen-sourced course metadata (title +
+  // description) runs in the worker because the Modal fingerprint +
+  // HMAC secrets are bound here, not on the web app. Fires BEFORE
+  // the question-group loop so the manager sees a correct title as
+  // soon as the first poll cycle returns after this run completes.
+  // Idempotent via the attribution-column guard on TrainingCourse —
+  // a retry (or any subsequent generation run on this course) checks
+  // the attributed-title snapshot and does nothing if the manager
+  // has already edited it since the system wrote it.
+  await maybeGenerateCourseMetadata({
+    db,
+    clubId: claim.clubId,
+    courseId: claim.courseId,
+    courseVersionId: claim.courseVersionId,
+    sourceVideoSha256: plan.sourceVideoSha256,
+    resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
+    transcriptText: fullTranscriptText,
+    runId: claim.runId,
+    fetchImpl: deps.fetchImpl,
+    env: deps.env,
+  });
+
   // EP-TRAIN-4Y-N (2026-11-08) — context-aware prompt contract.
   // When the plan declares `generationPromptContract: "ctx-v1"`, the
   // worker produces per-checkpoint windowed transcripts + per-group
@@ -745,6 +767,155 @@ async function resolveCourseId(db: PrismaClient, courseVersionId: string): Promi
   });
   if (!v) throw new Error(`course-version ${courseVersionId} not found`);
   return v.courseId;
+}
+
+// EP-TRAIN-4Y-V §4 — Qwen-sourced course metadata, worker-side.
+//
+// Called before the question-group loop. Guard order:
+//   1. Load the course row. Bail if the attribution snapshot shows a
+//      manager edit since the last system write (same OR-semantics as
+//      /generate-metadata's HTTP guard).
+//   2. Call `callQwenForCourseMetadata` with a specialised prompt +
+//      maxQuestions=1. Reuses the existing generate app — no Modal
+//      re-deploy.
+//   3. Write title + description + code + attribution snapshot in a
+//      single `trainingCourse.update`. Retry up to 3 times on P2002
+//      (unique-code collision) with a fresh random suffix.
+//   4. Record Modal metrics on the run row (modalElapsedMsTotal gets
+//      added to the run's inferenceMs so cost tracking is honest).
+//
+// Fall-through on failure: a Qwen error does NOT fail the whole
+// generation run — the questions still get generated and the manager
+// gets to see them. The audit log + run metrics show the metadata
+// attempt was tried; the deterministic path (via /generate-metadata)
+// will still populate the course when the manager polls.
+async function maybeGenerateCourseMetadata(args: {
+  db: PrismaClient;
+  clubId: string;
+  courseId: string;
+  courseVersionId: string;
+  sourceVideoSha256: string;
+  resolvedTranscriptBuildId: string;
+  transcriptText: string;
+  runId: string;
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const PROVISIONAL_TITLE = "Untitled training course";
+  const PROVISIONAL_CODE_PREFIX = "AUTO-DRAFT";
+  try {
+    const course = await args.db.trainingCourse.findUnique({
+      where: { id: args.courseId },
+      select: {
+        id: true,
+        code: true,
+        title: true,
+        clubId: true,
+        club: { select: { name: true } },
+        aiMetadataAttributionAt: true,
+        aiMetadataAttributedTitle: true,
+      },
+    });
+    if (!course) return;
+    const atPlaceholderStrings =
+      course.title === PROVISIONAL_TITLE ||
+      course.code.startsWith(PROVISIONAL_CODE_PREFIX);
+    const attributionSet = course.aiMetadataAttributionAt !== null;
+    const titleMatchesAttributedSnapshot =
+      attributionSet &&
+      course.aiMetadataAttributedTitle !== null &&
+      course.aiMetadataAttributedTitle === course.title;
+    const isProvisional = attributionSet
+      ? titleMatchesAttributedSnapshot
+      : atPlaceholderStrings;
+    if (!isProvisional) {
+      logger.info("training.generation.worker.metadata.skipped_finalised", {
+        courseId: args.courseId,
+        courseVersionId: args.courseVersionId,
+      });
+      return;
+    }
+
+    const { callQwenForCourseMetadata } = await import(
+      "@/lib/hr/training/ai-metadata/qwen-metadata-client"
+    );
+    const { createHash } = await import("node:crypto");
+    const r = await callQwenForCourseMetadata(
+      {
+        clubId: args.clubId,
+        courseId: args.courseId,
+        courseVersionId: args.courseVersionId,
+        sourceVideoSha256: args.sourceVideoSha256,
+        resolvedTranscriptBuildId: args.resolvedTranscriptBuildId,
+        approvedGroundingProjectionSha256: createHash("sha256")
+          .update(`metadata:${args.resolvedTranscriptBuildId}`)
+          .digest("hex"),
+        transcriptText: args.transcriptText,
+        clubName: course.club?.name,
+      },
+      { fetchImpl: args.fetchImpl, env: args.env },
+    );
+    const { randomBytes } = await import("node:crypto");
+    const codeSuffix = randomBytes(3).toString("hex").toUpperCase();
+    let code = deriveMetadataCode(r.title, codeSuffix);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await args.db.trainingCourse.update({
+          where: { id: args.courseId },
+          data: {
+            title: r.title,
+            description: r.description,
+            code,
+            aiMetadataAttributionAt: new Date(),
+            aiMetadataAttributionRunId: args.runId,
+            aiMetadataAttributionSource: "ai",
+            aiMetadataAttributedTitle: r.title,
+          },
+        });
+        logger.info("training.generation.worker.metadata.applied", {
+          courseId: args.courseId,
+          courseVersionId: args.courseVersionId,
+          runId: args.runId,
+          titleFirst60: r.title.slice(0, 60),
+          modalRequestId: r.modalRequestId,
+          modalElapsedMsTotal: r.modalElapsedMsTotal,
+          modalPromptTokens: r.modalPromptTokens,
+          modalOutputTokens: r.modalOutputTokens,
+        });
+        return;
+      } catch (err) {
+        if ((err as { code?: string })?.code === "P2002" && attempt < 2) {
+          code = `${code.slice(0, 50)}_${randomBytes(3).toString("hex").toUpperCase()}`.slice(0, 64);
+          continue;
+        }
+        throw err;
+      }
+    }
+  } catch (err) {
+    logger.error("training.generation.worker.metadata.failed", {
+      courseId: args.courseId,
+      courseVersionId: args.courseVersionId,
+      runId: args.runId,
+      error: (err as Error)?.message ?? String(err),
+    });
+    // Non-fatal — the question-generation loop continues. The
+    // deterministic /generate-metadata HTTP route serves as the
+    // fallback path for the title; it fires on every browser poll
+    // once the transcript is COMPLETED.
+  }
+}
+
+/** Derive a stable code from the title. Same shape as the deterministic
+ *  path's helper — keeps the course-code shape consistent whether
+ *  metadata comes from Qwen or extractive summarisation. */
+function deriveMetadataCode(title: string, suffix: string): string {
+  const base = title
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  const safeBase = base.length >= 2 ? base : "COURSE";
+  return `${safeBase}_${suffix}`.slice(0, 64);
 }
 
 function defaultLoadSegments(db: PrismaClient) {
