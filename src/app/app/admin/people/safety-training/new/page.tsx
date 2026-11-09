@@ -54,11 +54,12 @@ export default async function NewCourseFormatSelection() {
           </div>
           <p className="text-sm text-stone-600">
             Upload a training video and let Spectre prepare the course
-            for you &mdash; transcription, learning objectives, knowledge
-            checks, and a final assessment.
+            &mdash; title, description, transcription, learning objectives,
+            knowledge checks, and a final assessment.
           </p>
           <p className="text-xs text-stone-500 mt-auto">
-            You&apos;ll review every AI-generated question before publishing.
+            You&apos;ll review every AI-generated question + requirement
+            before publishing.
           </p>
         </Link>
 

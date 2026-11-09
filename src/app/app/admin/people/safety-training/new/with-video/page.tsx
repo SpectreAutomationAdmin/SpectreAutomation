@@ -1,208 +1,98 @@
-// EP-TRAIN-4Y-S §3/§4 — With-video course creation (step 1 of 2).
+// EP-TRAIN-4Y-T §2+§3 — Upload-first with-video entry.
 //
-// Collects the same identity + compliance + applicability fields as
-// the without-video branch; `createCourseAction` creates a DRAFT v1
-// and redirects to the version editor. The editor then shows the
-// enhanced upload + prep-progress surface (added by the same slice).
+// Previously (4Y-S) this was an identity form requiring code/title/
+// description/compliance/audience before upload. The 4Y-T founder
+// directive removes that upfront burden: the manager picks "With
+// video" and immediately lands on a prominent upload area.
 //
-// We don't try to upload before the draft exists — the draft's
-// `versionId` is the tenant-scoped anchor the upload + AI pipeline
-// require.
+// Behaviour:
+//   - If this user has a RECENT (<60 min) provisional draft on the
+//     active club with no video yet, RESUME it by redirecting to its
+//     upload screen. Durable across refresh / navigate-away / return.
+//   - Otherwise, create a new provisional draft with a placeholder
+//     title + an auto-generated code (collision-safe via cuid), and
+//     redirect to its upload screen. The real course code + title
+//     will be derived from the transcript during AI preparation
+//     (§5) and finalised on first manager edit — the provisional
+//     identifiers are never surfaced as the course title (§3).
+//
+// Guards: `hr:training:write`. Same tenant scope as `createCourse`.
+// Auto-provisioning never writes anything the manager can't revert
+// by returning to the dashboard (the draft remains DRAFT until
+// explicit publish).
 
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
-import { TRAINING_COURSE_CATEGORIES } from "@/lib/hr/training/courses";
-import { createCourseAction } from "../../_actions";
+import { createCourse } from "@/lib/hr/training/courses";
+import { randomBytes } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export default async function NewSafetyTrainingCourseWithVideo({
-  searchParams,
-}: {
-  searchParams: Promise<{ err?: string }>;
-}) {
+const RESUME_WINDOW_MS = 60 * 60 * 1000; // 60 min
+const PROVISIONAL_CODE_PREFIX = "AUTO-DRAFT";
+const PROVISIONAL_TITLE = "Untitled training course";
+
+export default async function NewWithVideoEntry() {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
   const clubId = await getActiveClubId({ clubId: principal.activeClubId ?? null, role: "" });
   if (!hasPermission(principal, clubId, "hr:training:write")) {
     redirect("/app/admin/people/safety-training");
   }
-  const { err } = await searchParams;
-  const action = createCourseAction.bind(null, clubId);
 
-  return (
-    <div className="max-w-[720px]">
-      <Link
-        href="/app/admin/people/safety-training/new"
-        className="text-sm text-stone-500 hover:text-club-ink"
-      >
-        ← Choose format
-      </Link>
-      <div className="mt-3 mb-6">
-        <h1 className="page-title">New course &mdash; with video</h1>
-        <p className="mt-1 text-sm text-stone-500">
-          Give the course a title and audience. On the next step you&apos;ll upload
-          the training video and Spectre will prepare the course for your review.
-        </p>
-      </div>
+  const resumeCutoff = new Date(Date.now() - RESUME_WINDOW_MS);
+  // Look for a provisional-draft on this club created by this user
+  // within the resume window, still a DRAFT version with no video,
+  // and recognisable by the AUTO-DRAFT code prefix.
+  const existing = await prisma.trainingCourse.findFirst({
+    where: {
+      clubId,
+      createdByUserId: principal.id,
+      code: { startsWith: PROVISIONAL_CODE_PREFIX },
+      createdAt: { gte: resumeCutoff },
+      versions: {
+        some: {
+          state: "DRAFT",
+          version: 1,
+          videoSha256: null,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      versions: {
+        where: { state: "DRAFT", version: 1 },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { id: true },
+      },
+    },
+  });
 
-      {err && (
-        <div
-          role="alert"
-          className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-        >
-          {err}
-        </div>
-      )}
+  if (existing && existing.versions[0]) {
+    // §3 "Preserve upload and preparation state across refresh/navigation."
+    redirect(
+      `/app/admin/people/safety-training/${existing.id}/${existing.versions[0].id}/upload`,
+    );
+  }
 
-      <form action={action} className="space-y-6">
-        <section className="card card-body space-y-4">
-          <h2 className="section-title text-lg">Identity</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="label" htmlFor="code">Course code</label>
-              <input
-                id="code"
-                name="code"
-                className="input font-mono"
-                required
-                maxLength={64}
-                placeholder="WORKPLACE_SAFETY_2026"
-                data-testid="training-new-code"
-              />
-              <p className="mt-1 text-xs text-stone-500">
-                2-64 uppercase letters, numbers, underscore, or dash.
-              </p>
-            </div>
-            <div>
-              <label className="label" htmlFor="category">Category</label>
-              <select
-                id="category"
-                name="category"
-                className="select"
-                required
-                data-testid="training-new-category"
-              >
-                {TRAINING_COURSE_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="label" htmlFor="title">Course title</label>
-            <input
-              id="title"
-              name="title"
-              className="input"
-              required
-              maxLength={200}
-              placeholder="Workplace Safety Orientation"
-              data-testid="training-new-title"
-            />
-            <p className="mt-1 text-xs text-stone-500">
-              Spectre will suggest a title based on the video once preparation
-              completes — you can edit either now or after review.
-            </p>
-          </div>
-          <div>
-            <label className="label" htmlFor="description">Description (optional)</label>
-            <textarea
-              id="description"
-              name="description"
-              className="input"
-              rows={3}
-              maxLength={500}
-              placeholder="What this course covers and why it matters."
-            />
-          </div>
-        </section>
-
-        <section className="card card-body space-y-4">
-          <h2 className="section-title text-lg">Compliance</h2>
-          <div className="flex items-start gap-3">
-            <input type="checkbox" name="required" defaultChecked id="required" className="mt-1" data-testid="training-new-required" />
-            <label htmlFor="required" className="text-sm text-stone-800">
-              <span className="font-medium">Required for scheduling</span>
-              <span className="block text-xs text-stone-500 mt-0.5">
-                Employees cannot submit availability or be scheduled until they
-                complete required courses. Uncheck for optional courses.
-              </span>
-            </label>
-          </div>
-        </section>
-
-        <section className="card card-body space-y-4">
-          <h2 className="section-title text-lg">Who needs to complete this?</h2>
-          <p className="text-xs text-stone-500">
-            You can refine department and position selectors after the course is created.
-          </p>
-          <div className="space-y-2">
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="everyone"
-                defaultChecked
-                className="mt-1"
-                data-testid="training-new-applicability-everyone"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">Everyone</span>
-                <span className="block text-xs text-stone-500">
-                  Every active employee at the Club is required to complete this.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="scoped"
-                className="mt-1"
-                data-testid="training-new-applicability-scoped"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">Specific departments or positions</span>
-                <span className="block text-xs text-stone-500">
-                  Choose department(s) or position(s) after creating the draft.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="explicit"
-                className="mt-1"
-                data-testid="training-new-applicability-explicit"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">Assign individually</span>
-                <span className="block text-xs text-stone-500">
-                  The course only applies to employees you explicitly assign.
-                </span>
-              </span>
-            </label>
-          </div>
-        </section>
-
-        <div className="flex items-center justify-end gap-3">
-          <Link
-            href="/app/admin/people/safety-training/new"
-            className="text-sm text-stone-500 hover:text-club-ink"
-          >
-            Cancel
-          </Link>
-          <button type="submit" className="btn btn-primary" data-testid="training-new-with-video-submit">
-            Continue to video upload
-          </button>
-        </div>
-      </form>
-    </div>
+  // Create a fresh provisional draft. The code is a URL-safe cuid-
+  // derived slug; the title is a known placeholder the Manager Review
+  // surface will replace with the AI-generated title (§5). Category
+  // defaults to the first allowed category — overridable on review.
+  const provisionalCode = `${PROVISIONAL_CODE_PREFIX}-${randomBytes(6).toString("hex").toUpperCase()}`;
+  const created = await createCourse(principal, clubId, {
+    code: provisionalCode,
+    title: PROVISIONAL_TITLE,
+    category: "Safety",
+    description: null,
+  });
+  redirect(
+    `/app/admin/people/safety-training/${created.courseId}/${created.versionId}/upload`,
   );
 }
