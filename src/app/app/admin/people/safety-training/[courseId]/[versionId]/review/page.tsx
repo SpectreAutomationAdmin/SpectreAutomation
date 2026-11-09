@@ -23,6 +23,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { listCheckpointsForVersion } from "@/lib/hr/training/checkpoints";
+import { checkPublishReadiness } from "@/lib/hr/training/courses";
 import ManagerReviewClient from "./ManagerReviewClient";
 
 export const runtime = "nodejs";
@@ -52,6 +53,37 @@ export default async function ManagerReviewPage({
   const canRead = hasPermission(principal, clubId, "hr:training:ai:read");
 
   const checkpoints = await listCheckpointsForVersion(version.id);
+  const readiness = await checkPublishReadiness(version.id);
+
+  // Resolve audience summary for the pre-publish review card. The
+  // version's applicability is one of three modes — mirror the
+  // existing editor's branching.
+  type AudienceSummary = {
+    kind: "everyone" | "scoped" | "explicit";
+    deptCount: number;
+    positionCount: number;
+  };
+  const appliesToAll = !!version.appliesToAll;
+  const deptIds = Array.isArray(version.appliesToDeptIds) ? version.appliesToDeptIds.length : 0;
+  const positionIds = Array.isArray(version.appliesToPositionIds)
+    ? version.appliesToPositionIds.length
+    : 0;
+  const audience: AudienceSummary = appliesToAll
+    ? { kind: "everyone", deptCount: 0, positionCount: 0 }
+    : deptIds > 0 || positionIds > 0
+      ? { kind: "scoped", deptCount: deptIds, positionCount: positionIds }
+      : { kind: "explicit", deptCount: 0, positionCount: 0 };
+
+  const publishConfig = {
+    passingScore: version.passingScore ?? 80,
+    retakesAllowed: !!version.retakesAllowed,
+    required: !!version.required,
+    requiresKnowledgeTest: !!version.requiresKnowledgeTest,
+    audience,
+    versionState: version.state,
+    readinessReady: readiness.ready,
+    readinessReasons: readiness.reasons,
+  };
 
   // Pull AI drafts for this version. Tenant scope is enforced via the
   // (clubId, courseVersionId) filter; the state filter avoids rendering
@@ -169,7 +201,9 @@ export default async function ManagerReviewPage({
         }))}
         canApprove={canApprove}
         canAuthor={canAuthor}
+        canPublish={hasPermission(principal, clubId, "hr:training:publish")}
         courseId={params.courseId}
+        publishConfig={publishConfig}
       />
     </div>
   );

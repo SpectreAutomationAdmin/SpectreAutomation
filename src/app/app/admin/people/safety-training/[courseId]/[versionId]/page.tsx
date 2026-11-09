@@ -479,7 +479,7 @@ export default async function VersionEditorPage({
       </section>
 
       {isDraft && (
-        <section className="card card-body space-y-4 mt-8">
+        <section id="publish" className="card card-body space-y-4 mt-8 scroll-mt-16">
           <h2 className="section-title text-lg">Publish</h2>
           {isRevision && priorPublished && readiness.ready && canPublish ? (
             // EP-TRAIN-5B (2026-11-01) -- revision publication opens the

@@ -39,6 +39,21 @@ interface Draft {
   isPromoted: boolean;
 }
 
+interface PublishConfig {
+  passingScore: number;
+  retakesAllowed: boolean;
+  required: boolean;
+  requiresKnowledgeTest: boolean;
+  audience: {
+    kind: "everyone" | "scoped" | "explicit";
+    deptCount: number;
+    positionCount: number;
+  };
+  versionState: string;
+  readinessReady: boolean;
+  readinessReasons: string[];
+}
+
 interface Props {
   versionId: string;
   courseId: string;
@@ -51,6 +66,8 @@ interface Props {
   checkpoints: Checkpoint[];
   canApprove: boolean;
   canAuthor: boolean;
+  canPublish: boolean;
+  publishConfig: PublishConfig;
 }
 
 function uuidV4(): string {
@@ -473,7 +490,131 @@ export default function ManagerReviewClient(props: Props) {
             </div>
           </div>
         )}
+
+        {/* ── §10 Approval & course assembly status ── */}
+        <ApprovalStatusCard drafts={activeDrafts} />
+
+        {/* ── §12 Pre-publish review summary ── */}
+        <PrePublishSummary
+          config={props.publishConfig}
+          canPublish={props.canPublish}
+          courseId={props.courseId}
+          versionId={props.versionId}
+        />
       </div>
     </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// §10 — Approval & course-assembly status (observational card).
+// Summarises how many drafts are in each lifecycle state so the
+// manager always knows whether the reviewer still has work left,
+// without needing to flip through every question.
+// ──────────────────────────────────────────────────────────────────
+
+function ApprovalStatusCard({ drafts }: { drafts: Draft[] }) {
+  const counts = drafts.reduce(
+    (acc, d) => {
+      if (d.isPromoted) acc.promoted++;
+      else if (d.state === "APPROVED_DRAFT") acc.awaitingPromotion++;
+      else if (d.state === "REQUIRES_HUMAN_REVIEW") acc.needsReview++;
+      else if (d.state === "REJECTED") acc.discarded++;
+      else acc.preparing++;
+      return acc;
+    },
+    { needsReview: 0, awaitingPromotion: 0, promoted: 0, discarded: 0, preparing: 0 },
+  );
+  const total = drafts.length;
+  return (
+    <section
+      className="card card-body"
+      data-testid="manager-review-approval-status"
+    >
+      <h3 className="section-title text-sm">Approval status</h3>
+      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <dt className="text-stone-500">Needs review</dt>
+        <dd className="text-right font-mono" data-testid="mrs-count-needs-review">{counts.needsReview}</dd>
+        <dt className="text-stone-500">Awaiting promotion</dt>
+        <dd className="text-right font-mono" data-testid="mrs-count-awaiting-promotion">{counts.awaitingPromotion}</dd>
+        <dt className="text-stone-500">Approved &amp; in course</dt>
+        <dd className="text-right font-mono" data-testid="mrs-count-promoted">{counts.promoted}</dd>
+        <dt className="text-stone-500">Discarded</dt>
+        <dd className="text-right font-mono" data-testid="mrs-count-discarded">{counts.discarded}</dd>
+        <dt className="text-stone-500">Total</dt>
+        <dd className="text-right font-mono">{total}</dd>
+      </dl>
+    </section>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// §12 — Pre-publish summary. Consolidates audience, passing grade,
+// required/optional, retakes, and readiness so the manager sees all
+// publication settings in one card before the explicit publish
+// action lives in the deep editor's PublishPanel.
+// ──────────────────────────────────────────────────────────────────
+
+function PrePublishSummary({
+  config,
+  canPublish,
+  courseId,
+  versionId,
+}: {
+  config: PublishConfig;
+  canPublish: boolean;
+  courseId: string;
+  versionId: string;
+}) {
+  const audienceText =
+    config.audience.kind === "everyone"
+      ? "Everyone at the Club"
+      : config.audience.kind === "scoped"
+        ? `${config.audience.deptCount} department(s) · ${config.audience.positionCount} position(s)`
+        : "Assigned individually";
+  return (
+    <section
+      className="card card-body"
+      data-testid="manager-review-prepublish-summary"
+    >
+      <h3 className="section-title text-sm">Before you publish</h3>
+      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <dt className="text-stone-500">Audience</dt>
+        <dd className="text-right" data-testid="prepub-audience">{audienceText}</dd>
+        <dt className="text-stone-500">Passing grade</dt>
+        <dd className="text-right font-mono" data-testid="prepub-passing-score">{config.passingScore}%</dd>
+        <dt className="text-stone-500">Required for scheduling</dt>
+        <dd className="text-right" data-testid="prepub-required">{config.required ? "Yes" : "No"}</dd>
+        <dt className="text-stone-500">Retakes allowed</dt>
+        <dd className="text-right" data-testid="prepub-retakes">{config.retakesAllowed ? "Yes" : "No"}</dd>
+      </dl>
+
+      {config.readinessReady ? (
+        <div className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800" data-testid="prepub-ready">
+          Ready to publish.
+        </div>
+      ) : (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="prepub-not-ready">
+          <div className="font-medium">A few things need attention before publishing:</div>
+          {config.readinessReasons.length > 0 && (
+            <ul className="mt-1 list-disc pl-5 space-y-1">
+              {config.readinessReasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <a
+        href={`/app/admin/people/safety-training/${courseId}/${versionId}#publish`}
+        className={`mt-3 inline-block btn btn-sm ${
+          canPublish && config.readinessReady ? "btn-primary" : "btn-secondary"
+        }`}
+        data-testid="prepub-continue-link"
+      >
+        {canPublish && config.readinessReady ? "Continue to publish →" : "Open full editor →"}
+      </a>
+    </section>
   );
 }
