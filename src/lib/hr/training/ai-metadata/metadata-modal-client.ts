@@ -118,9 +118,19 @@ export async function callModalMetadata(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10 * 60 * 1000);
 
+  // EP-TRAIN-4Y-X §4 — the dedicated metadata endpoint is served
+  // under `/metadata` of the same Modal app the generate route uses
+  // (see modal_endpoints/generate_app.py Starlette routes). Append
+  // the suffix to the base generate URL, respecting any existing
+  // trailing slash.
+  const metadataUrl =
+    creds.endpointUrl.endsWith("/")
+      ? `${creds.endpointUrl}metadata`
+      : `${creds.endpointUrl}/metadata`;
+
   let res: Response;
   try {
-    res = await fetchImpl(creds.endpointUrl, {
+    res = await fetchImpl(metadataUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

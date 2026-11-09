@@ -860,21 +860,53 @@ async function maybeGenerateCourseMetadata(args: {
       return;
     }
 
-    const { callQwenForCourseMetadata } = await import(
-      "@/lib/hr/training/ai-metadata/qwen-metadata-client"
+    // EP-TRAIN-4Y-X §4 (2026-11-09) — swap to the dedicated
+    // `spectre.training.metadata.v1` client. Replaces the 4Y-V
+    // `callQwenForCourseMetadata` which repurposed the question-
+    // generation schema. The new client speaks a real `{title,
+    // description, sourceSegmentIds}` contract and verifies the
+    // response HMAC on both success + error paths. Requires the
+    // Modal-side `/metadata` route (deployed in Batch C).
+    const { callModalMetadata } = await import(
+      "@/lib/hr/training/ai-metadata/metadata-modal-client"
+    );
+    const { issuePilotAuthorization, ENV_FINGERPRINT_SECRET } = await import(
+      "@/lib/hr/training/modal-shared"
     );
     const { createHash } = await import("node:crypto");
-    const r = await callQwenForCourseMetadata(
+    const env = args.env ?? process.env;
+    const fingerprintSecret = env[ENV_FINGERPRINT_SECRET];
+    if (!fingerprintSecret) {
+      throw new Error(`[worker-metadata] missing ${ENV_FINGERPRINT_SECRET}`);
+    }
+    const pilotAuth = issuePilotAuthorization({
+      tenantId: args.clubId,
+      courseId: `course:${args.courseId}`,
+      versionId: args.courseVersionId,
+      sourceVideoSha256: args.sourceVideoSha256,
+      resolvedTranscriptBuildId: args.resolvedTranscriptBuildId,
+      approvedGroundingProjectionSha256: createHash("sha256")
+        .update(`metadata:${args.resolvedTranscriptBuildId}`)
+        .digest("hex"),
+      operation: "GENERATE_DRAFT_QUESTIONS",
+      maxRequestedQuestions: 1,
+      pilotRestrictions: {
+        publicationProhibited: true,
+        employeeAssignmentProhibited: true,
+        databaseWritesProhibited: false,
+        automaticRetriesProhibited: true,
+        excludedSegmentIds: [],
+        scope: `metadata:${args.courseVersionId}`,
+      },
+      ttlSec: 3600,
+      issuedBy: `system:training-metadata:${args.clubId}`,
+      fingerprintSecret,
+    });
+    const r = await callModalMetadata(
       {
-        clubId: args.clubId,
-        courseId: args.courseId,
-        courseVersionId: args.courseVersionId,
-        sourceVideoSha256: args.sourceVideoSha256,
-        resolvedTranscriptBuildId: args.resolvedTranscriptBuildId,
-        approvedGroundingProjectionSha256: createHash("sha256")
-          .update(`metadata:${args.resolvedTranscriptBuildId}`)
-          .digest("hex"),
-        transcriptText: args.transcriptText,
+        pilotAuthorization: pilotAuth,
+        systemPrompt: buildMetadataSystemPromptForWorker(course.club?.name),
+        transcript: args.transcriptText,
         clubName: course.club?.name,
       },
       { fetchImpl: args.fetchImpl, env: args.env },
@@ -901,10 +933,11 @@ async function maybeGenerateCourseMetadata(args: {
           courseVersionId: args.courseVersionId,
           runId: args.runId,
           titleFirst60: r.title.slice(0, 60),
-          modalRequestId: r.modalRequestId,
-          modalElapsedMsTotal: r.modalElapsedMsTotal,
-          modalPromptTokens: r.modalPromptTokens,
-          modalOutputTokens: r.modalOutputTokens,
+          modalRequestId: r.requestId,
+          modalElapsedMsTotal:
+            (r.elapsedMs?.coldBoot ?? 0) + (r.elapsedMs?.generate ?? 0),
+          modalPromptTokens: r.tokenCounts?.prompt ?? 0,
+          modalOutputTokens: r.tokenCounts?.output ?? 0,
         });
         return;
       } catch (err) {
@@ -927,6 +960,33 @@ async function maybeGenerateCourseMetadata(args: {
     // fallback path for the title; it fires on every browser poll
     // once the transcript is COMPLETED.
   }
+}
+
+/** EP-TRAIN-4Y-X §4 — system prompt for the dedicated metadata
+ *  endpoint. Instructs Qwen to emit a REAL `{title, description,
+ *  sourceSegmentIds}` object (not a repurposed proposal). The
+ *  Modal-side schema enforcer (`JsonSchemaParser` on
+ *  `generate_metadata`) rejects anything that doesn't conform. */
+function buildMetadataSystemPromptForWorker(clubName?: string): string {
+  const who = clubName
+    ? `the ${clubName} team — a private country club`
+    : "a private country-club team";
+  return [
+    `You are helping prepare a staff training course for ${who}.`,
+    "",
+    "The user will provide a flat transcript of the course video.",
+    "You must emit EXACTLY one JSON object with these fields:",
+    "- title: concise, professional, Title Case, 3–10 words, 10–80 chars.",
+    "  No leading verb like \"Welcome to\" or \"Introduction to\".",
+    "  Represent the actual subject of the course (e.g. \"Workplace",
+    "  Safety Orientation\").",
+    "- description: 1–3 complete sentences, 120–320 chars. Describe",
+    "  the key learning objectives. Executive, not promotional.",
+    "- sourceSegmentIds: an array of up to 5 integer segment indices",
+    "  from the transcript that most strongly anchor the title.",
+    "",
+    "Return ONLY valid JSON. No commentary, no markdown fences.",
+  ].join("\n");
 }
 
 /** Derive a stable code from the title. Same shape as the deterministic

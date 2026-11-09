@@ -26,7 +26,14 @@ RESPONSE_SIG_VERSION = "response-sig-v1"
 
 OPERATION_TRANSCRIBE = "spectre.training.transcribe.v1"
 OPERATION_GENERATE = "spectre.training.generate.v1"
-KNOWN_OPERATIONS = frozenset([OPERATION_TRANSCRIBE, OPERATION_GENERATE])
+# EP-TRAIN-4Y-X §4 (2026-11-09) — dedicated metadata operation.
+# Replaces 4Y-V's repurposed proposals schema. The pilot
+# authorization still uses PILOT_AUTH_OP_GENERATE because the
+# operation semantics are identical at the auth layer (produce Qwen
+# output grounded in the same transcript). Only the request/response
+# shape differs.
+OPERATION_METADATA = "spectre.training.metadata.v1"
+KNOWN_OPERATIONS = frozenset([OPERATION_TRANSCRIBE, OPERATION_GENERATE, OPERATION_METADATA])
 
 PILOT_AUTH_SCHEMA = "pilot-generation-authorization-v1"
 PILOT_AUTH_OP_TRANSCRIBE = "TRANSCRIBE_VIDEO"
@@ -306,6 +313,15 @@ def verify_pilot_authorization(
         raise ContractError(
             FailureCode.PILOT_AUTH_OPERATION_MISMATCH,
             f"Expected auth.operation = {PILOT_AUTH_OP_GENERATE} for generate.",
+        )
+    # EP-TRAIN-4Y-X §4 — METADATA uses the same pilot-auth operation
+    # as GENERATE (both produce Qwen output grounded in the same
+    # transcript; the differentiation happens at the outer envelope
+    # via `operation=spectre.training.metadata.v1`).
+    if operation == OPERATION_METADATA and auth.operation != PILOT_AUTH_OP_GENERATE:
+        raise ContractError(
+            FailureCode.PILOT_AUTH_OPERATION_MISMATCH,
+            f"Expected auth.operation = {PILOT_AUTH_OP_GENERATE} for metadata.",
         )
 
     # TRANSCRIBE placeholders enforced here.

@@ -24,6 +24,7 @@ from typing import Any
 import modal
 
 from .spectre_training_generate import _handle_generate_request
+from .spectre_training_metadata import _handle_metadata_request
 from .shared.replay import ModalDictReplayRegistry
 
 
@@ -222,6 +223,105 @@ class Qwen:
             },
         }
 
+    # ─────────────────── EP-TRAIN-4Y-X §4 (2026-11-09) ────────────────────
+    # Dedicated METADATA GPU method. Separate from `generate` so the
+    # question-generation schema is never altered by a metadata call.
+    # Schema is a tight `{title, description, sourceSegmentIds}`
+    # object with LMFE enforcing character caps on title +
+    # description so a runaway generation cannot blow past the
+    # client's response-byte cap.
+    @modal.method()
+    def generate_metadata(
+        self,
+        *,
+        system_prompt: str,
+        transcript: str,
+        constraints: dict,
+    ) -> dict:
+        """Run Qwen inference for course metadata. Returns
+        `{title, description, sourceSegmentIds, elapsedMs, tokenCounts}`.
+        Hard-caps title + description at the caller-supplied limits via
+        LMFE's `maxLength` keyword."""
+        if os.environ.get("SPECTRE_GATE_1_NO_INFERENCE") == "1":
+            raise RuntimeError("SPECTRE_GATE_1_NO_INFERENCE=1 — inference blocked")
+
+        import torch
+        from lmformatenforcer import JsonSchemaParser
+        from lmformatenforcer.integrations.transformers import (
+            build_transformers_prefix_allowed_tokens_fn,
+        )
+
+        max_title_len = int(constraints.get("maxTitleLength", 80))
+        max_desc_len = int(constraints.get("maxDescriptionLength", 320))
+        max_output_tokens = int(constraints.get("maxOutputTokens", 512))
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "maxLength": max_title_len},
+                "description": {"type": "string", "maxLength": max_desc_len},
+                "sourceSegmentIds": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 0},
+                    "maxItems": 20,
+                },
+            },
+            "required": ["title", "description", "sourceSegmentIds"],
+            "additionalProperties": False,
+        }
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Transcript:\n{transcript}"},
+        ]
+        prompt_text = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.model.device)
+        prompt_token_count = inputs["input_ids"].shape[1]
+
+        parser = JsonSchemaParser(schema)
+        allowed_fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, parser)
+
+        t0 = time.time()
+        with torch.inference_mode():
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=max_output_tokens,
+                do_sample=False,
+                prefix_allowed_tokens_fn=allowed_fn,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+        elapsed_ms = int((time.time() - t0) * 1000)
+
+        new_ids = output_ids[0, prompt_token_count:]
+        output_text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+        output_token_count = int(new_ids.shape[0])
+
+        try:
+            parsed = json.loads(output_text)
+            title = str(parsed.get("title", ""))[:max_title_len]
+            description = str(parsed.get("description", ""))[:max_desc_len]
+            source_segment_ids = [
+                int(x) for x in parsed.get("sourceSegmentIds", []) if isinstance(x, (int, float))
+            ]
+        except (json.JSONDecodeError, ValueError, TypeError):
+            # LMFE should prevent this; defensive.
+            title = ""
+            description = ""
+            source_segment_ids = []
+
+        return {
+            "title": title,
+            "description": description,
+            "sourceSegmentIds": source_segment_ids,
+            "elapsedMs": {"coldBoot": 0, "generate": elapsed_ms},
+            "tokenCounts": {
+                "prompt": prompt_token_count,
+                "output": output_token_count,
+            },
+        }
+
 
 # ───────────────────────────────────────── CPU HTTP endpoint
 
@@ -295,7 +395,55 @@ def api():
             headers=resp_hdrs,
         )
 
-    web = Starlette(routes=[Route("/", generate_endpoint, methods=["POST"])])
+    # ─────────────────── EP-TRAIN-4Y-X §4 (2026-11-09) ────────────────────
+    # Dedicated metadata route. Same ASGI app, new path. Same HMAC
+    # auth, replay registry, GPU container, scaling constraints
+    # (max_containers=1 + 180 s scaledown preserved). Only the
+    # request/response shape + the Qwen method called differ.
+    async def metadata_endpoint(request: _Request) -> Response:
+        body_text = (await request.body()).decode("utf-8")
+        headers = {k.lower(): v for k, v in request.headers.items()}
+
+        def _run_qwen_metadata(system_prompt: str, transcript: str, constraints: dict):
+            if os.environ.get("SPECTRE_GATE_1_NO_INFERENCE") == "1":
+                raise ContractError(
+                    FailureCode.REQUEST_BODY_INVALID,
+                    "SPECTRE_GATE_1_NO_INFERENCE=1 — CPU gate refused inference (Gate 1 diagnostic path)",
+                    http_status=503,
+                )
+            return qwen.generate_metadata.remote(
+                system_prompt=system_prompt,
+                transcript=transcript,
+                constraints=constraints,
+            )
+
+        http_status, resp_body, resp_hdrs = _handle_metadata_request(
+            headers=headers,
+            body_text=body_text,
+            hmac_key=os.environ["MODAL_SPECTRE_HMAC_KEY"].encode("utf-8"),
+            fingerprint_secret=os.environ[
+                "SPECTRE_PILOT_AUTH_FINGERPRINT_SECRET"
+            ].encode("utf-8"),
+            response_hmac_key=(
+                os.environ.get("MODAL_SPECTRE_RESPONSE_HMAC_KEY")
+                or os.environ["MODAL_SPECTRE_HMAC_KEY"]
+            ).encode("utf-8"),
+            replay_registry=ModalDictReplayRegistry(replay_dict),
+            now_sec=int(time.time()),
+            run_qwen_metadata=_run_qwen_metadata,
+        )
+        return Response(
+            content=resp_body,
+            status_code=http_status,
+            headers=resp_hdrs,
+        )
+
+    web = Starlette(
+        routes=[
+            Route("/", generate_endpoint, methods=["POST"]),
+            Route("/metadata", metadata_endpoint, methods=["POST"]),
+        ]
+    )
     return web
 
 
