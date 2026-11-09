@@ -79,6 +79,15 @@ import {
   ModalContractError,
   ENV_FINGERPRINT_SECRET,
 } from "../modal-shared";
+// EP-TRAIN-4Y-Z §3 — per-pilot cumulative spending guard. See the
+// module header in pilot-budget-guard.ts for the three-layer spending
+// protection model and concurrency protection argument.
+import {
+  loadPriorPilotCostMicros,
+  msToCostMicros,
+  preInvocationBudgetGate,
+  PILOT_BUDGET_USD_MICROS,
+} from "./pilot-budget-guard";
 
 export interface HandlerDeps {
   readonly fetchImpl?: typeof fetch;
@@ -160,6 +169,54 @@ export async function handleGenerateJob(
     .map((s) => `[${s.segmentIndex}] ${s.text}`)
     .join("\n");
 
+  // EP-TRAIN-4Y-Z §3 — pilot cumulative spending guard.
+  //
+  // Load the prior-attempt cost basis BEFORE any Modal invocation
+  // this attempt. Scope = (clubId, courseVersionId), covering every
+  // earlier run (COMPLETED + FAILED + CANCELLED + QUEUED). A retry
+  // sees the true cost of its earlier sibling attempt, not zero.
+  // See pilot-budget-guard.ts for the concurrency argument.
+  const priorAttemptCostMicros = await loadPriorPilotCostMicros(
+    {
+      clubId: claim.clubId,
+      courseVersionId: claim.courseVersionId,
+      excludeRunId: claim.runId,
+    },
+    { prisma: db },
+  );
+  // Planned Modal calls this attempt: 1 metadata + 1 per group
+  // (checkpoints + final). Metadata may be skipped by the
+  // attribution-column guard, but we project worst-case to pre-gate
+  // honestly.
+  const plannedGroupCount = plan.proposedCheckpointGroups.length + 1;
+  const plannedCallsThisAttempt = 1 + plannedGroupCount;
+
+  const gatePreMetadata = preInvocationBudgetGate({
+    priorAttemptCostMicros,
+    currentAttemptCostMicros: 0,
+    callsRemainingThisAttempt: plannedCallsThisAttempt,
+    coldBootConsumed: false,
+  });
+  if (!gatePreMetadata.allow) {
+    logger.warn("training.generation.worker.pilot_budget_exceeded_pre_metadata", {
+      runId: claim.runId,
+      clubId: claim.clubId,
+      courseVersionId: claim.courseVersionId,
+      priorAttemptCostMicros,
+      projectedTotalMicros: gatePreMetadata.projectedTotalMicros,
+      budgetMicros: PILOT_BUDGET_USD_MICROS,
+    });
+    await safeFail(
+      db,
+      claim,
+      "PILOT_BUDGET_EXCEEDED",
+      gatePreMetadata.reason ?? "Pilot budget exceeded (pre-metadata gate).",
+      false,
+      0,
+    );
+    return { status: "FAILED" };
+  }
+
   // EP-TRAIN-4Y-V §4 — Qwen-sourced course metadata (title +
   // description) runs in the worker because the Modal fingerprint +
   // HMAC secrets are bound here, not on the web app. Fires BEFORE
@@ -169,10 +226,15 @@ export async function handleGenerateJob(
   // a retry (or any subsequent generation run on this course) checks
   // the attributed-title snapshot and does nothing if the manager
   // has already edited it since the system wrote it.
-  await maybeGenerateCourseMetadata({
+  // EP-TRAIN-4Y-Z §3 — `claim` does not carry `courseId` (see
+  // GenerationClaimResult in generation-service.ts); the 4Y-V diff
+  // referenced `claim.courseId` which does not exist and did not
+  // typecheck. Resolve it once from the courseVersion.
+  const resolvedCourseId = await resolveCourseId(db, claim.courseVersionId);
+  const metadataResult = await maybeGenerateCourseMetadata({
     db,
     clubId: claim.clubId,
-    courseId: claim.courseId,
+    courseId: resolvedCourseId,
     courseVersionId: claim.courseVersionId,
     sourceVideoSha256: plan.sourceVideoSha256,
     resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
@@ -181,6 +243,10 @@ export async function handleGenerateJob(
     fetchImpl: deps.fetchImpl,
     env: deps.env,
   });
+
+  // Fold metadata Modal time into the attempt's cumulative cost.
+  let coldBootConsumed = metadataResult.modalCalled;
+  let totalInferenceMsPreLoop = metadataResult.inferenceMs;
 
   // EP-TRAIN-4Y-N (2026-11-08) — context-aware prompt contract.
   // When the plan declares `generationPromptContract: "ctx-v1"`, the
@@ -241,7 +307,10 @@ export async function handleGenerateJob(
   }> = [];
   let shortfallCount = 0;
   let dedupDropCount = 0;
-  let totalInferenceMs = 0;
+  // EP-TRAIN-4Y-Z §3 — seed with the metadata-call cost so the
+  // pilot-budget guard inside the group loop, and the terminal
+  // `recordGenerationCompleted`, see a truthful cumulative figure.
+  let totalInferenceMs = totalInferenceMsPreLoop;
   let totalPromptTokens = 0;
   let totalOutputTokens = 0;
 
@@ -291,9 +360,47 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
 
+  // EP-TRAIN-4Y-Z §3 — track Modal calls remaining this attempt so
+  // the budget gate can project worst-case cumulative cost before
+  // each invocation.
+  let remainingGroupCallsThisAttempt = groups.filter((g) => g.target > 0).length;
+
   for (const g of groups) {
     if (g.target <= 0) continue;
     try {
+      // EP-TRAIN-4Y-Z §3 — pilot cumulative budget gate BEFORE any
+      // Modal-side work for this group. Projects:
+      //   priorCost + currentCost + (remaining * 180s ceiling) +
+      //   (0 or 60s cold-boot).
+      const gateBeforeGroup = preInvocationBudgetGate({
+        priorAttemptCostMicros,
+        currentAttemptCostMicros: msToCostMicros(totalInferenceMs),
+        callsRemainingThisAttempt: remainingGroupCallsThisAttempt,
+        coldBootConsumed,
+      });
+      if (!gateBeforeGroup.allow) {
+        logger.warn("training.generation.worker.pilot_budget_exceeded_mid_loop", {
+          runId: claim.runId,
+          clubId: claim.clubId,
+          courseVersionId: claim.courseVersionId,
+          groupId: g.id,
+          priorAttemptCostMicros,
+          currentInferenceMs: totalInferenceMs,
+          projectedTotalMicros: gateBeforeGroup.projectedTotalMicros,
+          budgetMicros: PILOT_BUDGET_USD_MICROS,
+          remainingGroupCalls: remainingGroupCallsThisAttempt,
+        });
+        await safeFail(
+          db,
+          claim,
+          "PILOT_BUDGET_EXCEEDED",
+          gateBeforeGroup.reason ?? "Pilot budget exceeded (mid-loop gate).",
+          false,
+          totalInferenceMs,
+        );
+        return { status: "FAILED" };
+      }
+
       // Fresh auth + requestId per Modal call.
       const groupRequestId = `g-${claim.runId}-${g.id}-${randomBytes(12).toString("hex")}`;
       const pilotAuth = issuePilotAuthorization({
@@ -375,6 +482,11 @@ export async function handleGenerateJob(
       totalInferenceMs += modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.generate;
       totalPromptTokens += modalResponse.tokenCounts.prompt;
       totalOutputTokens += modalResponse.tokenCounts.output;
+      // EP-TRAIN-4Y-Z §3 — call complete; one fewer Modal invocation
+      // remains this attempt; cold-boot (if not already fired by the
+      // metadata call) is now consumed.
+      remainingGroupCallsThisAttempt = Math.max(0, remainingGroupCallsThisAttempt - 1);
+      coldBootConsumed = true;
 
       // Track shortfall if the model returned fewer than target.
       if (modalResponse.proposals.length < g.target) {
@@ -477,6 +589,10 @@ export async function handleGenerateJob(
         code,
         (err as Error)?.message ?? String(err),
         retryable,
+        // EP-TRAIN-4Y-Z §3 — persist whatever Modal time was burned
+        // on this attempt so the pilot-budget guard on a retry sees
+        // the true prior-attempt cost.
+        totalInferenceMs,
       );
       // EP-TRAIN-4Y-W §6 — retry governance.
       //
@@ -523,7 +639,8 @@ export async function handleGenerateJob(
   // reviewer-eligibility gate will push HISTORICAL_EVIDENCE_UNAVAILABLE
   // for such drafts, matching the 4Y-M / 4Y-N baseline — that is the
   // safe-fall-through contract.
-  const courseId = await resolveCourseId(db, claim.courseVersionId);
+  // EP-TRAIN-4Y-Z §3 — reuse the courseId already resolved pre-metadata.
+  const courseId = resolvedCourseId;
   let materialised: Awaited<ReturnType<typeof materialiseGroundingProjection>> | null = null;
   try {
     materialised = await materialiseGroundingProjection(
@@ -767,6 +884,10 @@ async function safeFail(
   code: GenerationFailureCode,
   message: string,
   retryable: boolean,
+  /** EP-TRAIN-4Y-Z §3 — accumulated Modal inference time for this
+   *  attempt BEFORE the failure. Omit if no Modal call has executed
+   *  yet (e.g. budget-gate refusal before any invocation). */
+  inferenceMs?: number,
 ): Promise<void> {
   try {
     await recordGenerationFailed(
@@ -776,6 +897,7 @@ async function safeFail(
         failureCode: code,
         failureMessage: message,
         retryable,
+        inferenceMs,
       },
       { prisma: db },
     );
@@ -813,6 +935,17 @@ async function resolveCourseId(db: PrismaClient, courseVersionId: string): Promi
 // gets to see them. The audit log + run metrics show the metadata
 // attempt was tried; the deterministic path (via /generate-metadata)
 // will still populate the course when the manager polls.
+interface MetadataCallResult {
+  /** Modal inference time charged by the metadata call this attempt
+   *  (cold-boot + generate). Zero if skipped because the course was
+   *  already attributed to a manager edit, or if the call failed
+   *  before Modal returned metrics. */
+  readonly inferenceMs: number;
+  /** Did we make a Modal call at all this attempt? Used by the
+   *  pilot-budget guard to decide whether cold-boot has been charged. */
+  readonly modalCalled: boolean;
+}
+
 async function maybeGenerateCourseMetadata(args: {
   db: PrismaClient;
   clubId: string;
@@ -824,7 +957,7 @@ async function maybeGenerateCourseMetadata(args: {
   runId: string;
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
-}): Promise<void> {
+}): Promise<MetadataCallResult> {
   const PROVISIONAL_TITLE = "Untitled training course";
   const PROVISIONAL_CODE_PREFIX = "AUTO-DRAFT";
   try {
@@ -840,7 +973,7 @@ async function maybeGenerateCourseMetadata(args: {
         aiMetadataAttributedTitle: true,
       },
     });
-    if (!course) return;
+    if (!course) return { inferenceMs: 0, modalCalled: false };
     const atPlaceholderStrings =
       course.title === PROVISIONAL_TITLE ||
       course.code.startsWith(PROVISIONAL_CODE_PREFIX);
@@ -857,7 +990,7 @@ async function maybeGenerateCourseMetadata(args: {
         courseId: args.courseId,
         courseVersionId: args.courseVersionId,
       });
-      return;
+      return { inferenceMs: 0, modalCalled: false };
     }
 
     // EP-TRAIN-4Y-X §4 (2026-11-09) — swap to the dedicated
@@ -911,6 +1044,8 @@ async function maybeGenerateCourseMetadata(args: {
       },
       { fetchImpl: args.fetchImpl, env: args.env },
     );
+    const modalInferenceMs =
+      (r.elapsedMs?.coldBoot ?? 0) + (r.elapsedMs?.generate ?? 0);
     const { randomBytes } = await import("node:crypto");
     const codeSuffix = randomBytes(3).toString("hex").toUpperCase();
     let code = deriveMetadataCode(r.title, codeSuffix);
@@ -934,12 +1069,11 @@ async function maybeGenerateCourseMetadata(args: {
           runId: args.runId,
           titleFirst60: r.title.slice(0, 60),
           modalRequestId: r.requestId,
-          modalElapsedMsTotal:
-            (r.elapsedMs?.coldBoot ?? 0) + (r.elapsedMs?.generate ?? 0),
+          modalElapsedMsTotal: modalInferenceMs,
           modalPromptTokens: r.tokenCounts?.prompt ?? 0,
           modalOutputTokens: r.tokenCounts?.output ?? 0,
         });
-        return;
+        return { inferenceMs: modalInferenceMs, modalCalled: true };
       } catch (err) {
         if ((err as { code?: string })?.code === "P2002" && attempt < 2) {
           code = `${code.slice(0, 50)}_${randomBytes(3).toString("hex").toUpperCase()}`.slice(0, 64);
@@ -948,6 +1082,10 @@ async function maybeGenerateCourseMetadata(args: {
         throw err;
       }
     }
+    // The 3-attempt P2002 loop exited without a successful update
+    // (every suffix collided). The Modal call did complete though —
+    // its elapsedMs still contributes to cumulative pilot cost.
+    return { inferenceMs: modalInferenceMs, modalCalled: true };
   } catch (err) {
     logger.error("training.generation.worker.metadata.failed", {
       courseId: args.courseId,
@@ -958,7 +1096,13 @@ async function maybeGenerateCourseMetadata(args: {
     // Non-fatal — the question-generation loop continues. The
     // deterministic /generate-metadata HTTP route serves as the
     // fallback path for the title; it fires on every browser poll
-    // once the transcript is COMPLETED.
+    // once the transcript is COMPLETED. The Modal client surfaces
+    // elapsedMs only on success — on failure we conservatively assume
+    // some CPU + possibly cold-boot time was consumed; for budget
+    // purposes we treat `modalCalled=true` (cold-boot may have fired)
+    // but inferenceMs=0 because we have no truthful metric. The
+    // guard's cold-boot ceiling absorbs this uncertainty.
+    return { inferenceMs: 0, modalCalled: true };
   }
 }
 

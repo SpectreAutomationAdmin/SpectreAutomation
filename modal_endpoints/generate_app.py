@@ -328,7 +328,16 @@ class Qwen:
 @app.function(
     image=image,
     secrets=secrets,
-    timeout=120,
+    # EP-TRAIN-4Y-Z §2: raise CPU endpoint budget 120s → 900s. The
+    # 4Y-V attempt 1 failure root cause (confirmed via `modal app logs`)
+    # was forced cancellation on this 120s budget — 5 prior calls had
+    # succeeded in 20-32s, call 6 hit the ceiling and emitted an
+    # unsigned 500 because `except Exception` was killed mid-execution.
+    # The GPU Qwen class above keeps its own `timeout=900`; this CPU
+    # endpoint now matches so a slow GPU call cannot be cancelled by
+    # the CPU wrapper. $1 pilot ceiling stays enforced at the worker
+    # (§3 spending-guard), not at Modal-provider ceilings.
+    timeout=900,
     # EP-TRAIN-4Y-L (2026-11-08) §4 — Gate 2 activation for Qwen.
     # The `env={"SPECTRE_GATE_1_NO_INFERENCE": "1"}` line was removed
     # under one authorized pilot. The CPU-boundary guard (`_run_qwen`

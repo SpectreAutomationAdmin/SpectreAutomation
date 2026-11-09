@@ -76,7 +76,13 @@ export type GenerationFailureCode =
   | "REPLAY_DETECTED"
   | "REPLAY_STORE_UNAVAILABLE"
   | "RESPONSE_REQUEST_ID_MISMATCH"
-  | "RESPONSE_OPERATION_MISMATCH";
+  | "RESPONSE_OPERATION_MISMATCH"
+  // EP-TRAIN-4Y-Z §3 — pilot-specific cumulative spending guard.
+  // Distinct from COST_CAP_EXCEEDED (per-tenant daily $10 cap). This
+  // trips when the conservative worst-case projection of a bounded
+  // pilot (metadata + question-generation calls + retries) would
+  // exceed the authorised $1 pilot ceiling.
+  | "PILOT_BUDGET_EXCEEDED";
 
 export type RequestRejectionCode =
   | "VERSION_NOT_FOUND"
@@ -556,6 +562,13 @@ export interface FailGenerationInput {
   readonly failureCode: GenerationFailureCode;
   readonly failureMessage: string;
   readonly retryable?: boolean;
+  /** EP-TRAIN-4Y-Z §3 — accumulated Modal inference time for this
+   *  attempt BEFORE the failure. Persisted so that the pilot-budget
+   *  guard on a subsequent retry attempt can read the true prior cost.
+   *  Omitting this (undefined) does NOT overwrite a previously
+   *  persisted value — the field is only written when the caller
+   *  passes a non-null number. */
+  readonly inferenceMs?: number;
 }
 
 export async function recordGenerationFailed(
@@ -585,6 +598,12 @@ export async function recordGenerationFailed(
       executionErrorMessage: input.failureMessage,
       leaseToken: null,
       leaseExpiresAt: null,
+      // EP-TRAIN-4Y-Z §3 — persist partial inference cost on failure so
+      // the pilot-budget guard on a retry attempt reads a truthful
+      // prior-cost basis.
+      ...(typeof input.inferenceMs === "number" && input.inferenceMs > 0
+        ? { inferenceMs: input.inferenceMs }
+        : {}),
       ...(canRetry
         ? { startedAt: null, queuedAt: now }
         : { completedAt: now }),
