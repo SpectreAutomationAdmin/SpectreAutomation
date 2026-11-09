@@ -168,8 +168,10 @@ test.describe("EP-TRAIN-4Y-T acceptance — upload-first + metadata + requiremen
     expect(body.ok).toBe(true);
     expect(body.applied).toBe(false);
     expect(body.skippedReason).toBe("COURSE_ALREADY_FINALISED");
-    expect(body.metadata).toBeTruthy();
-    expect(body.metadata.inferenceSource).toBe("deterministic");
+    // Metadata is intentionally null on the short-circuit path: the
+    // server skipped generation to honour "never silently change an
+    // established course code" (directive §5).
+    expect(body.metadata).toBeNull();
     await ctx.close();
   });
 

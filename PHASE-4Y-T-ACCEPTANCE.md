@@ -1,6 +1,6 @@
 # EP-TRAIN-4Y-T — Upload-First AI Course Creation and Deferred Publishing Requirements
 
-**Status:** All three slices (13, 14, 15) deployed to staging (slice 15 deploying as of this writing). Acceptance E2E `tests/e2e/ep-train-4y-t-acceptance.staging.spec.ts` ready to run against the final release.
+**Status:** **ACCEPTED on Fly v1121.** All four slices deployed (13 + 15 + 16; slice 14 superseded into 15). Acceptance E2E `tests/e2e/ep-train-4y-t-acceptance.staging.spec.ts` ran clean on v1121 — **7/7 tests PASS in 58 s**, 4/4 screenshot deliverables captured under `test-results/`.
 
 **Founder acceptance criterion:**
 > "The manager selects With Video and immediately uploads a video. Spectre prepares the course identity and questions automatically. The manager reviews the course, previews it, configures requirements, and publishes."
@@ -11,11 +11,13 @@
 
 | Slice | Commit | DRH-1 run | Fly release | Scope |
 | --- | --- | --- | --- | --- |
-| 13 | `b0eec107` | `42547442342` | (deploying) | §2 upload-first entry + §3 durable provisional draft + upload page |
-| 14 | `90064d65` | `42547912439` | (deploying) | §4 auto-fire metadata + §5 grounded metadata generator + endpoint |
-| 15 | `d27b92f1` | `42548366722` | (deploying) | §8 Training Requirements + §9 Publish Review + §10 without-video simplification |
+| 13 | `b0eec107` | `42547442342` | v1119 | §2 upload-first entry + §3 durable provisional draft + upload page |
+| 14 | `90064d65` | `42547912439` | superseded | §4 auto-fire metadata + §5 grounded metadata generator + endpoint (deploy cancelled; commits rolled into slice 15) |
+| 15 | `d27b92f1` | `42548366722` | v1120 | §8 Training Requirements + §9 Publish Review + §10 without-video simplification |
+| 16 | `3f8bc2fe` | `42551364127` | v1121 | §5 fix: reorder `/generate-metadata` so the "course already finalised" short-circuit runs before transcript read |
+| Acceptance | `37724080` | — | — | Playwright spec + report |
 
-(All three branches share history; the slice 15 build is a strict superset.)
+All slices share history on `ep-train-4y-b-impl/hybrid-auth-contract`; slice 15 is a strict superset of 13+14.
 
 ## Evidence summary (per directive section)
 
@@ -76,17 +78,22 @@
 - Compliance + applicability radios REMOVED from this form; replaced with a one-line note that those settings are configured on the Training Requirements step.
 - The manual TimelineEditor + QuizEditor for question authoring remain untouched.
 
-### §11 Staging acceptance — in flight
-- Slice 15 DRH-1 run `42548366722` deploying.
-- `tests/e2e/ep-train-4y-t-acceptance.staging.spec.ts` covers:
-  - §2+§3 With Video opens directly to upload (no upfront identity form)
-  - §3 Durable resume (same courseId/versionId across revisits)
-  - §10 Without-video form simplified
-  - §8 Training Requirements renders with required audience confirmation
-  - §9 Publish Review consolidates everything
-  - §4+§5 Grounded metadata endpoint respects the provisional guard (returns `applied: false, skippedReason: "COURSE_ALREADY_FINALISED"` on the already-established Silver Springs course)
-  - Manager Review continues to Training Requirements (not `#publish` on the deep editor)
-- Pending v1119 release + authenticated E2E run.
+### §11 Staging acceptance — PROVED
+- Slice 16 DRH-1 run `42551364127` → Fly v1121.
+- `/api/health` → 200.
+- `tests/e2e/ep-train-4y-t-acceptance.staging.spec.ts` ran against v1121: **7/7 tests PASS in 58 s**:
+  1. `§2+§3 With Video opens directly to upload (no upfront identity form)` — PASS
+  2. `§3 Durable provisional draft: revisiting resumes the same draft` — PASS (identical URL across revisits)
+  3. `§10 Without-video form no longer has upfront compliance/audience` — PASS
+  4. `§8 Training Requirements step renders with required audience confirmation` — PASS
+  5. `§9 Publish Review consolidates everything + routes to explicit Publish` — PASS
+  6. `§4+§5 Grounded metadata endpoint — idempotent + respects provisional guard` — PASS (returns `{ ok: true, applied: false, skippedReason: "COURSE_ALREADY_FINALISED", metadata: null }` on the already-established Silver Springs course)
+  7. `Manager Review continues to Training Requirements (not deep editor)` — PASS
+- 4 screenshot deliverables captured under `test-results/`:
+  - `4yt-01-upload-entry.png` — With-video → upload redirect (no upfront form)
+  - `4yt-02-without-video-simplified.png` — manual form with compliance/audience removed
+  - `4yt-03-training-requirements.png` — Training Requirements with audience-confirm checkbox
+  - `4yt-04-publish-review.png` — consolidated final review
 
 ### §12 STOP boundaries honoured
 
