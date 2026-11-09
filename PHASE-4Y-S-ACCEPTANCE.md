@@ -1,6 +1,6 @@
 # EP-TRAIN-4Y-S — Rebuild Safety & Training Course Creation Around the Manager Experience
 
-**Status:** Slices 9 / 10 / 11 / 12 deployed to staging. §9 projection-hash fix PROVED end-to-end on v1115 (TrainingQuestion row materialised from a fresh eligible draft). Slice 12 adds the approval-status + pre-publish summary cards and is deploying as DRH-1 run `42542278922` at the time of writing.
+**Status:** **ACCEPTED on Fly v1118.** All four slices deployed; §9 PROVED on v1115 (real TrainingQuestion row materialised end-to-end); full acceptance E2E `tests/e2e/ep-train-4y-s-acceptance.staging.spec.ts` ran clean on v1118 — **6/6 tests PASS in 1.5 min**, 9/9 screenshot deliverables captured under `test-results/`.
 
 **Founder acceptance criterion:**
 > "A club manager can create a training course from a video through one clear, guided workflow without needing to understand Spectre's internal AI architecture."
@@ -14,7 +14,7 @@
 | 9 | `c5fe10a3` | `42532836193` | v1115 | §9 shared canonical projection body + round-trip test |
 | 10 | `665fb8e0` | `42536147440` | v1116 | §2 format selection + §3 drag-drop + §4 prep progress + §13 without-video |
 | 11 | `4882f34b` | `42539241768` | v1117 | §5+§6+§7+§8 Manager Review surface |
-| 12 | `86533978` | `42542278922` | (deploying) | §10 approval status + §11 preview link reuse + §12 pre-publish summary |
+| 12 | `86533978` | `42542278922` | v1118 | §10 approval status + §11 preview link reuse + §12 pre-publish summary |
 
 ## Evidence summary (per directive section)
 
@@ -94,10 +94,19 @@
 - `/new/without-video` reuses the existing identity form + `createCourseAction`.
 - Lands in the version editor where the existing `TimelineEditor` + `QuizEditor` support manual question authoring without invoking any AI pipeline code (no transcribe / no generate / no projection).
 
-### §14 Staging acceptance — in flight
-- Slice 12 deploying (DRH-1 run `42542278922`).
-- `tests/e2e/ep-train-4y-s-acceptance.staging.spec.ts` captures all 7 directive sections in a single authenticated spec. Will be run against v1118 once slice 12 completes.
-- §9 regression already proven (v1115, real TrainingQuestion row materialised).
+### §14 Staging acceptance — PROVED
+- Slice 12 deployed clean (DRH-1 run `42542278922` → Fly v1118).
+- `/api/health` → 200.
+- `tests/e2e/ep-train-4y-s-acceptance.staging.spec.ts` ran against v1118: **6/6 tests PASS in 1 m 30 s**:
+  1. `§1-§2 dashboard preserved + format selection screen` — PASS
+  2. `§13 Without-video path reachable + form renders` — PASS
+  3. `§3 With-video page + drag-drop dropzone visible on editor` — PASS
+  4. `§4 Plain-language prep progress stages render on editor` — PASS
+  5. `§5+§6+§7+§8+§10+§11+§12 Manager Review surface on Silver Springs` — PASS
+  6. `§9 regression: fresh eligible draft promotes end-to-end on v1115+` — PASS
+- 9 screenshot deliverables captured under `test-results/`:
+  - `4ys-01-dashboard.png` through `4ys-09-editor-post-promotion.png`
+- §9 chain end-to-end PROVED on v1115 pre-slice-12: real TrainingQuestion row `cmw8gv9gs001w3j4x6crf8t26` created via reviewer approve + founder promote on fresh pilot `cmw7zjm57007vcnz1uw3pyoaf`.
 
 ### §15 STOP boundaries honoured
 
