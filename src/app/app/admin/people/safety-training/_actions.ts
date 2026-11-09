@@ -150,10 +150,21 @@ export async function updateDraftAction(
     }
   }
 
+  // EP-TRAIN-4Y-T §8 — allow callers to steer the post-save redirect
+  // (e.g. the Training Requirements page wants to hand off to the
+  // Publish Review step). Only accept in-app training paths to avoid
+  // open-redirect risk.
+  const nextHrefRaw = formData.get("_nextHref");
+  const nextHref =
+    typeof nextHrefRaw === "string" &&
+    nextHrefRaw.startsWith("/app/admin/people/safety-training/")
+      ? nextHrefRaw
+      : backHref;
+
   try {
     await updateDraft(principal, versionId, patch);
     revalidatePath(backHref);
-    redirect(backHref);
+    redirect(nextHref);
   } catch (err) {
     if (isAppError(err)) {
       redirect(withErr(backHref, firstIssueMessage(err) ?? err.safeMessage));

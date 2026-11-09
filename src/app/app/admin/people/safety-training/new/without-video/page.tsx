@@ -116,75 +116,10 @@ export default async function NewSafetyTrainingCourseWithoutVideo({
           </div>
         </section>
 
-        <section className="card card-body space-y-4">
-          <h2 className="section-title text-lg">Compliance</h2>
-          <div className="flex items-start gap-3">
-            <input type="checkbox" name="required" defaultChecked id="required" className="mt-1" data-testid="training-new-required" />
-            <label htmlFor="required" className="text-sm text-stone-800">
-              <span className="font-medium">Required for scheduling</span>
-              <span className="block text-xs text-stone-500 mt-0.5">
-                Employees cannot submit availability or be scheduled until they complete required courses. Uncheck for optional courses.
-              </span>
-            </label>
-          </div>
-        </section>
-
-        <section className="card card-body space-y-4">
-          <h2 className="section-title text-lg">Who needs to complete this?</h2>
-          <p className="text-xs text-stone-500">
-            You can refine department and position selectors after the course is created.
-          </p>
-          <div className="space-y-2">
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="everyone"
-                defaultChecked
-                className="mt-1"
-                data-testid="training-new-applicability-everyone"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">Everyone</span>
-                <span className="block text-xs text-stone-500">
-                  Every active employee at the Club is required to complete this.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="scoped"
-                className="mt-1"
-                data-testid="training-new-applicability-scoped"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">
-                  Specific departments or positions
-                </span>
-                <span className="block text-xs text-stone-500">
-                  Choose department(s) or position(s) after creating the draft.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-3">
-              <input
-                type="radio"
-                name="applicabilityMode"
-                value="explicit"
-                className="mt-1"
-                data-testid="training-new-applicability-explicit"
-              />
-              <span>
-                <span className="text-sm text-club-ink font-medium">Assign individually</span>
-                <span className="block text-xs text-stone-500">
-                  The course only applies to employees you explicitly assign.
-                </span>
-              </span>
-            </label>
-          </div>
-        </section>
+        <p className="text-xs text-stone-500 -mt-2">
+          Compliance and audience settings are configured later, on the
+          Training Requirements step &mdash; immediately before Publish.
+        </p>
 
         <div className="flex items-center justify-end gap-3">
           <Link

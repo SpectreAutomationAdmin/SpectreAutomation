@@ -607,13 +607,13 @@ function PrePublishSummary({
       )}
 
       <a
-        href={`/app/admin/people/safety-training/${courseId}/${versionId}#publish`}
+        href={`/app/admin/people/safety-training/${courseId}/${versionId}/training-requirements`}
         className={`mt-3 inline-block btn btn-sm ${
-          canPublish && config.readinessReady ? "btn-primary" : "btn-secondary"
+          canPublish ? "btn-primary" : "btn-secondary"
         }`}
         data-testid="prepub-continue-link"
       >
-        {canPublish && config.readinessReady ? "Continue to publish →" : "Open full editor →"}
+        {canPublish ? "Continue to Training Requirements →" : "View Training Requirements →"}
       </a>
     </section>
   );
