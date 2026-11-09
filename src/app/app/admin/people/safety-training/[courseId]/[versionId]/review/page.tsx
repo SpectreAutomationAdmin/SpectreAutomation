@@ -97,10 +97,22 @@ export default async function ManagerReviewPage({
   // shortfallReasonJson (contentHash → group map) can resolve each
   // draft's destination. A version with no run leaves every draft
   // UNKNOWN which the client still renders safely.
+  //
+  // EP-TRAIN-4Y-AA §4 — also load assessmentPlanJson so the review
+  // page can render the checkpoint timeline markers when the course
+  // has no persisted TrainingCheckpoint rows (the staging founder
+  // course is in exactly this shape: 5 CP drafts were generated but
+  // zero TrainingCheckpoint rows exist). The plan's
+  // `proposedCheckpointGroups[].atSec` values are the authoritative
+  // timestamps the worker used — they are NOT invented markers.
   const latestRun = await prisma.trainingQuestionAiGenerationRun.findFirst({
     where: { clubId, courseVersionId: version.id },
     orderBy: { requestedAt: "desc" },
-    select: { id: true, shortfallReasonJson: true },
+    select: {
+      id: true,
+      shortfallReasonJson: true,
+      assessmentPlanJson: true,
+    },
   });
 
   // Pull AI drafts for this version. Tenant scope enforced via
@@ -233,13 +245,7 @@ export default async function ManagerReviewPage({
             : null
         }
         drafts={drafts}
-        checkpoints={checkpoints.map((c) => ({
-          id: c.id,
-          title: c.label ?? `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(
-            Math.floor(c.atSecond % 60),
-          ).padStart(2, "0")}`,
-          atSecond: c.atSecond,
-        }))}
+        checkpoints={resolveCheckpointMarkers(checkpoints, latestRun?.assessmentPlanJson ?? null)}
         canApprove={canApprove}
         canAuthor={canAuthor}
         canPublish={hasPermission(principal, clubId, "hr:training:publish")}
@@ -248,4 +254,61 @@ export default async function ManagerReviewPage({
       />
     </div>
   );
+}
+
+// EP-TRAIN-4Y-AA §4 — resolve the checkpoint timeline markers.
+//
+// Preferred source: persisted `TrainingCheckpoint` rows (the editor's
+// own authoritative list). When a course has zero such rows — which
+// is the shape of the 4Y-Z pilot course `cmw8n6z8f0008z4nxck6uvms9`
+// because the plan produced CP drafts but no TrainingCheckpoint rows
+// were ever materialised — fall back to the plan's
+// `proposedCheckpointGroups[].atSec` values. These are the exact
+// timestamps the worker aimed its CP generation at, so rendering them
+// is NOT invention; they came from the plan the founder authorised.
+//
+// Returns the Client shape expected by `ManagerReviewClient`.
+function resolveCheckpointMarkers(
+  checkpoints: Array<{ id: string; label: string | null; atSecond: number }>,
+  assessmentPlanJson: string | null,
+): Array<{ id: string; title: string; atSecond: number }> {
+  if (checkpoints.length > 0) {
+    return checkpoints.map((c) => ({
+      id: c.id,
+      title:
+        c.label ??
+        `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(
+          Math.floor(c.atSecond % 60),
+        ).padStart(2, "0")}`,
+      atSecond: c.atSecond,
+    }));
+  }
+  // Fallback: plan.proposedCheckpointGroups[].atSec
+  if (!assessmentPlanJson) return [];
+  try {
+    const plan = JSON.parse(assessmentPlanJson) as {
+      proposedCheckpointGroups?: Array<{
+        id?: unknown;
+        atSec?: unknown;
+      }>;
+    };
+    const groups = Array.isArray(plan?.proposedCheckpointGroups)
+      ? plan.proposedCheckpointGroups
+      : [];
+    const rows: Array<{ id: string; title: string; atSecond: number }> = [];
+    for (const g of groups) {
+      if (typeof g?.id !== "string") continue;
+      if (typeof g?.atSec !== "number" || !Number.isFinite(g.atSec)) continue;
+      rows.push({
+        id: `plan:${g.id}`,
+        title: `Checkpoint at ${Math.floor(g.atSec / 60)}:${String(
+          Math.floor(g.atSec % 60),
+        ).padStart(2, "0")}`,
+        atSecond: g.atSec,
+      });
+    }
+    return rows.sort((a, b) => a.atSecond - b.atSecond);
+  } catch {
+    return [];
+  }
 }
