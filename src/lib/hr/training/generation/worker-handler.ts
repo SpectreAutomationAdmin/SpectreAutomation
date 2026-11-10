@@ -309,13 +309,21 @@ export async function handleGenerateJob(
   function priorTopicHints(drafts: typeof generatedDrafts, max = 12): string[] {
     // Compact hints: first 10 words of each prior question text,
     // bounded to the last `max` entries so the prompt doesn't balloon
-    // on a long plan.
-    const recent = drafts.slice(-max);
+    // on a long plan. EP-TRAIN-4Y-AL §2 — unions external (cross-run)
+    // priors from `priorQuestionTextsForDedup` with this run's drafts.
+    const union: Array<{ questionText: string }> = [
+      ...externalPriorHints,
+      ...drafts.map((d) => ({ questionText: d.draft.questionText })),
+    ];
+    const recent = union.slice(-max);
     return recent.map((d) => {
-      const first10 = d.draft.questionText.trim().split(/\s+/).slice(0, 10).join(" ");
-      return `• "${first10}${first10.length < d.draft.questionText.length ? "…" : ""}"`;
+      const first10 = d.questionText.trim().split(/\s+/).slice(0, 10).join(" ");
+      return `• "${first10}${first10.length < d.questionText.length ? "…" : ""}"`;
     });
   }
+  // Populated below after the plan is parsed, so priorTopicHints can
+  // read it. Kept as a module-local hoisted binding (closure capture).
+  let externalPriorHints: Array<{ questionText: string }> = [];
 
 
   // Iterate plan groups (checkpoints + final).
@@ -326,6 +334,40 @@ export async function handleGenerateJob(
     contentHash: string;
     dedupDecision: DedupDecision;
   }[] = [];
+
+  // EP-TRAIN-4Y-AL §2 — pre-seed cross-run priors from existing FA
+  // drafts (when a recovery plan carries `priorQuestionTextsForDedup`).
+  // These feed dedup's `evaluateAgainstPriors` AND `priorTopicHints`
+  // so Qwen is warned off re-generating existing topics. They are
+  // NEVER re-persisted — they live only as synthetic prior candidates.
+  const externalPriors: Array<{
+    group: string;
+    kind: "FINAL_ASSESSMENT";
+    draft: ModalGenerateProposal;
+    contentHash: string;
+    dedupDecision: DedupDecision;
+  }> = [];
+  if (Array.isArray(plan.priorQuestionTextsForDedup) && plan.priorQuestionTextsForDedup.length > 0) {
+    for (let i = 0; i < plan.priorQuestionTextsForDedup.length; i++) {
+      const qt = plan.priorQuestionTextsForDedup[i];
+      if (typeof qt !== "string" || qt.length === 0) continue;
+      externalPriors.push({
+        group: `external-prior-${i + 1}`,
+        kind: "FINAL_ASSESSMENT",
+        draft: {
+          questionType: "SINGLE_CHOICE",
+          questionText: qt,
+          options: [],
+          explanation: "",
+          sourceSegmentIds: [],
+        } as unknown as ModalGenerateProposal,
+        contentHash: `external-prior-${i + 1}`,
+        dedupDecision: { verdict: "DISTINCT" } as unknown as DedupDecision,
+      });
+    }
+  }
+  // Point the closure at the populated list.
+  externalPriorHints = externalPriors.map((ep) => ({ questionText: ep.draft.questionText }));
   // Per-candidate dedup decision log for shortfallReasonJson.
   const dedupLog: Array<{
     group: string;
@@ -702,14 +744,27 @@ export async function handleGenerateJob(
         // groups (checkpoints + final) in this plan. EP-TRAIN-4Y-N:
         // `sourceSegmentIds` participates in the grounded near-dup
         // rule inside `evaluatePair`.
-        const priors: QuestionCandidate[] = generatedDrafts.map((gd) => ({
-          id: gd.contentHash,
-          questionText: gd.draft.questionText,
-          options: gd.draft.options,
-          explanation: gd.draft.explanation,
-          destination: gd.group,
-          sourceSegmentIds: gd.draft.sourceSegmentIds,
-        }));
+        // EP-TRAIN-4Y-AL §2 — union the in-run drafts with external
+        // priors (cross-run EXISTING FA drafts) so a shortfall recovery
+        // dedups against the baseline the review page is already showing.
+        const priors: QuestionCandidate[] = [
+          ...externalPriors.map((ep) => ({
+            id: ep.contentHash,
+            questionText: ep.draft.questionText,
+            options: ep.draft.options,
+            explanation: ep.draft.explanation,
+            destination: ep.group,
+            sourceSegmentIds: ep.draft.sourceSegmentIds,
+          })),
+          ...generatedDrafts.map((gd) => ({
+            id: gd.contentHash,
+            questionText: gd.draft.questionText,
+            options: gd.draft.options,
+            explanation: gd.draft.explanation,
+            destination: gd.group,
+            sourceSegmentIds: gd.draft.sourceSegmentIds,
+          })),
+        ];
         const candidate: QuestionCandidate = {
           id: candidateContentHash,
           questionText: p.questionText,
@@ -1167,7 +1222,7 @@ Constraints:
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Diverse question types are encouraged across the final-assessment set.
 4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited passage(s).
 5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.
-6. EMPLOYEE-FACING TEXT PURITY — \`questionText\`, every \`options[].text\`, and \`explanation\` are read by employees. They MUST NOT contain the words "segment", "segments", "transcript", "passage id", "source", "reference", bracketed numbers like "[12]" / "[12, 13]", or any digit used as a provenance reference. Phrase the question as if you had watched the video yourself — never cite the transcript in prose.
+6. EMPLOYEE-FACING TEXT PURITY — \`questionText\`, every \`options[].text\`, and \`explanation\` are read by employees. They MUST NOT contain the words "segment", "segments", "transcript", "passage id", "source", "reference", bracketed numbers like "[12]" / "[12, 13]", or any digit used as a provenance reference. They MUST NOT begin with or contain the phrases "According to the transcript", "According to the training", "According to the course content", "According to the material", "Per the transcript", "Per the training", or any similar pointer to the source document. Phrase every sentence as if you had watched the video yourself and are testing retention — never cite or refer to the source material in prose.
 7. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", or option bodies in the stem. The stem is independently understandable without the options.
 8. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
 9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem. Phrase it as a short teaching note — not as a citation.${priorBlock}`;

@@ -279,6 +279,33 @@ export async function requestFinalAssessmentRecovery(
     );
   }
 
+  // EP-TRAIN-4Y-AL §2 — seed cross-run topic dedup. Load the existing
+  // FA drafts' question texts so the worker's dedup + priorTopicHints
+  // reject near-duplicates. Uses the AF composed group map to identify
+  // which drafts are FA. Falls back to an empty list on any failure
+  // (worker still functions; fewer dedup signals).
+  let priorQuestionTexts: string[] = [];
+  try {
+    const allDrafts = await db.trainingQuestionAiDraft.findMany({
+      where: {
+        clubId,
+        courseVersionId: original.courseVersionId,
+        state: {
+          in: ["GENERATED", "VALIDATION_PENDING", "REQUIRES_HUMAN_REVIEW",
+               "EDITED_VALIDATION_STALE", "VALIDATION_FAILED", "APPROVED_DRAFT", "PROMOTED"],
+        },
+      },
+      select: { contentHash: true, draftJson: true },
+    });
+    priorQuestionTexts = allDrafts
+      .filter((d) => destinationKindForGroup(composedMap.get(d.contentHash) ?? null) === "FINAL_ASSESSMENT")
+      .map((d) => {
+        try { return JSON.parse(d.draftJson || "{}").questionText as string ?? ""; }
+        catch { return ""; }
+      })
+      .filter((t) => typeof t === "string" && t.length > 0);
+  } catch { /* fall-through with empty list */ }
+
   // 6. Build the RECOVERY plan. Reuses the original plan's transcript +
   //    video sha + eligible segments. Drops checkpoints (an empty list),
   //    sets FA target to the shortfall, and attaches the chunks.
@@ -297,6 +324,7 @@ export async function requestFinalAssessmentRecovery(
       coverageLearningObjectiveIds: originalPlan.proposedFinalAssessment.coverageLearningObjectiveIds,
     },
     proposedFinalAssessmentChunks: coverage.chunks,
+    priorQuestionTextsForDedup: priorQuestionTexts,
     totalTargetQuestionCount: shortfall,
     sourceEvidenceRequirements: originalPlan.sourceEvidenceRequirements,
     generatedAt: now.toISOString(),

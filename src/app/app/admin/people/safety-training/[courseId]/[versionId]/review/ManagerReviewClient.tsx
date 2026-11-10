@@ -648,9 +648,14 @@ export default function ManagerReviewClient(props: Props) {
           AB squeezed the video (and so appeared to "crop" the slide).
           Give the video a generous floor and ratio so it is the
           primary workspace; the question pane shrinks to its content,
-          with its own floor to stay operable. Stacks at < 1280 px. */}
+          with its own floor to stay operable. Stacks at < 1280 px.
+          EP-TRAIN-4Y-AL §5 — tightened minmax floors (760→620, 400→340)
+          so the combined grid (≈ 1004 px minimum + 24 px gap) fits
+          inside the 1440 × 900 viewport's effective content column
+          (~1110 px after the persistent sidebar). The 2.4 : 1 FR ratio
+          is unchanged so at wider viewports the video still dominates. */}
       <div
-        className="grid grid-cols-1 xl:grid-cols-[minmax(760px,2.4fr)_minmax(400px,1fr)] gap-6 items-start"
+        className="grid grid-cols-1 xl:grid-cols-[minmax(620px,2.4fr)_minmax(340px,1fr)] gap-6 items-start"
         data-testid="manager-review-body"
       >
         {/* Left (3fr): shared video + PlayerControlBar */}

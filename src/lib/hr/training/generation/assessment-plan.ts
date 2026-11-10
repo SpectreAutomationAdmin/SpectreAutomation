@@ -118,6 +118,14 @@ export interface AssessmentPlanV1 {
   readonly proposedFinalAssessment: AssessmentPlanFinalAssessment;
   // EP-TRAIN-4Y-AF — optional chunked FA generation.
   readonly proposedFinalAssessmentChunks?: readonly AssessmentPlanFinalAssessmentChunk[];
+  /** EP-TRAIN-4Y-AL §2 — opaque digests of EXISTING Final-Assessment
+   *  question texts that must not be re-generated. The recovery service
+   *  populates this from the current FA drafts for the course version
+   *  so a shortfall-only recovery can seed dedup + priorTopics against
+   *  them. Each entry is a human-readable question-text string (worker
+   *  truncates for hint rendering). NEVER persisted on the draft row —
+   *  this is PLAN-only context. Optional for backwards compat. */
+  readonly priorQuestionTextsForDedup?: readonly string[];
   readonly totalTargetQuestionCount: number;
   readonly sourceEvidenceRequirements: {
     readonly mustCiteAtLeastOneSegmentPerQuestion: true;
