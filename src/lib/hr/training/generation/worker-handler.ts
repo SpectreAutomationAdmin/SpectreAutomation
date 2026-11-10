@@ -356,6 +356,37 @@ export async function handleGenerateJob(
   // compose it with resolved LO + windowed transcript at prompt
   // time. The FINAL_ASSESSMENT group carries the course-wide LO
   // coverage from the plan.
+  //
+  // EP-TRAIN-4Y-AF (2026-11-10) — if the plan carries
+  // `proposedFinalAssessmentChunks`, emit one FA group per chunk
+  // (each at `targetQuestionCount: ≤3`) instead of a single `"final"`
+  // group at target=10. The 4Y-Z pilot proved a single call at
+  // target=10 returned ZERO proposals; chunks of ≤3 match the
+  // checkpoint call shape that Qwen 2.5 7B AWQ handles reliably.
+  const finalAssessmentChunks = Array.isArray(plan.proposedFinalAssessmentChunks)
+    ? plan.proposedFinalAssessmentChunks
+    : [];
+  const faGroups: {
+    id: string;
+    kind: "FINAL_ASSESSMENT";
+    target: number;
+    atSec?: number;
+    learningObjectiveIds: readonly string[];
+  }[] = finalAssessmentChunks.length > 0
+    ? finalAssessmentChunks.map((c) => ({
+        id: c.id,
+        kind: "FINAL_ASSESSMENT" as const,
+        target: c.targetQuestionCount,
+        learningObjectiveIds: c.coverageLearningObjectiveIds,
+      }))
+    : [
+        {
+          id: "final",
+          kind: "FINAL_ASSESSMENT" as const,
+          target: plan.proposedFinalAssessment.targetQuestionCount,
+          learningObjectiveIds: plan.proposedFinalAssessment.coverageLearningObjectiveIds,
+        },
+      ];
   const groups: {
     id: string;
     kind: "CHECKPOINT" | "FINAL_ASSESSMENT";
@@ -370,12 +401,7 @@ export async function handleGenerateJob(
       atSec: g.atSec,
       learningObjectiveIds: g.learningObjectiveIds,
     })),
-    {
-      id: "final",
-      kind: "FINAL_ASSESSMENT" as const,
-      target: plan.proposedFinalAssessment.targetQuestionCount,
-      learningObjectiveIds: plan.proposedFinalAssessment.coverageLearningObjectiveIds,
-    },
+    ...faGroups,
   ];
 
   // §D.1 + §Q.4 — per-group FRESH PilotAuthorizationV1. Reused

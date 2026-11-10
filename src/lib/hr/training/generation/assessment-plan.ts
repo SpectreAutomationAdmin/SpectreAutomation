@@ -52,6 +52,21 @@ export interface AssessmentPlanFinalAssessment {
   readonly coverageLearningObjectiveIds: readonly string[];
 }
 
+// EP-TRAIN-4Y-AF (2026-11-10) — Chunked final-assessment generation.
+// The 4Y-Z pilot proved a single Modal call at `maxQuestions: 10` with
+// 54 learning objectives returned ZERO proposals. Splitting the FA ask
+// into N chunks of ≤3 each matches the checkpoint-group call shape that
+// Qwen 2.5 7B AWQ handles reliably. The sum of each chunk's
+// targetQuestionCount MUST equal `proposedFinalAssessment.targetQuestionCount`.
+// When `proposedFinalAssessmentChunks` is absent the worker uses the
+// legacy single-call FA path; existing plans are unchanged.
+export interface AssessmentPlanFinalAssessmentChunk {
+  readonly id: string; // "fa-1", "fa-2", …
+  readonly targetQuestionCount: number;
+  readonly coverageLearningObjectiveIds: readonly string[];
+  readonly focusTopicLabel: string;
+}
+
 /** EP-TRAIN-4Y-N (2026-11-08) — worker-side prompt construction
  *  contract this plan was BUILT to drive. The value is participating
  *  in `planIdentityHash` (via canonicalise of the whole plan), so
@@ -77,6 +92,8 @@ export interface AssessmentPlanV1 {
   readonly eligibleSegmentIds: readonly number[];
   readonly proposedCheckpointGroups: readonly AssessmentPlanCheckpointGroup[];
   readonly proposedFinalAssessment: AssessmentPlanFinalAssessment;
+  // EP-TRAIN-4Y-AF — optional chunked FA generation.
+  readonly proposedFinalAssessmentChunks?: readonly AssessmentPlanFinalAssessmentChunk[];
   readonly totalTargetQuestionCount: number;
   readonly sourceEvidenceRequirements: {
     readonly mustCiteAtLeastOneSegmentPerQuestion: true;
@@ -196,6 +213,65 @@ export function validateAssessmentPlan(raw: unknown): AssessmentPlanV1 {
     if (typeof fa === "number") sum += fa;
     if (typeof r.totalTargetQuestionCount === "number" && sum !== r.totalTargetQuestionCount) {
       push("totalTargetQuestionCount", `checkpoint + final counts (${sum}) must equal totalTargetQuestionCount (${r.totalTargetQuestionCount})`);
+    }
+  }
+
+  // EP-TRAIN-4Y-AF — if `proposedFinalAssessmentChunks` is present,
+  // its targetSum must equal proposedFinalAssessment.targetQuestionCount
+  // AND every chunk's coverageLearningObjectiveIds must resolve to a
+  // defined LO. Each chunk's targetQuestionCount must be 1..3 (the
+  // observed-safe Modal call size for Qwen 2.5 7B AWQ at FA scope).
+  if (Array.isArray(r.proposedFinalAssessmentChunks) && (r.proposedFinalAssessmentChunks as unknown[]).length > 0) {
+    const chunks = r.proposedFinalAssessmentChunks as unknown[];
+    const loIds = new Set<string>();
+    if (Array.isArray(r.learningObjectives)) {
+      for (const lo of r.learningObjectives as unknown[]) {
+        if (typeof lo === "object" && lo !== null && typeof (lo as Record<string, unknown>).id === "string") {
+          loIds.add((lo as { id: string }).id);
+        }
+      }
+    }
+    let chunkSum = 0;
+    const seenChunkIds = new Set<string>();
+    for (const c of chunks) {
+      if (typeof c !== "object" || c === null) {
+        push("proposedFinalAssessmentChunks", "every chunk must be an object");
+        continue;
+      }
+      const ch = c as Record<string, unknown>;
+      if (typeof ch.id !== "string" || ch.id.length === 0) {
+        push("proposedFinalAssessmentChunks.id", "non-empty string required");
+        continue;
+      }
+      if (seenChunkIds.has(ch.id)) {
+        push("proposedFinalAssessmentChunks.id", `duplicate id ${ch.id}`);
+      }
+      seenChunkIds.add(ch.id);
+      if (typeof ch.targetQuestionCount !== "number" || ch.targetQuestionCount < 1 || ch.targetQuestionCount > 3) {
+        push("proposedFinalAssessmentChunks.targetQuestionCount", `chunk ${ch.id} must have target 1..3`);
+      } else {
+        chunkSum += ch.targetQuestionCount;
+      }
+      if (!Array.isArray(ch.coverageLearningObjectiveIds)) {
+        push("proposedFinalAssessmentChunks.coverageLearningObjectiveIds", `chunk ${ch.id} must have array`);
+      } else {
+        for (const id of ch.coverageLearningObjectiveIds as unknown[]) {
+          if (typeof id === "string" && !loIds.has(id)) {
+            push("proposedFinalAssessmentChunks.coverageLearningObjectiveIds", `chunk ${ch.id} references unknown LO ${id}`);
+          }
+        }
+      }
+      if (typeof ch.focusTopicLabel !== "string") {
+        push("proposedFinalAssessmentChunks.focusTopicLabel", `chunk ${ch.id} must be a string`);
+      }
+    }
+    const fa = r.proposedFinalAssessment as Record<string, unknown> | undefined;
+    const faTarget = fa && typeof fa.targetQuestionCount === "number" ? fa.targetQuestionCount : null;
+    if (faTarget !== null && chunkSum !== faTarget) {
+      push(
+        "proposedFinalAssessmentChunks",
+        `chunks' targetQuestionCount sum (${chunkSum}) must equal proposedFinalAssessment.targetQuestionCount (${faTarget})`,
+      );
     }
   }
 

@@ -24,7 +24,10 @@ import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { listCheckpointsForVersion } from "@/lib/hr/training/checkpoints";
 import { checkPublishReadiness } from "@/lib/hr/training/courses";
-import { annotateDraftsWithDestination } from "@/lib/hr/training/generation/destination-resolver";
+import {
+  annotateDraftsWithComposedDestination,
+  composeGroupMapsFromRuns,
+} from "@/lib/hr/training/generation/destination-resolver";
 import ManagerReviewClient from "./ManagerReviewClient";
 
 export const runtime = "nodejs";
@@ -93,40 +96,78 @@ export default async function ManagerReviewPage({
     readinessReasons: readiness.reasons,
   };
 
-  // EP-TRAIN-4Y-AA §5 — load the latest generation run so the
-  // shortfallReasonJson (contentHash → group map) can resolve each
-  // draft's destination. A version with no run leaves every draft
-  // UNKNOWN which the client still renders safely.
+  // EP-TRAIN-4Y-AA §5 — load generation runs so the shortfallReasonJson
+  // (contentHash → group map) can resolve each draft's destination.
   //
   // EP-TRAIN-4Y-AA §4 — also load assessmentPlanJson so the review
   // page can render the checkpoint timeline markers when the course
-  // has no persisted TrainingCheckpoint rows (the staging founder
-  // course is in exactly this shape: 5 CP drafts were generated but
-  // zero TrainingCheckpoint rows exist). The plan's
+  // has no persisted TrainingCheckpoint rows. The plan's
   // `proposedCheckpointGroups[].atSec` values are the authoritative
   // timestamps the worker used — they are NOT invented markers.
-  const latestRun = await prisma.trainingQuestionAiGenerationRun.findFirst({
-    where: { clubId, courseVersionId: version.id },
-    orderBy: { requestedAt: "desc" },
+  //
+  // EP-TRAIN-4Y-AF §6 (2026-11-10) — composed resolver across ALL
+  // COMPLETED runs for this (clubId, courseVersionId). The FA recovery
+  // lifecycle creates a NEW generation run whose drafts live beside the
+  // original checkpoint drafts; without the composed walk, FA-recovered
+  // drafts would resolve as UNKNOWN because the "latest" run's
+  // shortfallReasonJson only names FA chunk groups and the ORIGINAL run
+  // alone names checkpoint groups (or vice versa). We select the
+  // atSec-bearing plan from the FIRST run that carries a non-empty
+  // `proposedCheckpointGroups`, which keeps AE2's chronological sort
+  // stable across recovery.
+  const allCompletedRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+    where: { clubId, courseVersionId: version.id, executionStatus: "COMPLETED" },
+    orderBy: [{ completedAt: "asc" }, { requestedAt: "asc" }],
     select: {
       id: true,
       shortfallReasonJson: true,
       assessmentPlanJson: true,
+      completedAt: true,
     },
   });
+  // Fall back to all-runs (regardless of status) when no COMPLETED run
+  // exists — matches the pre-AF behaviour and keeps QUEUED / RUNNING
+  // runs visible to the reviewer (atSec markers come from whichever
+  // run has the plan).
+  const runsForResolver = allCompletedRuns.length > 0
+    ? allCompletedRuns
+    : await prisma.trainingQuestionAiGenerationRun.findMany({
+        where: { clubId, courseVersionId: version.id },
+        orderBy: [{ requestedAt: "asc" }],
+        select: {
+          id: true,
+          shortfallReasonJson: true,
+          assessmentPlanJson: true,
+          completedAt: true,
+        },
+      });
+
+  // Pick the first run whose plan has non-empty checkpoint groups —
+  // this is the "original run with checkpoints", the authoritative
+  // source for atSec timestamps. FA recovery runs have an empty
+  // checkpointGroups array in their plans; they must NOT drive atSec.
+  let planRun: (typeof runsForResolver)[number] | undefined;
+  for (const r of runsForResolver) {
+    if (!r.assessmentPlanJson) continue;
+    try {
+      const planObj = JSON.parse(r.assessmentPlanJson) as {
+        proposedCheckpointGroups?: Array<{ id?: unknown; atSec?: unknown }>;
+      };
+      if ((planObj.proposedCheckpointGroups ?? []).length > 0) {
+        planRun = r;
+        break;
+      }
+    } catch { /* fall through */ }
+  }
+  // Legacy compat for any downstream code that still names `latestRun`.
+  const latestRun = planRun ?? runsForResolver[runsForResolver.length - 1] ?? null;
 
   // EP-TRAIN-4Y-AE2 §3 (2026-11-10) — parse the plan's checkpoint
   // groups into a `groupKey → atSec` map for deterministic ordering.
-  // The group id (cg-1, cg-2, …) is the stable logical checkpoint
-  // identity; its `atSec` is the scheduled video timestamp. Every
-  // draft (including supersederes) inherits its ancestor's groupKey
-  // via the shortfallReasonJson resolver + supersedes-chain walk
-  // below. The pair (atSec asc, originalContentHash asc) is the
-  // canonical sort — never generatedAt, never updatedAt, never id.
   const groupAtSec = new Map<string, number>();
   try {
-    if (latestRun?.assessmentPlanJson) {
-      const planObj = JSON.parse(latestRun.assessmentPlanJson) as {
+    if (planRun?.assessmentPlanJson) {
+      const planObj = JSON.parse(planRun.assessmentPlanJson) as {
         proposedCheckpointGroups?: Array<{ id?: unknown; atSec?: unknown }>;
       };
       for (const g of planObj.proposedCheckpointGroups ?? []) {
@@ -138,6 +179,14 @@ export default async function ManagerReviewPage({
   } catch {
     /* malformed plan JSON — fall back to group-key lexical order */
   }
+
+  // EP-TRAIN-4Y-AF §6 — compose contentHash → group across every run
+  // so FA-recovered drafts resolve to FINAL_ASSESSMENT via `fa-*`
+  // group names AND original checkpoint drafts still resolve to
+  // CHECKPOINT via `cg-*` names.
+  const composedGroupMap = composeGroupMapsFromRuns(
+    runsForResolver.map((r) => r.shortfallReasonJson),
+  );
 
   // Pull AI drafts for this version. Tenant scope enforced via
   // (clubId, courseVersionId); the state filter avoids archived /
@@ -258,9 +307,9 @@ export default async function ManagerReviewPage({
       ...rows.map((r) => ({ id: r.id, contentHash: r.contentHash })),
       ...ancestors.map((a) => ({ id: a.id, contentHash: a.contentHash })),
     ];
-    const annotated = annotateDraftsWithDestination({
+    const annotated = annotateDraftsWithComposedDestination({
       drafts: allForResolver,
-      shortfallReasonJson: latestRun?.shortfallReasonJson ?? null,
+      composedGroupMap,
     });
     const destByIdRaw = new Map(
       annotated.map((a) => [a.draft.id, { kind: a.destination, groupKey: a.planGroupKey }] as const),

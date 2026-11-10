@@ -75,19 +75,56 @@ export function parseShortfallGroupMap(
   return map;
 }
 
-/** Map a plan group id (`cg-*` / `final`) to a destination kind.
- *  Pure, name-based. The convention is set by worker-handler.ts
- *  where `plan.proposedCheckpointGroups` are referenced by their
- *  `g.id` (always distinct non-"final" names) and the final
- *  assessment group uses the literal id `"final"`. */
+/** Map a plan group id (`cg-*` / `final` / `fa-*`) to a destination
+ *  kind. Pure, name-based. Naming conventions:
+ *    - `cg-*`  → CHECKPOINT (worker-handler default)
+ *    - `final` → FINAL_ASSESSMENT (legacy single-call FA path)
+ *    - `fa-*`  → FINAL_ASSESSMENT (EP-TRAIN-4Y-AF chunked FA path)
+ *  Any non-`final` / non-`fa-*` id is treated as a per-checkpoint
+ *  bucket to stay compatible with future `ck-<cuid>` schemes. */
 export function destinationKindForGroup(group: string | null | undefined): DestinationKind {
   if (!group) return "UNKNOWN";
   if (group === "final") return "FINAL_ASSESSMENT";
-  // Any non-"final" group id represents a per-checkpoint bucket.
-  // `cg-1`, `cg-2`, … is the worker's default naming; any future
-  // scheme (e.g. `ck-<cuid>`) is still CHECKPOINT-shaped as long as
-  // it is not literally `"final"`.
+  if (/^fa-\d+$/.test(group)) return "FINAL_ASSESSMENT";
   return "CHECKPOINT";
+}
+
+/** EP-TRAIN-4Y-AF §6 — union shortfall-group maps across every
+ *  completed generation run for a (clubId, courseVersionId). The FA
+ *  recovery lifecycle creates a NEW run; its drafts live beside the
+ *  original run's checkpoint drafts, and the review page must resolve
+ *  destinations across BOTH runs. Pure/offline: takes a list of
+ *  shortfallReasonJson strings and returns one composed map. FIRST
+ *  mapping wins per `candidateContentHash` (stable tie-break). */
+export function composeGroupMapsFromRuns(
+  shortfallReasonJsons: readonly (string | null | undefined)[],
+): Map<string, string> {
+  const composed = new Map<string, string>();
+  for (const json of shortfallReasonJsons) {
+    const m = parseShortfallGroupMap(json);
+    for (const [hash, group] of m) {
+      if (!composed.has(hash)) composed.set(hash, group);
+    }
+  }
+  return composed;
+}
+
+/** EP-TRAIN-4Y-AF §6 — annotate drafts using a PRE-COMPOSED
+ *  contentHash → group map (from `composeGroupMapsFromRuns`). The
+ *  single-run variant above is preserved for backwards compatibility
+ *  and for the existing contract tests. */
+export function annotateDraftsWithComposedDestination<D extends DraftLike>(args: {
+  readonly drafts: readonly D[];
+  readonly composedGroupMap: ReadonlyMap<string, string>;
+}): DraftWithDestination<D>[] {
+  return args.drafts.map((draft) => {
+    const group = args.composedGroupMap.get(draft.contentHash) ?? null;
+    return {
+      draft,
+      destination: destinationKindForGroup(group),
+      planGroupKey: group,
+    };
+  });
 }
 
 /** Annotate each draft with its destination using the run's
