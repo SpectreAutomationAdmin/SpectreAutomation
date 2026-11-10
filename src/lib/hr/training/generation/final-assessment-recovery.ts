@@ -105,7 +105,18 @@ export interface RequestFinalAssessmentRecoveryResult {
     readonly id: string;
     readonly targetQuestionCount: number;
     readonly focusTopicLabel: string;
+    /** EP-TRAIN-4Y-AH §3 — the canonical per-chunk evidence set the
+     *  generation will cite from. Surfaced to the operator so the
+     *  preflight makes explicit what Qwen will see. */
+    readonly eligibleSegmentIds?: readonly number[];
+    /** EP-TRAIN-4Y-AH §4 — operator-readable LO-title summary (not
+     *  fed back to the model). */
+    readonly focusTopicSummary?: string;
   }[];
+  /** EP-TRAIN-4Y-AH §3 — LO ids the planner refused to cover because
+   *  every one of their segmentIds was in the worker-excluded set.
+   *  Included in the preflight so operator sees coverage gaps up front. */
+  readonly ineligibleLearningObjectiveIds?: readonly string[];
   /** Worst-case Modal inference budget in USD, projected from
    *  (chunk count × 180s ceiling + cold-boot). Used by the operator
    *  BEFORE firing the live call. */
@@ -242,10 +253,18 @@ export async function requestFinalAssessmentRecovery(
   }
 
   // 5. Build FA coverage chunks over the original plan's LO list.
+  //    EP-TRAIN-4Y-AH §3 — pass plan-level exclusions AND plan-level
+  //    eligibleSegmentIds so the planner can derive per-chunk
+  //    eligibleSegmentIds (intersection of LO slice ∩ plan eligible ∩
+  //    complement of worker-excluded). Pre-AH callers passed neither
+  //    and the coverage set was wider than what the worker would
+  //    accept; that mismatch is what the 4Y-AG recovery proved.
   const coverage = buildFinalAssessmentCoverage({
     learningObjectives: originalPlan.learningObjectives,
     target: shortfall,
     maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
+    planEligibleSegmentIds: originalPlan.eligibleSegmentIds,
+    planExcludedSegmentIndices: originalPlan.sourceEvidenceRequirements.excludedSegmentIndices,
   });
   if (coverage.chunks.length === 0) {
     throw new FinalAssessmentRecoveryRejectedError(
@@ -352,7 +371,10 @@ export async function requestFinalAssessmentRecovery(
       id: c.id,
       targetQuestionCount: c.targetQuestionCount,
       focusTopicLabel: c.focusTopicLabel,
+      eligibleSegmentIds: c.eligibleSegmentIds,
+      focusTopicSummary: c.focusTopicSummary,
     })),
+    ineligibleLearningObjectiveIds: coverage.ineligibleLearningObjectiveIds,
     projectedCostUsd: projectRecoveryCostUsd({ chunkCount: coverage.chunks.length }),
   };
 }
@@ -374,7 +396,11 @@ export interface PreflightFinalAssessmentRecoveryResult {
     readonly id: string;
     readonly targetQuestionCount: number;
     readonly focusTopicLabel: string;
+    readonly eligibleSegmentIds?: readonly number[];
+    readonly focusTopicSummary?: string;
   }[];
+  /** EP-TRAIN-4Y-AH §3 — LO ids excluded due to runtime-hygiene overlap. */
+  readonly ineligibleLearningObjectiveIds?: readonly string[];
   readonly projectedCostUsd: number;
 }
 
@@ -467,6 +493,8 @@ export async function preflightFinalAssessmentRecovery(
     learningObjectives: plan.learningObjectives,
     target: shortfall,
     maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
+    planEligibleSegmentIds: plan.eligibleSegmentIds,
+    planExcludedSegmentIndices: plan.sourceEvidenceRequirements.excludedSegmentIndices,
   });
 
   return {
@@ -480,7 +508,10 @@ export async function preflightFinalAssessmentRecovery(
       id: c.id,
       targetQuestionCount: c.targetQuestionCount,
       focusTopicLabel: c.focusTopicLabel,
+      eligibleSegmentIds: c.eligibleSegmentIds,
+      focusTopicSummary: c.focusTopicSummary,
     })),
+    ineligibleLearningObjectiveIds: coverage.ineligibleLearningObjectiveIds,
     projectedCostUsd: projectRecoveryCostUsd({ chunkCount: coverage.chunks.length }),
   };
 }

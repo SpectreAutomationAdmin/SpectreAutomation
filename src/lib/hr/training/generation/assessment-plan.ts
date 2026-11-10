@@ -60,11 +60,35 @@ export interface AssessmentPlanFinalAssessment {
 // targetQuestionCount MUST equal `proposedFinalAssessment.targetQuestionCount`.
 // When `proposedFinalAssessmentChunks` is absent the worker uses the
 // legacy single-call FA path; existing plans are unchanged.
+//
+// EP-TRAIN-4Y-AH (2026-11-10) — `eligibleSegmentIds` added as the
+// canonical per-chunk evidence set. The 4Y-AG recovery failed because
+// coverage planning, prompt construction and grounding validation
+// consulted DIFFERENT eligibility sets; Qwen cited ids the worker then
+// rejected. Every seam now reads `chunk.eligibleSegmentIds`:
+//   - coverage planning builds it from the LO slice ∩ permitted ids
+//   - prompt construction enumerates it as "Allowed segment ids: [...]"
+//   - transcript window is built from exactly these ids
+//   - grounding validation stays as belt-and-suspenders
+// `focusTopicSummary` additionally surfaces LO-title context for
+// operator-facing preflight (meaningful content, not transcript scraps).
 export interface AssessmentPlanFinalAssessmentChunk {
   readonly id: string; // "fa-1", "fa-2", …
   readonly targetQuestionCount: number;
   readonly coverageLearningObjectiveIds: readonly string[];
   readonly focusTopicLabel: string;
+  /** EP-TRAIN-4Y-AH §3 — the canonical evidence set for THIS chunk.
+   *  Intersection of (plan.eligibleSegmentIds, this chunk's LO
+   *  segmentIds, complement of worker-excluded ids). The worker uses
+   *  this list verbatim as the prompt's allowed-id enumeration and as
+   *  the transcript-window source. Optional for backwards compat with
+   *  AF-era plans; the worker falls back to the LO slice's segmentIds
+   *  when absent. */
+  readonly eligibleSegmentIds?: readonly number[];
+  /** EP-TRAIN-4Y-AH §4 — human-readable summary of what this chunk
+   *  covers. Used by the preflight response (operator visibility) and
+   *  NOT fed back to the model. Derived offline from LO titles. */
+  readonly focusTopicSummary?: string;
 }
 
 /** EP-TRAIN-4Y-N (2026-11-08) — worker-side prompt construction

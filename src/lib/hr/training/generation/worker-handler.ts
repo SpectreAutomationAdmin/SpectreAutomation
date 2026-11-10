@@ -514,13 +514,39 @@ export async function handleGenerateJob(
         const los = g.learningObjectiveIds
           .map((id) => loById.get(id))
           .filter((lo): lo is NonNullable<typeof lo> => lo !== undefined);
+        // EP-TRAIN-4Y-AH §3 — per-chunk eligible segment ids drive both
+        // the prompt's allowed-id enumeration AND the transcript window
+        // the model sees. Pre-AH plans (and the legacy single-FA path)
+        // have no chunk.eligibleSegmentIds; those fall back to the full
+        // filtered transcript + no explicit allowed-id line (AF
+        // behaviour).
+        let chunkAllowedIds: readonly number[] | undefined;
+        const chunkFromPlan = (plan.proposedFinalAssessmentChunks ?? []).find(
+          (c) => c.id === g.id,
+        );
+        if (chunkFromPlan && Array.isArray(chunkFromPlan.eligibleSegmentIds) && chunkFromPlan.eligibleSegmentIds.length > 0) {
+          chunkAllowedIds = chunkFromPlan.eligibleSegmentIds;
+        }
+        // The transcript window FOR THIS CHUNK is the intersection of
+        // (eligible segments the worker loaded) with (chunk's allowed
+        // ids). Falls back to full transcript when no chunk window.
+        let chunkTranscriptText = fullTranscriptText;
+        if (chunkAllowedIds && chunkAllowedIds.length > 0) {
+          const allowed = new Set<number>(chunkAllowedIds);
+          const subset = eligibleSegments.filter((s) => allowed.has(s.segmentIndex));
+          if (subset.length > 0) {
+            chunkTranscriptText = subset.map((s) => `[${s.segmentIndex}] ${s.text}`).join("\n");
+          }
+        }
+        windowSegmentIds = chunkAllowedIds ?? plan.eligibleSegmentIds;
         systemPromptForGroup = buildFinalSystemPromptCtxV1({
           target: g.target,
           los: los.map((lo) => ({ id: lo.id, title: lo.title })),
           videoEndSec,
           priorTopics: priorTopicHints(generatedDrafts),
+          allowedSegmentIds: chunkAllowedIds,
         });
-        transcriptForGroup = fullTranscriptText;
+        transcriptForGroup = chunkTranscriptText;
       } else {
         // Legacy (pre-4Y-N) path — kept behaviourally identical.
         systemPromptForGroup = buildSystemPrompt(g.kind, g.target);
@@ -764,7 +790,42 @@ export async function handleGenerateJob(
   }
 
   if (generatedDrafts.length === 0) {
-    await safeFail(db, claim, "INSUFFICIENT_EVIDENCE", "No grounded proposals produced.", false);
+    // EP-TRAIN-4Y-AH §5 — persist durable diagnostics BEFORE safeFail
+    // transitions the row out of RUNNING. The AF slice left
+    // shortfallReasonJson NULL on INSUFFICIENT_EVIDENCE, so operators
+    // could not reconstruct which chunk returned how many proposals or
+    // which filter dropped them. We now write the same v2 shortfall
+    // payload as COMPLETED runs. inferenceMs is forwarded via safeFail
+    // (worker-handler had been passing it to transport-fail paths; the
+    // INSUFFICIENT_EVIDENCE branch now receives it too).
+    const insufficientShortfallJson = JSON.stringify({
+      schemaVersion: "shortfall-v2",
+      targetCount: plan.totalTargetQuestionCount,
+      generatedCount: 0,
+      shortfall: plan.totalTargetQuestionCount,
+      sanitizerDropCount,
+      dedupDropCount,
+      dedupRulesVersion: DEDUP_RULES_VERSION,
+      dedupDecisions: dedupLog,
+      perGroupDiagnostics,
+      reason: "No grounded proposals produced.",
+      failureCode: "INSUFFICIENT_EVIDENCE",
+    });
+    try {
+      await db.trainingQuestionAiGenerationRun.updateMany({
+        where: { id: claim.runId, executionStatus: "RUNNING", leaseToken: claim.leaseToken },
+        data: {
+          shortfallReasonJson: insufficientShortfallJson,
+          promptTokenCount: totalPromptTokens,
+          outputTokenCount: totalOutputTokens,
+        },
+      });
+    } catch (persistErr) {
+      logger.warn("training.generation.worker.insufficient_evidence_shortfall_persist_failed", {
+        runId: claim.runId, error: (persistErr as Error)?.message ?? String(persistErr),
+      });
+    }
+    await safeFail(db, claim, "INSUFFICIENT_EVIDENCE", "No grounded proposals produced.", false, totalInferenceMs);
     return { status: "FAILED" };
   }
 
@@ -1022,36 +1083,55 @@ Constraints:
 }
 
 /** EP-TRAIN-4Y-N (2026-11-08) — context-aware final-assessment prompt.
- *  Exported for offline fixture tests. */
+ *  Exported for offline fixture tests.
+ *
+ *  EP-TRAIN-4Y-AH (2026-11-10) — now emits an EXPLICIT "Allowed segment
+ *  ids" enumeration (`allowedSegmentIds`). The 4Y-AG recovery proved
+ *  that without an explicit list, Qwen cites ids that look plausible
+ *  numerically but fall outside the permitted set (fallthrough to
+ *  worker grounding reject). The symmetric checkpoint prompt has always
+ *  enumerated its window; this brings FA to the same contract. */
 export function buildFinalSystemPromptCtxV1(args: {
   readonly target: number;
   readonly los: readonly { readonly id: string; readonly title: string }[];
   readonly videoEndSec: number;
   readonly priorTopics: readonly string[];
+  /** EP-TRAIN-4Y-AH §3 — the canonical allowed segment id set for this
+   *  chunk. Enumerated verbatim. Qwen is INSTRUCTED to cite ONLY these
+   *  ids; grounding stays belt-and-suspenders. Optional for backwards
+   *  compat with AF-era plans; when absent the prompt reverts to the
+   *  AF wording ("cite ids from the full course transcript provided"). */
+  readonly allowedSegmentIds?: readonly number[];
 }): string {
   const totalStr = formatTimestamp(args.videoEndSec);
   const loLines = args.los.length > 0
     ? args.los.map((lo) => `  • ${lo.title}`).join("\n")
     : "  • (none)";
   const priorBlock = args.priorTopics.length > 0
-    ? `\n6. The following question topics have ALREADY been generated for earlier checkpoints. You MAY reinforce an important concept ONLY if your question tests a meaningfully different application or decision; do NOT verbatim-restate or paraphrase any of these:\n${args.priorTopics.join("\n")}`
+    ? `\n7. The following question topics have ALREADY been generated for earlier checkpoints. You MAY reinforce an important concept ONLY if your question tests a meaningfully different application or decision; do NOT verbatim-restate or paraphrase any of these:\n${args.priorTopics.join("\n")}`
     : "";
+  const allowedBlock = Array.isArray(args.allowedSegmentIds) && args.allowedSegmentIds.length > 0
+    ? `\n\nAllowed segment ids (cite EXCLUSIVELY from this list — any other integer will be discarded):\n  [${args.allowedSegmentIds.join(", ")}]`
+    : "";
+  const groundingClause = Array.isArray(args.allowedSegmentIds) && args.allowedSegmentIds.length > 0
+    ? `2. Each question MUST cite at least one segment id from the "Allowed segment ids" list above. Do NOT cite any id outside that list, under any circumstance.`
+    : `2. Each question MUST cite at least one transcript segment id from the full course transcript provided.`;
   return `You are a training-content authoring assistant for Spectre, a training platform used by private golf and country clubs.
 
 Produce up to ${args.target} multiple-choice question${args.target === 1 ? "" : "s"} for the FINAL assessment of a ${totalStr} training course. Final-assessment questions sit at the END of the course after the employee has watched all content.
 
 Course-level coverage learning objectives:
-${loLines}
+${loLines}${allowedBlock}
 
 Constraints:
 1. Prioritize important POLICIES, PROCEDURES, and EMPLOYEE DECISIONS the learner must retain after training — not trivia.
-2. Each question MUST cite at least one transcript segment id from the full course transcript provided.
+${groundingClause}
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Diverse question types are encouraged across the final-assessment set.
 4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
 5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.
-6. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.
-7. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
-8. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.${priorBlock}`;
+6. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.${priorBlock}
+8. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
+9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.`;
 }
 
 async function safeFail(
