@@ -238,18 +238,39 @@ export async function handleGenerateJob(
   // referenced `claim.courseId` which does not exist and did not
   // typecheck. Resolve it once from the courseVersion.
   const resolvedCourseId = await resolveCourseId(db, claim.courseVersionId);
-  const metadataResult = await maybeGenerateCourseMetadata({
-    db,
-    clubId: claim.clubId,
-    courseId: resolvedCourseId,
-    courseVersionId: claim.courseVersionId,
-    sourceVideoSha256: plan.sourceVideoSha256,
-    resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
-    transcriptText: fullTranscriptText,
-    runId: claim.runId,
-    fetchImpl: deps.fetchImpl,
-    env: deps.env,
-  });
+  // EP-TRAIN-4Y-AI §3 — suppress the course-metadata path on FA
+  // recovery runs. The detection is structural: a recovery plan has
+  // zero proposedCheckpointGroups AND a non-empty
+  // proposedFinalAssessmentChunks array. Legacy plans (which always
+  // carry checkpoint groups OR a single-FA proposedFinalAssessment
+  // call) still exercise the metadata call. This gate prevents
+  // course.title + course.description + attribution records from
+  // being touched during recovery even in the no-op "ai → ai" case
+  // that AG's post-fire report flagged.
+  const isFinalAssessmentRecoveryShape =
+    plan.proposedCheckpointGroups.length === 0 &&
+    Array.isArray(plan.proposedFinalAssessmentChunks) &&
+    plan.proposedFinalAssessmentChunks.length > 0;
+  const metadataResult = isFinalAssessmentRecoveryShape
+    ? { inferenceMs: 0, modalCalled: false }
+    : await maybeGenerateCourseMetadata({
+        db,
+        clubId: claim.clubId,
+        courseId: resolvedCourseId,
+        courseVersionId: claim.courseVersionId,
+        sourceVideoSha256: plan.sourceVideoSha256,
+        resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
+        transcriptText: fullTranscriptText,
+        runId: claim.runId,
+        fetchImpl: deps.fetchImpl,
+        env: deps.env,
+      });
+  if (isFinalAssessmentRecoveryShape) {
+    logger.info("training.generation.worker.metadata_suppressed_for_fa_recovery", {
+      runId: claim.runId, clubId: claim.clubId, courseVersionId: claim.courseVersionId,
+      proposedChunkCount: plan.proposedFinalAssessmentChunks?.length ?? 0,
+    });
+  }
 
   // Fold metadata Modal time into the attempt's cumulative cost.
   let coldBootConsumed = metadataResult.modalCalled;

@@ -40,6 +40,7 @@ import {
 } from "./assessment-plan";
 import {
   buildFinalAssessmentCoverage,
+  buildCoherentLoSummary,
   FA_CHUNK_MAX_TARGET,
 } from "./final-assessment-coverage";
 import {
@@ -259,12 +260,15 @@ export async function requestFinalAssessmentRecovery(
   //    complement of worker-excluded). Pre-AH callers passed neither
   //    and the coverage set was wider than what the worker would
   //    accept; that mismatch is what the 4Y-AG recovery proved.
-  const coverage = buildFinalAssessmentCoverage({
+  const coverageRaw = buildFinalAssessmentCoverage({
     learningObjectives: originalPlan.learningObjectives,
     target: shortfall,
     maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
     planEligibleSegmentIds: originalPlan.eligibleSegmentIds,
     planExcludedSegmentIndices: originalPlan.sourceEvidenceRequirements.excludedSegmentIndices,
+  });
+  const coverage = await rewriteFocusTopicSummaries(coverageRaw, {
+    db, clubId, resolvedTranscriptBuildId: originalPlan.resolvedTranscriptBuildId,
   });
   if (coverage.chunks.length === 0) {
     throw new FinalAssessmentRecoveryRejectedError(
@@ -489,12 +493,15 @@ export async function preflightFinalAssessmentRecovery(
 
   const requestedTotal = input.targetTotal ?? plan.proposedFinalAssessment.targetQuestionCount;
   const shortfall = Math.max(0, requestedTotal - existingFinalAssessmentDraftCount);
-  const coverage = buildFinalAssessmentCoverage({
+  const coverageRaw = buildFinalAssessmentCoverage({
     learningObjectives: plan.learningObjectives,
     target: shortfall,
     maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
     planEligibleSegmentIds: plan.eligibleSegmentIds,
     planExcludedSegmentIndices: plan.sourceEvidenceRequirements.excludedSegmentIndices,
+  });
+  const coverage = await rewriteFocusTopicSummaries(coverageRaw, {
+    db, clubId, resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
   });
 
   return {
@@ -521,3 +528,53 @@ export type RecoveryChunkDescription = Pick<
   AssessmentPlanFinalAssessmentChunk,
   "id" | "targetQuestionCount" | "focusTopicLabel"
 >;
+
+/** EP-TRAIN-4Y-AI §2 — rewrite each chunk's `focusTopicSummary` from
+ *  a transcript-fragment join to a sentence-complete summary built from
+ *  the chunk's actual eligible segments. No GPU, no invention. If the
+ *  transcript cannot be loaded the AH join is preserved. */
+async function rewriteFocusTopicSummaries(
+  raw: Awaited<ReturnType<typeof buildFinalAssessmentCoverage>>,
+  args: {
+    readonly db: PrismaClient;
+    readonly clubId: string;
+    readonly resolvedTranscriptBuildId: string;
+  },
+): Promise<typeof raw> {
+  if (raw.chunks.length === 0) return raw;
+  // Union of all chunks' eligibleSegmentIds.
+  const idUnion = new Set<number>();
+  for (const c of raw.chunks) for (const id of c.eligibleSegmentIds ?? []) idUnion.add(id);
+  if (idUnion.size === 0) return raw;
+  let segments: readonly { segmentIndex: number; text: string }[] = [];
+  try {
+    // Resolve the transcript build row for this (club, build).
+    const build = await args.db.trainingTranscriptBuild.findFirst({
+      where: { clubId: args.clubId, resolvedTranscriptBuildId: args.resolvedTranscriptBuildId },
+      select: { id: true },
+    });
+    if (!build) return raw;
+    segments = await args.db.trainingTranscriptSegment.findMany({
+      where: { clubId: args.clubId, transcriptBuildId: build.id, segmentIndex: { in: [...idUnion] } },
+      select: { segmentIndex: true, text: true },
+    });
+  } catch {
+    return raw;
+  }
+  if (segments.length === 0) return raw;
+  const textById = new Map<number, string>(segments.map((s) => [s.segmentIndex, s.text]));
+  const rewrittenChunks = raw.chunks.map((c) => {
+    const eligible = c.eligibleSegmentIds ?? [];
+    const orderedSegments = eligible
+      .filter((id) => textById.has(id))
+      .map((id) => ({ segmentIndex: id, text: textById.get(id) ?? "" }));
+    const cleaner = buildCoherentLoSummary({
+      chunkId: c.id,
+      eligibleSegmentIds: eligible,
+      orderedSegments,
+      fallbackJoin: c.focusTopicSummary ?? c.focusTopicLabel,
+    });
+    return { ...c, focusTopicSummary: cleaner };
+  });
+  return { ...raw, chunks: rewrittenChunks };
+}

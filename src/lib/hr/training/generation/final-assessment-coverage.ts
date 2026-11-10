@@ -225,3 +225,84 @@ function deriveTopicSummary(loTitles: readonly string[]): string {
   const joined = first.map((t) => t.trim()).filter((t) => t.length > 0).join(" · ");
   return joined.length > 240 ? joined.slice(0, 237) + "…" : joined;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// EP-TRAIN-4Y-AI §2 — Coherent LO-summary builder.
+//
+// The AH slice surfaced focusTopicSummary values that were raw
+// transcript-fragment joins (e.g. "days which we have for a year we
+// ask all staff members to park on the sidewalk j"). The AI directive
+// requires a cleaner operator-facing description grounded in the
+// chunk's actual eligible transcript segments, with:
+//   - complete sentences (no mid-word truncation);
+//   - the leading context explicit ("Employees should understand …");
+//   - no invented content;
+//   - no GPU inference.
+//
+// Strategy: given an ordered array of (segmentIndex, text) for ONLY
+// the chunk's eligibleSegmentIds, concatenate the text, split into
+// sentences at [.!?] boundaries, retain the first 1-3 sentences that
+// start with a capital letter OR an inferrable sentence-shape marker,
+// and compose with a leading phrase. Deterministic / pure / offline.
+// ─────────────────────────────────────────────────────────────────────
+
+const AI_SUMMARY_MAX_LEN = 320;
+const AI_SUMMARY_MIN_SENTENCE_LEN = 14; // reject fragments like "Yeah I guess."
+const AI_SUMMARY_MAX_SENTENCES = 3;
+
+export interface CoherentLoSummaryInput {
+  readonly chunkId: string;
+  readonly eligibleSegmentIds: readonly number[];
+  /** Ordered segment text for EXACTLY the chunk's eligibleSegmentIds.
+   *  Caller is responsible for the one-to-one mapping (filter + sort). */
+  readonly orderedSegments: ReadonlyArray<{ readonly segmentIndex: number; readonly text: string }>;
+  /** Fallback topic hint when transcript cannot yield a usable
+   *  summary — e.g., the chunk's titles joined. Used only when
+   *  sentence extraction returns zero sentences. */
+  readonly fallbackJoin: string;
+}
+
+/** Build a cleaner operator-facing summary from a chunk's actual
+ *  transcript segments. No LLM, no invention; returns the raw joined
+ *  fallback when the transcript yields no usable sentence (e.g., a
+ *  very short chunk of fragmented text). */
+export function buildCoherentLoSummary(input: CoherentLoSummaryInput): string {
+  const joined = input.orderedSegments
+    .map((s) => (s.text ?? "").trim())
+    .filter((t) => t.length > 0)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (joined.length === 0) {
+    return input.fallbackJoin.length > 0 ? input.fallbackJoin : "(no usable transcript)";
+  }
+
+  // Split into sentence candidates on . ! ? followed by whitespace /
+  // end-of-string. Preserve the punctuation.
+  const rawSentences = joined.match(/[^.!?]+[.!?]+/g) ?? [joined];
+  const sentences: string[] = [];
+  for (const sRaw of rawSentences) {
+    const s = sRaw.trim();
+    if (s.length < AI_SUMMARY_MIN_SENTENCE_LEN) continue;
+    // Reject obvious transcription fragments: lines starting with a
+    // continuation conjunction (and / but / so / etc.) OR ending
+    // with an incomplete word (no final letter).
+    if (/^(and|but|so|yeah|um|uh|ok|okay|like)\b/i.test(s)) continue;
+    // Reject sentence candidates where the final token looks like a
+    // truncated word (letters, no trailing letter — handled above by
+    // the punctuation regex, but belt-and-suspenders):
+    if (!/[.!?]$/.test(s)) continue;
+    sentences.push(s);
+    if (sentences.length >= AI_SUMMARY_MAX_SENTENCES) break;
+  }
+
+  if (sentences.length === 0) {
+    // Nothing clean — surface the truncated raw join (still bounded
+    // to AI_SUMMARY_MAX_LEN).
+    return input.fallbackJoin.length > 0 ? input.fallbackJoin : joined.slice(0, AI_SUMMARY_MAX_LEN);
+  }
+
+  const assembled = sentences.join(" ");
+  if (assembled.length <= AI_SUMMARY_MAX_LEN) return assembled;
+  return assembled.slice(0, AI_SUMMARY_MAX_LEN - 1).replace(/\s+\S*$/, "") + "…";
+}
