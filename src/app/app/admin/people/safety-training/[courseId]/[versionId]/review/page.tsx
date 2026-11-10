@@ -115,6 +115,30 @@ export default async function ManagerReviewPage({
     },
   });
 
+  // EP-TRAIN-4Y-AE2 §3 (2026-11-10) — parse the plan's checkpoint
+  // groups into a `groupKey → atSec` map for deterministic ordering.
+  // The group id (cg-1, cg-2, …) is the stable logical checkpoint
+  // identity; its `atSec` is the scheduled video timestamp. Every
+  // draft (including supersederes) inherits its ancestor's groupKey
+  // via the shortfallReasonJson resolver + supersedes-chain walk
+  // below. The pair (atSec asc, originalContentHash asc) is the
+  // canonical sort — never generatedAt, never updatedAt, never id.
+  const groupAtSec = new Map<string, number>();
+  try {
+    if (latestRun?.assessmentPlanJson) {
+      const planObj = JSON.parse(latestRun.assessmentPlanJson) as {
+        proposedCheckpointGroups?: Array<{ id?: unknown; atSec?: unknown }>;
+      };
+      for (const g of planObj.proposedCheckpointGroups ?? []) {
+        if (typeof g?.id === "string" && typeof g?.atSec === "number" && Number.isFinite(g.atSec)) {
+          groupAtSec.set(g.id, g.atSec);
+        }
+      }
+    }
+  } catch {
+    /* malformed plan JSON — fall back to group-key lexical order */
+  }
+
   // Pull AI drafts for this version. Tenant scope enforced via
   // (clubId, courseVersionId); the state filter avoids archived /
   // failed noise.
@@ -129,6 +153,11 @@ export default async function ManagerReviewPage({
     isPromoted: boolean;
     destination: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN";
     planGroupKey: string | null;
+    // EP-TRAIN-4Y-AE2 §3 — carry the atSec + the original ancestor's
+    // contentHash so the client preserves the server's sort and the
+    // client's "Question N of M" numbering matches chronological order.
+    atSec: number | null;
+    originalContentHash: string;
   };
   let drafts: ClientDraft[] = [];
   if (canRead) {
@@ -246,32 +275,50 @@ export default async function ManagerReviewPage({
       string,
       { kind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN"; groupKey: string | null }
     >();
+    // EP-TRAIN-4Y-AE2 §3 — the ORIGINAL ancestor's contentHash is the
+    // stable logical identity of a checkpoint across every edit +
+    // revalidation. Falls back to the row's own contentHash when the
+    // supersedes chain is empty (= this IS the original).
+    const ancestorContentHashById = new Map(
+      ancestors.map((a) => [a.id, a.contentHash] as const),
+    );
+    const originalHashById = new Map<string, string>();
     for (const row of rows) {
       const own = destByIdRaw.get(row.id);
       if (own && own.kind !== "UNKNOWN") {
         destById.set(row.id, { kind: own.kind, groupKey: own.groupKey });
-        continue;
-      }
-      // Walk up to 5 levels of supersedesDraftId to inherit — matches
-      // the BFS fan-out depth above.
-      let cursor: string | null = row.supersedesDraftId ?? null;
-      let resolvedKind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" = "UNKNOWN";
-      let resolvedGroup: string | null = null;
-      for (let depth = 0; depth < 5 && cursor; depth++) {
-        const anc = destByIdRaw.get(cursor);
-        if (anc && anc.kind !== "UNKNOWN") {
-          resolvedKind = anc.kind;
-          resolvedGroup = anc.groupKey;
-          break;
+      } else {
+        // Walk up to 5 levels of supersedesDraftId to inherit — matches
+        // the BFS fan-out depth above.
+        let cursor: string | null = row.supersedesDraftId ?? null;
+        let resolvedKind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" = "UNKNOWN";
+        let resolvedGroup: string | null = null;
+        for (let depth = 0; depth < 5 && cursor; depth++) {
+          const anc = destByIdRaw.get(cursor);
+          if (anc && anc.kind !== "UNKNOWN") {
+            resolvedKind = anc.kind;
+            resolvedGroup = anc.groupKey;
+            break;
+          }
+          const promo = ancestorPromoById.get(cursor);
+          if (promo === "CHECKPOINT" || promo === "FINAL_ASSESSMENT") {
+            resolvedKind = promo;
+            break;
+          }
+          cursor = ancestorParentById.get(cursor) ?? null;
         }
-        const promo = ancestorPromoById.get(cursor);
-        if (promo === "CHECKPOINT" || promo === "FINAL_ASSESSMENT") {
-          resolvedKind = promo;
-          break;
-        }
-        cursor = ancestorParentById.get(cursor) ?? null;
+        destById.set(row.id, { kind: resolvedKind, groupKey: resolvedGroup });
       }
-      destById.set(row.id, { kind: resolvedKind, groupKey: resolvedGroup });
+      // Walk to the topmost ancestor to capture its contentHash as the
+      // logical identity. Same depth cap as the kind walk above.
+      let walker: string | null = row.supersedesDraftId ?? null;
+      let originalHash = row.contentHash;
+      for (let d = 0; d < 5 && walker; d++) {
+        const parentHash = ancestorContentHashById.get(walker);
+        if (parentHash) originalHash = parentHash;
+        walker = ancestorParentById.get(walker) ?? null;
+      }
+      originalHashById.set(row.id, originalHash);
     }
 
     drafts = rows.map((d) => {
@@ -322,7 +369,31 @@ export default async function ManagerReviewPage({
         isPromoted: d.state === "APPROVED_DRAFT" && !!d.promotion?.questionId,
         destination,
         planGroupKey: resolved?.groupKey ?? null,
+        // EP-TRAIN-4Y-AE2 §3 — chronological ordering carriers.
+        atSec: resolved?.groupKey ? groupAtSec.get(resolved.groupKey) ?? null : null,
+        originalContentHash: originalHashById.get(d.id) ?? d.contentHash,
       };
+    });
+
+    // EP-TRAIN-4Y-AE2 §3 — sort the drafts so Q1 is the earliest
+    // checkpoint and Q5 is the latest. Ties on atSec (or atSec null)
+    // break lexicographically on the original ancestor's contentHash,
+    // which is stable across edits + supersessions + revalidations.
+    // Drafts with no resolvable atSec sink to the end in a stable
+    // order — never floating to the top where they'd shift the Q1..QN
+    // numbering.
+    drafts.sort((a, b) => {
+      const aSec = a.atSec;
+      const bSec = b.atSec;
+      if (aSec !== null && bSec !== null) {
+        if (aSec !== bSec) return aSec - bSec;
+      } else if (aSec !== null) {
+        return -1;
+      } else if (bSec !== null) {
+        return 1;
+      }
+      // Both null OR tied → stable identity break.
+      return a.originalContentHash.localeCompare(b.originalContentHash);
     });
   }
 

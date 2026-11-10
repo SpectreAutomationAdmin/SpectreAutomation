@@ -382,6 +382,60 @@ export function normaliseStructuredQuestion(
 
   stem = stem.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 
+  // EP-TRAIN-4Y-AE2 §5 — PLACEHOLDER-LETTER RECONSTRUCTION. Covers
+  // the founder-reported `cmwa2axv1` shape: options are literal
+  // single letters ["A","B","C","D"] and the real option bodies live
+  // in the stem as prose paragraphs after the question mark. Safe to
+  // perform ONLY when:
+  //   - every option is a single character A/B/C/D (no real body)
+  //   - the stem contains EXACTLY the matching count of prose chunks
+  //     after the "?" (so there's no ambiguity about which chunk
+  //     maps to which letter)
+  //   - the existing correct-answer index maps cleanly to a chunk
+  //   - no chunk is longer than 400 chars (defensive: real answers
+  //     are short; a very long chunk is more likely the next part of
+  //     the question stem)
+  //
+  // Preserves correct index. Does NOT mutate isCorrect assignment.
+  const allOptionsArePlaceholders =
+    options.length >= 2 &&
+    options.every((o) => /^[A-Da-d]$/.test(o.text.trim()));
+  if (allOptionsArePlaceholders) {
+    const qMark = stem.indexOf("?");
+    if (qMark >= 10 && qMark < stem.length - 10) {
+      const stemHead = stem.slice(0, qMark + 1).trim();
+      const tail = stem.slice(qMark + 1).trim();
+      // Split on \n{1,} or multiple spaces separating sentences.
+      // Normalise newlines first, then split on "\n+" OR on a period
+      // followed by a space when newlines aren't present.
+      const chunks: string[] = [];
+      if (/\n/.test(tail)) {
+        for (const line of tail.split(/\n+/).map((x) => x.trim())) {
+          if (line.length > 0) chunks.push(line);
+        }
+      } else {
+        // Split on "." followed by a space + a capital letter, keeping
+        // the period on the preceding chunk.
+        const parts = tail.split(/(?<=\.)\s+(?=[A-Z])/);
+        for (const part of parts.map((x) => x.trim())) {
+          if (part.length > 0) chunks.push(part);
+        }
+      }
+      const cleanChunks = chunks.filter((c) => c.length > 0 && c.length <= 400);
+      if (cleanChunks.length === options.length) {
+        stem = stemHead;
+        for (let i = 0; i < options.length; i++) {
+          options[i] = { text: cleanChunks[i], isCorrect: !!options[i].isCorrect };
+        }
+        corrected.push({
+          code: "OPTION_BODY_APPEARS_IN_STEM",
+          message:
+            "Reconstructed placeholder options (A/B/C/D) by extracting the prose chunks after the question mark as option bodies; preserved the existing correct-answer index.",
+        });
+      }
+    }
+  }
+
   const normalised: StructuredQuestionDraft = {
     questionText: stem,
     options,

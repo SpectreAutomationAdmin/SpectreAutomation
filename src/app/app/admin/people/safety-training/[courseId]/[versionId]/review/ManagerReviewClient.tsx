@@ -47,6 +47,11 @@ interface Draft {
   isPromoted: boolean;
   destination: DestinationKind;
   planGroupKey: string | null;
+  // EP-TRAIN-4Y-AE2 §3 — the server has already sorted drafts by
+  // (atSec asc, originalContentHash asc). The client preserves that
+  // order; atSec is carried for display + marker alignment.
+  atSec?: number | null;
+  originalContentHash?: string;
   contentHash?: string;
   recordVersion?: number;
 }
