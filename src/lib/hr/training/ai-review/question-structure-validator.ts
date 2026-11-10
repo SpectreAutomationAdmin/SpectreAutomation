@@ -31,6 +31,7 @@
 
 export type QuestionStructureFindingCode =
   | "EMBEDDED_OPTION_LINES_IN_STEM"
+  | "INLINE_OPTION_SEQUENCE_IN_STEM"
   | "OPTION_BODY_APPEARS_IN_STEM"
   | "CORRECT_ANSWER_KEY_IN_STEM"
   | "TRANSCRIPT_REFERENCE_IN_STEM"
@@ -39,13 +40,22 @@ export type QuestionStructureFindingCode =
   | "MISSING_CORRECT_OPTION"
   | "MULTIPLE_CORRECT_OPTIONS"
   | "OPTION_TOO_SHORT"
-  | "OPTION_LABEL_PREFIX_IN_TEXT";
+  | "OPTION_LABEL_PREFIX_IN_TEXT"
+  // EP-TRAIN-4Y-AE1 §4 (2026-11-10) — advisory finding for
+  // parenthetical notes that look editorial (e.g. "(clarified by
+  // manager for publication)"). NOT auto-stripped — parentheticals
+  // can be legitimate; surface for manager review.
+  | "SUSPECTED_EDITORIAL_ANNOTATION";
 
 export interface QuestionStructureFinding {
   readonly code: QuestionStructureFindingCode;
   readonly message: string;
   /** Short snippet of the matched content (≤160 chars) for audit. */
   readonly matched?: string;
+  /** EP-TRAIN-4Y-AE1 §4 — advisory findings do NOT block approval
+   *  (the manager verifies + removes via inline edit). Defaults to
+   *  false (= blocking). */
+  readonly advisory?: boolean;
 }
 
 export interface StructuredQuestionDraft {
@@ -66,6 +76,21 @@ export interface QuestionStructureResult {
 const EMBEDDED_OPTION_LINE_RX =
   /(?:\n|^)\s*(?:[*_]{0,2})([A-Da-d])(?:[*_]{0,2})\s*[)\].:]\s+\S/;
 
+// EP-TRAIN-4Y-AE1 §3 (2026-11-10) — inline, space-separated option
+// sequence on the SAME line as the question mark: "…golf club? A) foo
+// B) bar C) baz D) qux". The AE EMBEDDED_OPTION_LINE_RX required a
+// newline before the letter, so this single-line pattern slipped
+// past. Requires AT LEAST TWO consecutive letter-prefixed chunks to
+// avoid false-positive matches on sentences like "(see A) …".
+const INLINE_OPTION_SEQUENCE_RX =
+  /\s(?:[*_]{0,2})A(?:[*_]{0,2})\s*[)\].:]\s+.+?\s(?:[*_]{0,2})B(?:[*_]{0,2})\s*[)\].:]\s+/;
+
+// EP-TRAIN-4Y-AE1 §4 — editorial-note parentheticals. Keywords that
+// strongly suggest the parenthetical is a manager/editor annotation
+// rather than legitimate question content. Matched case-insensitively.
+const EDITORIAL_ANNOTATION_RX =
+  /\(\s*(?:clarified|clarification|revised|edited|per manager|per founder|for publication|note:|note by)[^)]*\)/i;
+
 // "Correct Answer: X" inline, with or without markdown wrappers.
 const CORRECT_ANSWER_KEY_RX = /\*{0,2}\s*correct\s+answer\s*\*{0,2}\s*:/i;
 
@@ -83,7 +108,7 @@ export function checkQuestionStructure(
   const stem = String(input.questionText ?? "");
   const options = input.options ?? [];
 
-  // Embedded option lines in the stem.
+  // Embedded option lines in the stem (newline-separated).
   const embeddedMatch = EMBEDDED_OPTION_LINE_RX.exec(stem);
   if (embeddedMatch) {
     findings.push({
@@ -92,6 +117,42 @@ export function checkQuestionStructure(
         "Question stem contains inline option lines (e.g. '\\nA) …'). Options must live only in the options array.",
       matched: embeddedMatch[0].slice(0, 160),
     });
+  }
+
+  // EP-TRAIN-4Y-AE1 §3 — inline, single-line option sequence AFTER
+  // the stem's question mark.
+  const inlineMatch = INLINE_OPTION_SEQUENCE_RX.exec(stem);
+  if (inlineMatch) {
+    findings.push({
+      code: "INLINE_OPTION_SEQUENCE_IN_STEM",
+      message:
+        "Question stem ends with an inline option sequence (e.g. '…? A) foo B) bar …'). Options must live only in the options array.",
+      matched: inlineMatch[0].slice(0, 160),
+    });
+  }
+
+  // EP-TRAIN-4Y-AE1 §4 — editorial-note parentheticals (ADVISORY).
+  // Never auto-stripped, never blocks approval, but surfaced to the
+  // manager so an inline Edit can remove them.
+  if (EDITORIAL_ANNOTATION_RX.test(stem)) {
+    findings.push({
+      code: "SUSPECTED_EDITORIAL_ANNOTATION",
+      message: "Question stem contains a parenthetical that looks like an editorial note (e.g. '(clarified by manager for publication)'). Verify and remove if unintended.",
+      matched: (EDITORIAL_ANNOTATION_RX.exec(stem)?.[0] ?? "").slice(0, 160),
+      advisory: true,
+    });
+  }
+  for (const o of options) {
+    const t = String(o?.text ?? "");
+    if (EDITORIAL_ANNOTATION_RX.test(t)) {
+      findings.push({
+        code: "SUSPECTED_EDITORIAL_ANNOTATION",
+        message: "An option body contains a parenthetical that looks like an editorial note. Verify and remove if unintended.",
+        matched: (EDITORIAL_ANNOTATION_RX.exec(t)?.[0] ?? "").slice(0, 160),
+        advisory: true,
+      });
+      break;
+    }
   }
 
   // Option body appears verbatim in the stem (prose duplication).
@@ -175,7 +236,10 @@ export function checkQuestionStructure(
     });
   }
 
-  return { ok: findings.length === 0, findings };
+  // EP-TRAIN-4Y-AE1 §4 — ok reflects BLOCKING findings only.
+  // Advisory findings surface alongside but don't refuse the write.
+  const blocking = findings.filter((f) => f.advisory !== true);
+  return { ok: blocking.length === 0, findings };
 }
 
 // -------------------------------------------------------------------
@@ -240,25 +304,50 @@ export function normaliseStructuredQuestion(
     });
   }
 
-  // Strip "\n\nA) ... B) ... C) ... D) ..." inlined option block when
-  // every embedded body matches an option.text. Conservative: refuses
-  // to strip when any embedded body doesn't match.
-  const embeddedSplitRx = /(?:\n|^)\s*(?:[*_]{0,2})([A-Da-d])(?:[*_]{0,2})\s*[)\].:]\s+/g;
-  const firstEmbeddedMatch = embeddedSplitRx.exec(stem);
+  // EP-TRAIN-4Y-AE1 §3 — strip "A) ... B) ... C) ... D) ..." option
+  // blocks from the stem, whether newline-separated OR inline on the
+  // same line as the question mark. Two passes:
+  //   1. SPLIT the stem at the first letter-labeled chunk using a
+  //      permissive regex (matches both "\nA) " and " A) ").
+  //   2. If every chunk matches an option.text (prefix or suffix
+  //      containment, length ≥ 3), cut the stem at the chunk start.
+  //
+  // Threshold lowered from 10 → 3 to catch short answer bodies like
+  // "Mr. Judge" (9) / "Judge Sir" (9) that the AE-era normaliser
+  // silently refused. The founder-reported question
+  // cmwa15k3s shipped with those exact short options.
+  const UNIFIED_OPTION_SPLIT_RX =
+    /(?:\n|^|\s)(?:[*_]{0,2})([A-Da-d])(?:[*_]{0,2})\s*[)\].:]\s+/g;
+  const firstEmbeddedMatch = UNIFIED_OPTION_SPLIT_RX.exec(stem);
   if (firstEmbeddedMatch) {
     const cut = firstEmbeddedMatch.index;
     const stemCore = stem.slice(0, cut).trim();
     const inlined = stem.slice(cut);
-    // Split inlined by the same regex into labelled chunks.
     const chunks = inlined
-      .split(/(?:\n|^)\s*(?:[*_]{0,2})([A-Da-d])(?:[*_]{0,2})\s*[)\].:]\s+/)
+      .split(/(?:\n|^|\s)(?:[*_]{0,2})([A-Da-d])(?:[*_]{0,2})\s*[)\].:]\s+/)
       .filter((s) => s !== undefined && s !== null)
       .map((s) => String(s).trim())
       .filter((s) => s.length > 0 && !/^[A-Da-d]$/.test(s));
     const optionTextsLower = options.map((o) => o.text.toLowerCase());
-    const everyChunkMatchesAnOption = chunks.length > 0 && chunks.every((c) =>
-      optionTextsLower.some((ot) => ot.length > 10 && (c.toLowerCase().startsWith(ot) || ot.startsWith(c.toLowerCase().slice(0, Math.min(ot.length, c.length))))),
-    );
+    const chunkMatchesAnOption = (c: string): boolean => {
+      const cl = c.toLowerCase();
+      return optionTextsLower.some((ot) => {
+        if (ot.length < 3) return false;
+        // Chunk starts with the option body (allows a parenthetical
+        // or editorial note appended to the last chunk).
+        if (cl.startsWith(ot)) return true;
+        // Option body starts with the chunk (chunk was truncated by
+        // paragraph breaks in the stem).
+        if (ot.startsWith(cl.slice(0, Math.min(ot.length, cl.length)))) return true;
+        // Chunk CONTAINS the option body (prefix matched but something
+        // else wraps it — defensive, still a valid match for the
+        // "stem contains the option block" case).
+        if (cl.includes(ot)) return true;
+        return false;
+      });
+    };
+    const everyChunkMatchesAnOption =
+      chunks.length > 0 && chunks.every(chunkMatchesAnOption);
     if (everyChunkMatchesAnOption && stemCore.length > 10) {
       stem = stemCore;
       corrected.push({
