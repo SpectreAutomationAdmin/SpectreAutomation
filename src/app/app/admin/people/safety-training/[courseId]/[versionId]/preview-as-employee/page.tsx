@@ -133,7 +133,16 @@ export default async function PreviewAsEmployeePage({
         <code>TrainingCompletion</code> row is written. Submit answers freely to test the flow.
       </div>
 
-      <h1 className="page-title">{version.title}</h1>
+      {/* EP-TRAIN-4Y-AB §8 (2026-11-10) — the header title must match
+          what the employee actually sees: the AI-written
+          `course.title`. Using `version.title` here surfaced a stale
+          transcript-derived provisional title ("Getting Right Into It,
+          The Most Frequently Asked Question…") on the 4Y-Z pilot
+          course, which looked like a routing bug but was in fact a
+          display-source bug — the URL + version id match the pilot.
+          The employee portal's own course page (not this preview)
+          sources its title from the course row too; parity preserved. */}
+      <h1 className="page-title">{version.course.title}</h1>
 
       <CoursePlayer
         versionId={version.id}

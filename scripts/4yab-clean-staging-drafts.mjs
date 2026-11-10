@@ -65,8 +65,11 @@ const CLEANUPS = [
   // Standalone "Segment IDs: [N, N]" line — remove entirely.
   { match: /\n*\*?\s*Segment\s*IDs?\s*:\s*\[[\d,\s]+\]\s*\*?\s*/gi, replace: "" },
   // Embedded "**Correct Answer:** C" lines — remove entirely (the
-  // correct option already lives in the options array).
-  { match: /\n*\*{0,2}\s*Correct\s+Answer\s*\*{0,2}\s*:\s*[A-D]\s*\n*/gi, replace: "\n" },
+  // correct option already lives in the options array). Note: the
+  // markdown convention puts the colon INSIDE the bold markers
+  // (`**Correct Answer:**` not `**Correct Answer**:`), so the regex
+  // matches a `:` before the trailing `\*{0,2}`.
+  { match: /\n*\*{0,2}\s*Correct\s+Answer\s*:\s*\*{0,2}\s*[A-D]\s*\n*/gi, replace: "\n" },
   // Embedded markdown option headers like "**A)**" — strip the ** and
   // the "A)" etc. Kept the option body itself.
   { match: /\*{1,2}([A-D])\)\*{1,2}\s*/g, replace: "" },
