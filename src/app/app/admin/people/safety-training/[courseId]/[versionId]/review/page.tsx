@@ -337,7 +337,13 @@ export default async function ManagerReviewPage({
       : version.description ?? "";
 
   return (
-    <div className="max-w-[1400px]">
+    // EP-TRAIN-4Y-AE §2 (2026-11-10) — the review surface is the
+    // founder's primary content-authoring canvas. The 1400px cap was
+    // squeezing the video (which also squeezed the question pane).
+    // Let the layout grow to the sidebar-less width of the viewport;
+    // the two-column grid below gives the video a minmax floor so it
+    // never shrinks below a readable size on small admin monitors.
+    <div className="w-full">
       <ManagerReviewClient
         versionId={version.id}
         courseTitle={headerTitle}

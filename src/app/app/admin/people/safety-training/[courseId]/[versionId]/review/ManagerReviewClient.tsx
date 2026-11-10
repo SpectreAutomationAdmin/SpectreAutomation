@@ -639,9 +639,13 @@ export default function ManagerReviewClient(props: Props) {
         </div>
       </header>
 
-      {/* ── 60/40 two-column body (lg+); stacked on small screens ── */}
+      {/* ── Two-column body — AE §2 (2026-11-10). The 60/40 split from
+          AB squeezed the video (and so appeared to "crop" the slide).
+          Give the video a generous floor and ratio so it is the
+          primary workspace; the question pane shrinks to its content,
+          with its own floor to stay operable. Stacks at < 1280 px. */}
       <div
-        className="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 items-start"
+        className="grid grid-cols-1 xl:grid-cols-[minmax(760px,2.4fr)_minmax(400px,1fr)] gap-6 items-start"
         data-testid="manager-review-body"
       >
         {/* Left (3fr): shared video + PlayerControlBar */}
@@ -652,13 +656,17 @@ export default function ManagerReviewClient(props: Props) {
           >
             {props.videoUrl ? (
               <>
+                {/* EP-TRAIN-4Y-AE §2 — explicit object-contain so a
+                    non-16:9 source letterboxes inside the 16:9 wrapper
+                    rather than appearing to crop. Matches the employee
+                    portal's implicit default. */}
                 <div className="relative w-full aspect-video bg-stone-100">
                   <video
                     ref={videoRef}
                     src={props.videoUrl}
                     preload="metadata"
                     playsInline
-                    className="absolute inset-0 w-full h-full bg-stone-900"
+                    className="absolute inset-0 w-full h-full object-contain bg-stone-900"
                     data-testid="portal-course-video"
                     onLoadedMetadata={(e) => {
                       const d = (e.target as HTMLVideoElement).duration;

@@ -1021,9 +1021,15 @@ export default function CoursePlayer(props: Props) {
           data-testid="portal-course-video-section"
         >
           <div className="relative w-full aspect-video bg-stone-100">
+            {/* EP-TRAIN-4Y-AE §2 — explicit object-contain so a
+                non-16:9 training video letterboxes rather than
+                appearing to crop. Matches the HTML5 <video> default
+                (no behavior change) + guarantees parity with the
+                Manager Review surface, which now shares this
+                primitive. */}
             <video
               ref={videoRef}
-              className="absolute inset-0 w-full h-full bg-stone-900"
+              className="absolute inset-0 w-full h-full object-contain bg-stone-900"
               playsInline
               preload="auto"
               src={videoUrl}

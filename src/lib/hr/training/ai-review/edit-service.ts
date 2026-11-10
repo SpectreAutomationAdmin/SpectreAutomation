@@ -60,6 +60,11 @@ import {
   checkEmployeeFacingText,
   codesForAudit,
 } from "./question-text-sanitizer";
+// EP-TRAIN-4Y-AE §4 (2026-11-10) — structure validator composes with
+// the AA text sanitiser. Where the sanitiser caught internal
+// terminology, this one catches structural defects (option bodies in
+// the stem, missing correct designation, duplicate options, …).
+import { checkQuestionStructure } from "./question-structure-validator";
 
 export type EditRejectionCode =
   | "EDIT_FORBIDDEN"
@@ -71,6 +76,9 @@ export type EditRejectionCode =
   | "EDIT_OPTION_COUNT_INVALID"
   | "EDIT_CORRECT_INDEX_OUT_OF_RANGE"
   | "EDIT_TEXT_LEAKAGE"
+  // EP-TRAIN-4Y-AE §4 — structure-level defect (option bodies in
+  // stem, embedded answer key, duplicate options, missing correct).
+  | "EDIT_STRUCTURE_INVALID"
   | "EDIT_LIFECYCLE_BLOCKED"
   | "EDIT_EMPTY_QUESTION_TEXT"
   | "EDIT_DUPLICATE_OF_PARENT";
@@ -212,6 +220,27 @@ export async function editAiDraft(
       {
         findingCodes: codesForAudit(sanitiseResult),
         findings: sanitiseResult.findings,
+      },
+    );
+  }
+
+  // EP-TRAIN-4Y-AE §4 — structure validator. A clean-text edit that
+  // reintroduces embedded options in the stem, a duplicate option, a
+  // missing correct designation, or an answer-key leak is refused
+  // here BEFORE a new draft row is created.
+  const structureResult = checkQuestionStructure({
+    questionText: trimmedQ,
+    options: trimmedOptions,
+    explanation: trimmedExplanation || null,
+  });
+  if (!structureResult.ok) {
+    throw new EditRejectedError(
+      "EDIT_STRUCTURE_INVALID",
+      "Edit blocked: the question's structure is invalid. The stem must contain only the question; answer options and correct-answer metadata must live in their own fields.",
+      409,
+      {
+        findingCodes: structureResult.findings.map((f) => f.code),
+        findings: structureResult.findings,
       },
     );
   }

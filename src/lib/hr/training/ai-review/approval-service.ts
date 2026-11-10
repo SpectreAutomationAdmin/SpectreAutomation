@@ -45,6 +45,11 @@ import {
   checkEmployeeFacingText,
   codesForAudit,
 } from "./question-text-sanitizer";
+// EP-TRAIN-4Y-AE §4 (2026-11-10) — structural validator is the
+// second gate at approve-time. The AA sanitiser catches leakage;
+// this one catches shape defects (options in stem, missing correct,
+// etc.). Composes with the sanitiser — both must pass.
+import { checkQuestionStructure } from "./question-structure-validator";
 
 export type ApprovalRejectionCode =
   | "VERIFIED_ANSWER_MISSING"
@@ -61,6 +66,9 @@ export type ApprovalRejectionCode =
   // segment ids, embedded answer keys, unresolved [Placeholder]s).
   // Reviewer must discard or edit the draft before it can be approved.
   | "EMPLOYEE_FACING_TEXT_LEAKAGE"
+  // EP-TRAIN-4Y-AE §4 — structural defect (option bodies in stem,
+  // embedded answer key, duplicate options, missing correct).
+  | "QUESTION_STRUCTURE_INVALID"
   | "TRANSITION_BLOCKED";
 
 /** Error shape callers (API route handlers) should turn into HTTP
@@ -368,6 +376,23 @@ export async function approveTrainingQuestionCandidate(
         questionText: parsed.questionText,
         options: parsed.options.map((o) => ({ text: o.text })),
       });
+      // EP-TRAIN-4Y-AE §4 — composed with the structure validator.
+      // Both must pass before the draft can be approved.
+      const structure = checkQuestionStructure({
+        questionText: parsed.questionText,
+        options: parsed.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+      });
+      if (!structure.ok) {
+        throw new ApprovalRejectedError(
+          "QUESTION_STRUCTURE_INVALID",
+          "Approval blocked: the question's structure is invalid. The stem must contain only the question; answer options and the correct-answer designation must live in their own fields. Discard or edit the draft before approving.",
+          409,
+          {
+            findingCodes: structure.findings.map((f) => f.code),
+            findings: structure.findings,
+          },
+        );
+      }
       if (!sanitised.ok) {
         throw new ApprovalRejectedError(
           "EMPLOYEE_FACING_TEXT_LEAKAGE",

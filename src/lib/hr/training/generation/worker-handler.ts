@@ -593,6 +593,28 @@ export async function handleGenerateJob(
           continue;
         }
 
+        // EP-TRAIN-4Y-AE §4 (2026-11-10) — structural validator at
+        // worker-persist. Composes with the 4Y-AA sanitiser above.
+        // A proposal whose stem embeds the options block, whose
+        // options duplicate each other, whose correct designation is
+        // missing/multiple, etc. is dropped here so it NEVER reaches
+        // the DB.
+        const { checkQuestionStructure } = await import("@/lib/hr/training/ai-review/question-structure-validator");
+        const struct = checkQuestionStructure({
+          questionText: p.questionText,
+          options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+          explanation: p.explanation ?? null,
+        });
+        if (!struct.ok) {
+          diag.sanitizerDroppedCount++;
+          sanitizerDropCount++;
+          diag.sanitizerDropReasons.push({
+            proposalIndex: pi,
+            findingCodes: ["STRUCTURE:" + struct.findings.map((f) => f.code).join(",")].join(""),
+          });
+          continue;
+        }
+
         // Compute canonical body + content hash for dedup + persist.
         const canonicalBody = {
           questionType: p.questionType,
@@ -967,7 +989,10 @@ Constraints:
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim.
 4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
 5. Keep the question focused on the LISTED learning objective(s), not peripheral content.
-6. Prefer a question that tests APPLICATION or JUDGMENT (what should the employee do?) over bare recall when the source material supports it.${priorBlock}`;
+6. Prefer a question that tests APPLICATION or JUDGMENT (what should the employee do?) over bare recall when the source material supports it.
+7. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.
+8. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
+9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.${priorBlock}`;
 }
 
 /** EP-TRAIN-4Y-N (2026-11-08) — context-aware final-assessment prompt.
@@ -997,7 +1022,10 @@ Constraints:
 2. Each question MUST cite at least one transcript segment id from the full course transcript provided.
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Diverse question types are encouraged across the final-assessment set.
 4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
-5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.${priorBlock}`;
+5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.
+6. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.
+7. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
+8. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.${priorBlock}`;
 }
 
 async function safeFail(
