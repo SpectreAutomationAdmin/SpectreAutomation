@@ -18,7 +18,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { useRef, type RefObject } from "react";
-import { PlayerControlBar } from "../src/app/employee/(authed)/safety-training/[versionId]/CoursePlayer";
+// EP-TRAIN-4Y-AB §2 (2026-11-10) — PlayerControlBar was moved to a
+// shared primitive so the Manager Review surface can reuse it. The
+// test contract against the employee default is preserved verbatim.
+import { PlayerControlBar } from "../src/components/training/PlayerControlBar";
 
 afterEach(() => { cleanup(); });
 

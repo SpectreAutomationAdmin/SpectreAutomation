@@ -143,6 +143,11 @@ export default async function ManagerReviewPage({
             "REJECTED",
             "GENERATED",
             "VALIDATION_PENDING",
+            // EP-TRAIN-4Y-AB §4 — show manager-edited drafts that are
+            // awaiting re-validation, and any validator-failed row so
+            // the manager can see what the inline edit produced.
+            "EDITED_VALIDATION_STALE",
+            "VALIDATION_FAILED",
           ],
         },
       },

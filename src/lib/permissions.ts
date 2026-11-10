@@ -488,15 +488,25 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:training:read", "hr:training:write", "hr:training:publish",
     "hr:training:assign", "hr:training:compliance:read",
     // EP-TRAIN-6D-4G (2026-11-04) — Read-only inspection of
-    // persisted AI training candidates. CLUB_ADMIN receives ONLY
-    // the read grant. The seven consequential AI grants
-    // (generate / edit / revalidate / approve / remediate-rejected /
-    // archive / review-for-rejection) are deliberately withheld
-    // here and remain SUPER_ADMIN-only until a separate authorised
-    // slice extends the grants. The directive explicitly refuses
-    // CONTROLLER / payroll / manager / employee grants for any AI
-    // permission.
+    // persisted AI training candidates. CLUB_ADMIN receives the
+    // read grant.
+    //
+    // EP-TRAIN-4Y-AB §4 (2026-11-10) — founder-authorised extension:
+    // CLUB_ADMIN additionally receives `hr:training:ai:edit` so the
+    // manager can inline-edit a pre-approval AI draft from the
+    // Manager Review surface, and `hr:training:ai:revalidate` so the
+    // manager can request revalidation of their own edit. The
+    // directive explicitly refuses `hr:training:ai:approve` on
+    // CLUB_ADMIN — approval remains TRAINING_AI_REVIEWER-only, and
+    // the lifecycle table enforces this separation inside the
+    // transaction (EDIT_SAVED lands in EDITED_VALIDATION_STALE,
+    // never APPROVED_DRAFT; a reviewer must subsequently approve
+    // the revalidated draft). The four still-withheld AI grants
+    // (generate, approve, remediate-rejected, archive) remain
+    // SUPER_ADMIN-only / role-specific as before.
     "hr:training:ai:read",
+    "hr:training:ai:edit",
+    "hr:training:ai:revalidate",
     // PAY-1A (2026-09-26) — CLUB_ADMIN carries Payments admin authority
     // (bank-account management + authorize + cancel + read). Does NOT
     // hold payment:prepare — the SoD "authorizer never self-authorizes"

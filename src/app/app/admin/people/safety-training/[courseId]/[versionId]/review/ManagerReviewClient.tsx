@@ -1,24 +1,21 @@
 "use client";
 
 // EP-TRAIN-4Y-S §5+§6+§7+§8 — Manager Review client component.
-// EP-TRAIN-4Y-AA §2+§4+§5+§6 (2026-11-09):
-//   §2 — inline title + description header with pencil edit, Preview
-//        as employee at the top-right of the header. Persist writes to
-//        the COURSE row (not the version), so the Qwen metadata guard
-//        protects the manager's edit from silent overwrite.
-//   §4 — checkpoint markers overlaid on a synchronized timeline track
-//        underneath the native video player. Click seeks + selects the
-//        corresponding question; the selected question highlights the
-//        matching marker; keyboard-accessible.
-//   §5 — tabs filter by persisted destination from the server-resolved
-//        destinationKind on each draft. Checkpoints tab shows only
-//        CHECKPOINT drafts; Final-assessment tab shows only
-//        FINAL_ASSESSMENT drafts (with a truthful zero-question empty
-//        state when the group generated none).
-//   §6 — the redundant "N AI-generated questions in queue / Preview
-//        as employee" card is removed; the preview action lives in the
-//        header. The Course title / Description card is removed —
-//        content moves inline into the page header.
+// EP-TRAIN-4Y-AA §2+§4+§5+§6 — inline header (title + desc + pencil),
+// destination-filter tabs, checkpoint timeline, redundant-card removal.
+// EP-TRAIN-4Y-AB §2+§4+§5+§6 (2026-11-10):
+//   §2 — reuses the canonical employee <CoursePlayer>'s PlayerControlBar
+//        (extracted to src/components/training/PlayerControlBar.tsx).
+//        Manager mode passes onMarkerClick, markerLabels, activeMarkerId,
+//        allowUnrestrictedSeek so the control bar renders numbered,
+//        clickable, selection-aware markers and keeps the look identical
+//        to employee mode.
+//   §4 — inline editor replaces "Edit in full editor". Save persists via
+//        POST /api/admin/ai-training/drafts/[id]/edit which lands the
+//        draft in EDITED_VALIDATION_STALE (SoD preserved).
+//   §5 — 60/40 desktop layout (video 3fr / question-review 2fr) with
+//        vertical stretch on the review column. Stacks on mobile.
+//   §6 — Click-seek + question-sync + marker highlight maintained.
 
 import {
   useCallback,
@@ -29,6 +26,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useRouter } from "next/navigation";
+import { PlayerControlBar } from "@/components/training/PlayerControlBar";
 
 type DestinationKind = "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN";
 
@@ -49,6 +47,8 @@ interface Draft {
   isPromoted: boolean;
   destination: DestinationKind;
   planGroupKey: string | null;
+  contentHash?: string;
+  recordVersion?: number;
 }
 
 interface PublishConfig {
@@ -91,13 +91,6 @@ function uuidV4(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-function formatTime(sec: number | null): string {
-  if (sec == null || !Number.isFinite(sec)) return "—";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
 function statusLabel(state: string, isPromoted: boolean): {
   label: string;
   tone: "amber" | "green" | "red" | "stone";
@@ -108,6 +101,7 @@ function statusLabel(state: string, isPromoted: boolean): {
   if (state === "REQUIRES_HUMAN_REVIEW") return { label: "Needs review", tone: "amber" };
   if (state === "VALIDATION_PENDING") return { label: "Preparing", tone: "stone" };
   if (state === "GENERATED") return { label: "Preparing", tone: "stone" };
+  if (state === "EDITED_VALIDATION_STALE") return { label: "Edited — pending re-validation", tone: "amber" };
   return { label: state, tone: "stone" };
 }
 
@@ -136,13 +130,7 @@ function PencilIcon({ className }: { className?: string }) {
 export default function ManagerReviewClient(props: Props) {
   const router = useRouter();
 
-  // ── Destination-filtered drafts ─────────────────────────────────
-  // EP-TRAIN-4Y-AA §5 — filter by server-resolved destination, not by
-  // tab-label guesswork. Drafts resolved to UNKNOWN are shown in BOTH
-  // tabs (defensive — never hide a reviewable item), but they should
-  // not occur for any run generated on or after 4Y-AA ships because
-  // the resolver reads the persisted shortfallReasonJson produced by
-  // the worker.
+  // ── Destination-filtered drafts (unchanged from AA) ─────────────
   const [mode, setMode] = useState<"checkpoints" | "final">(() => {
     const hasCps = props.drafts.some(
       (d) => d.destination === "CHECKPOINT" || d.destination === "UNKNOWN",
@@ -161,10 +149,8 @@ export default function ManagerReviewClient(props: Props) {
   const totalCheckpoint = checkpointDrafts.length;
   const totalFinal = finalDrafts.length;
 
-  // Independent index per mode so switching tabs restores position.
   const [cpIndex, setCpIndex] = useState(0);
   const [faIndex, setFaIndex] = useState(0);
-  // Clamp indices into bounds if the drafts array shape changes.
   useEffect(() => {
     if (cpIndex >= totalCheckpoint) setCpIndex(Math.max(0, totalCheckpoint - 1));
   }, [totalCheckpoint, cpIndex]);
@@ -177,13 +163,11 @@ export default function ManagerReviewClient(props: Props) {
     else setFaIndex(updater);
   };
 
-  // ── Header edit state ───────────────────────────────────────────
+  // ── Header edit state (unchanged from AA) ───────────────────────
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingDesc, setEditingDesc] = useState(false);
   const [titleDraft, setTitleDraft] = useState(props.courseTitle);
   const [descDraft, setDescDraft] = useState(props.courseDescription);
-  // Keep the visible values in sync when the parent passes fresh data
-  // after a router.refresh() (e.g. a save completed server-side).
   useEffect(() => { if (!editingTitle) setTitleDraft(props.courseTitle); }, [props.courseTitle, editingTitle]);
   useEffect(() => { if (!editingDesc) setDescDraft(props.courseDescription); }, [props.courseDescription, editingDesc]);
   const [titleSaveState, setTitleSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -191,6 +175,39 @@ export default function ManagerReviewClient(props: Props) {
 
   const [pendingBusy, setPendingBusy] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+
+  // ── Inline question edit state (new in AB §4) ───────────────────
+  interface EditingDraft {
+    draftId: string;
+    questionText: string;
+    options: { text: string; isCorrect: boolean }[];
+    explanation: string;
+    originalContentHash: string;
+    originalRecordVersion: number;
+  }
+  const [editing, setEditing] = useState<EditingDraft | null>(null);
+  const [editSaveState, setEditSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [editError, setEditError] = useState<string | null>(null);
+  // "Dirty" tracking — if the user has modified anything, prompt on
+  // tab-switch / prev-next / discard. Compared against the snapshot
+  // captured at edit-start so textareas can round-trip unchanged.
+  const isDirty = useCallback((): boolean => {
+    if (!editing) return false;
+    const original = (mode === "checkpoints" ? checkpointDrafts : finalDrafts)
+      [currentIndex];
+    if (!original || original.id !== editing.draftId) return false;
+    if (editing.questionText !== original.questionText) return true;
+    if (editing.options.length !== original.options.length) return true;
+    for (let i = 0; i < editing.options.length; i++) {
+      if (editing.options[i].text !== original.options[i].optionText) return true;
+      if (editing.options[i].isCorrect !== original.options[i].isCorrect) return true;
+    }
+    return false;
+  }, [editing, mode, checkpointDrafts, finalDrafts, currentIndex]);
+  const guardUnsaved = useCallback((intent: string): boolean => {
+    if (!editing || !isDirty()) return true;
+    return window.confirm(`You have unsaved edits to this question. ${intent} without saving?`);
+  }, [editing, isDirty]);
 
   // ── Video + timeline state ──────────────────────────────────────
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -202,11 +219,7 @@ export default function ManagerReviewClient(props: Props) {
   const current = activeDrafts[currentIndex] ?? null;
   const totalInMode = activeDrafts.length;
 
-  // Sync marker highlight ↔ selected checkpoint question. When the
-  // manager selects a checkpoint-group draft, the matching marker
-  // highlights; we align by the draft's position inside the sorted
-  // checkpoint list (works because the worker generates CP drafts in
-  // atSec order and the server returns them ordered by generatedAt).
+  // Sync marker highlight ↔ selected checkpoint question (unchanged).
   const sortedCheckpoints = useMemo(
     () => [...props.checkpoints].sort((a, b) => a.atSecond - b.atSecond),
     [props.checkpoints],
@@ -217,7 +230,7 @@ export default function ManagerReviewClient(props: Props) {
     setCurrentCheckpointId(cp?.id ?? null);
   }, [mode, currentIndex, sortedCheckpoints]);
 
-  // ── Header save handlers ────────────────────────────────────────
+  // ── Header save handlers (unchanged from AA) ────────────────────
   const saveCourseField = useCallback(
     async (field: "title" | "description", value: string) => {
       const setState = field === "title" ? setTitleSaveState : setDescSaveState;
@@ -247,9 +260,7 @@ export default function ManagerReviewClient(props: Props) {
   const commitTitle = useCallback(async () => {
     const trimmed = titleDraft.trim();
     if (trimmed.length < 3) { setTitleSaveState("error"); return; }
-    if (trimmed !== props.courseTitle) {
-      await saveCourseField("title", trimmed);
-    }
+    if (trimmed !== props.courseTitle) await saveCourseField("title", trimmed);
     setEditingTitle(false);
   }, [titleDraft, props.courseTitle, saveCourseField]);
   const cancelTitle = useCallback(() => {
@@ -259,9 +270,7 @@ export default function ManagerReviewClient(props: Props) {
   }, [props.courseTitle]);
   const commitDesc = useCallback(async () => {
     const trimmed = descDraft.trim();
-    if (trimmed !== props.courseDescription) {
-      await saveCourseField("description", trimmed);
-    }
+    if (trimmed !== props.courseDescription) await saveCourseField("description", trimmed);
     setEditingDesc(false);
   }, [descDraft, props.courseDescription, saveCourseField]);
   const cancelDesc = useCallback(() => {
@@ -271,17 +280,26 @@ export default function ManagerReviewClient(props: Props) {
   }, [props.courseDescription]);
 
   // ── Review action handlers ──────────────────────────────────────
+  const refreshDraftState = useCallback(async (draftId: string) => {
+    const resp = await fetch(`/api/admin/ai-training/drafts/${draftId}/state`, { cache: "no-store" });
+    if (!resp.ok) throw new Error("Could not read draft state.");
+    return resp.json() as Promise<{
+      state: string;
+      recordVersion: number;
+      contentHash: string;
+      latestValidationId?: string;
+      correctOptionIndex?: number;
+      correctOptionText?: string;
+    }>;
+  }, []);
+
   const handleAccept = useCallback(async () => {
     if (!current || pendingBusy) return;
+    if (!guardUnsaved("Accept this draft and leave the editor")) return;
     setPendingBusy(true);
     setLastError(null);
     try {
-      const stateResp = await fetch(
-        `/api/admin/ai-training/drafts/${current.id}/state`,
-        { cache: "no-store" },
-      );
-      const stateBody = await stateResp.json();
-      if (!stateResp.ok) throw new Error("Could not read draft state.");
+      const stateBody = await refreshDraftState(current.id);
       if (props.canApprove && stateBody.state === "REQUIRES_HUMAN_REVIEW") {
         const resp = await fetch(
           `/api/admin/ai-training/drafts/${current.id}/approve`,
@@ -328,25 +346,23 @@ export default function ManagerReviewClient(props: Props) {
       } else {
         throw new Error(`Draft is in state ${stateBody.state}; no action available here.`);
       }
+      setEditing(null);
       router.refresh();
     } catch (err) {
       setLastError(err instanceof Error ? err.message : "Unknown error.");
     } finally {
       setPendingBusy(false);
     }
-  }, [current, pendingBusy, props.canApprove, props.canAuthor, router]);
+  }, [current, pendingBusy, props.canApprove, props.canAuthor, router, guardUnsaved, refreshDraftState]);
 
   const handleDiscard = useCallback(async () => {
     if (!current || pendingBusy) return;
+    if (!guardUnsaved("Discard this draft")) return;
     if (!window.confirm("Discard this question? This can't be undone.")) return;
     setPendingBusy(true);
     setLastError(null);
     try {
-      const stateResp = await fetch(
-        `/api/admin/ai-training/drafts/${current.id}/state`,
-        { cache: "no-store" },
-      );
-      const stateBody = await stateResp.json();
+      const stateBody = await refreshDraftState(current.id);
       const resp = await fetch(
         `/api/admin/ai-training/drafts/${current.id}/reject`,
         {
@@ -362,35 +378,127 @@ export default function ManagerReviewClient(props: Props) {
         const b = await resp.json().catch(() => ({}));
         throw new Error(b?.message ?? `Discard failed (${resp.status}).`);
       }
+      setEditing(null);
       router.refresh();
     } catch (err) {
       setLastError(err instanceof Error ? err.message : "Unknown error.");
     } finally {
       setPendingBusy(false);
     }
-  }, [current, pendingBusy, router]);
+  }, [current, pendingBusy, router, guardUnsaved, refreshDraftState]);
 
-  // ── Timeline marker click + keyboard handling ───────────────────
-  const seekToCheckpoint = useCallback((cpId: string, atSecond: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = atSecond;
-      videoRef.current.pause();
+  // ── Inline edit handlers ────────────────────────────────────────
+  const beginEdit = useCallback(async () => {
+    if (!current || pendingBusy) return;
+    // Refresh state so we commit with the live contentHash +
+    // recordVersion. Avoids a 409 CONTENT_HASH_MISMATCH if the client
+    // cached stale props.
+    setEditError(null);
+    try {
+      const stateBody = await refreshDraftState(current.id);
+      setEditing({
+        draftId: current.id,
+        questionText: current.questionText,
+        options: current.options.map((o) => ({ text: o.optionText, isCorrect: o.isCorrect })),
+        explanation: "",
+        originalContentHash: stateBody.contentHash,
+        originalRecordVersion: stateBody.recordVersion,
+      });
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Unknown error.");
     }
-    // Align the question pane with the clicked checkpoint.
-    const idx = sortedCheckpoints.findIndex((c) => c.id === cpId);
-    if (idx >= 0 && mode === "checkpoints" && idx < totalCheckpoint) {
-      setCpIndex(idx);
-    }
-    setCurrentCheckpointId(cpId);
-  }, [mode, sortedCheckpoints, totalCheckpoint]);
-  const handleMarkerKey = useCallback(
-    (e: KeyboardEvent<HTMLButtonElement>, cp: Checkpoint) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        seekToCheckpoint(cp.id, cp.atSecond);
+  }, [current, pendingBusy, refreshDraftState]);
+
+  const cancelEdit = useCallback(() => {
+    if (!editing) return;
+    if (!guardUnsaved("Cancel")) return;
+    setEditing(null);
+    setEditSaveState("idle");
+    setEditError(null);
+  }, [editing, guardUnsaved]);
+
+  const saveEdit = useCallback(async () => {
+    if (!editing) return;
+    setEditSaveState("saving");
+    setEditError(null);
+    try {
+      const resp = await fetch(
+        `/api/admin/ai-training/drafts/${editing.draftId}/edit`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            questionText: editing.questionText,
+            options: editing.options,
+            explanation: editing.explanation,
+            expectedContentHash: editing.originalContentHash,
+            expectedRecordVersion: editing.originalRecordVersion,
+            reviewerNote: "Manager inline edit (review page)",
+          }),
+        },
+      );
+      const body = (await resp.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        detail?: unknown;
+      };
+      if (!resp.ok || body.ok !== true) {
+        throw new Error(body?.message ?? body?.error ?? `Save failed (${resp.status}).`);
       }
+      setEditSaveState("saved");
+      setEditing(null);
+      setTimeout(() => setEditSaveState("idle"), 1500);
+      router.refresh();
+    } catch (err) {
+      setEditSaveState("error");
+      setEditError(err instanceof Error ? err.message : "Unknown error.");
+    }
+  }, [editing, router]);
+
+  // Browser-level guard: beforeunload prevents accidental tab-close
+  // with unsaved edits.
+  useEffect(() => {
+    if (!editing || !isDirty()) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editing, isDirty]);
+
+  // ── Timeline marker click (for shared PlayerControlBar) ─────────
+  const handleMarkerClick = useCallback(
+    (cpId: string, atSecond: number) => {
+      if (!guardUnsaved("Jump to a different checkpoint")) return;
+      if (videoRef.current) {
+        videoRef.current.currentTime = atSecond;
+        videoRef.current.pause();
+      }
+      const idx = sortedCheckpoints.findIndex((c) => c.id === cpId);
+      if (idx >= 0 && idx < totalCheckpoint) {
+        if (mode !== "checkpoints") setMode("checkpoints");
+        setCpIndex(idx);
+      }
+      setCurrentCheckpointId(cpId);
     },
-    [seekToCheckpoint],
+    [mode, sortedCheckpoints, totalCheckpoint, guardUnsaved],
+  );
+
+  // Numbered marker labels — "1", "2", … in atSec order.
+  const markerLabels = useMemo(() => {
+    const m: Record<string, string> = {};
+    sortedCheckpoints.forEach((c, i) => { m[c.id] = String(i + 1); });
+    return m;
+  }, [sortedCheckpoints]);
+  // Manager mode sends an empty "cleared" set — the "cleared" concept
+  // doesn't apply to content review.
+  const emptyCleared = useMemo(() => new Set<string>(), []);
+  // Adapt our Checkpoint[] into the PlayerCheckpointMarker shape.
+  const playerCheckpoints = useMemo(
+    () => sortedCheckpoints.map((c) => ({ id: c.id, atSecond: c.atSecond, label: c.title })),
+    [sortedCheckpoints],
   );
 
   // ── Empty state (no video + no drafts) ──────────────────────────
@@ -416,7 +524,7 @@ export default function ManagerReviewClient(props: Props) {
 
   return (
     <>
-      {/* ── Breadcrumb + inline header (title + description + preview) ── */}
+      {/* ── Breadcrumb + inline header ─────────────────────────── */}
       <div className="mb-5">
         <a
           href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}`}
@@ -431,7 +539,6 @@ export default function ManagerReviewClient(props: Props) {
         data-testid="manager-review-header"
       >
         <div className="flex-1 min-w-0">
-          {/* Title row */}
           <div className="flex items-start gap-2">
             {editingTitle ? (
               <div className="flex-1">
@@ -449,38 +556,15 @@ export default function ManagerReviewClient(props: Props) {
                   aria-label="Course title"
                 />
                 <div className="mt-2 flex items-center gap-2 text-xs">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={commitTitle}
-                    data-testid="manager-review-title-save"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={cancelTitle}
-                    data-testid="manager-review-title-cancel"
-                  >
-                    Cancel
-                  </button>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={commitTitle} data-testid="manager-review-title-save">Save</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={cancelTitle} data-testid="manager-review-title-cancel">Cancel</button>
                   {titleSaveState === "saving" && <span className="text-stone-500">Saving…</span>}
-                  {titleSaveState === "error" && (
-                    <span className="text-red-600">
-                      Couldn&apos;t save — title must be 3-200 characters.
-                    </span>
-                  )}
+                  {titleSaveState === "error" && <span className="text-red-600">Couldn&apos;t save — title must be 3-200 characters.</span>}
                 </div>
               </div>
             ) : (
               <>
-                <h1
-                  className="page-title text-stone-900"
-                  data-testid="manager-review-title-display"
-                >
-                  {props.courseTitle}
-                </h1>
+                <h1 className="page-title text-stone-900" data-testid="manager-review-title-display">{props.courseTitle}</h1>
                 <button
                   type="button"
                   onClick={() => setEditingTitle(true)}
@@ -490,14 +574,10 @@ export default function ManagerReviewClient(props: Props) {
                 >
                   <PencilIcon />
                 </button>
-                {titleSaveState === "saved" && (
-                  <span className="mt-3 text-xs text-stone-500">Saved.</span>
-                )}
+                {titleSaveState === "saved" && <span className="mt-3 text-xs text-stone-500">Saved.</span>}
               </>
             )}
           </div>
-
-          {/* Description row */}
           <div className="mt-2 flex items-start gap-2">
             {editingDesc ? (
               <div className="flex-1">
@@ -519,35 +599,16 @@ export default function ManagerReviewClient(props: Props) {
                   placeholder="Describe what employees will learn."
                 />
                 <div className="mt-2 flex items-center gap-2 text-xs">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={commitDesc}
-                    data-testid="manager-review-description-save"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={cancelDesc}
-                    data-testid="manager-review-description-cancel"
-                  >
-                    Cancel
-                  </button>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={commitDesc} data-testid="manager-review-description-save">Save</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={cancelDesc} data-testid="manager-review-description-cancel">Cancel</button>
                   {descSaveState === "saving" && <span className="text-stone-500">Saving…</span>}
-                  {descSaveState === "error" && (
-                    <span className="text-red-600">Couldn&apos;t save — try again.</span>
-                  )}
+                  {descSaveState === "error" && <span className="text-red-600">Couldn&apos;t save — try again.</span>}
                   <span className="ml-auto text-stone-400">Ctrl+Enter to save · Esc to cancel</span>
                 </div>
               </div>
             ) : (
               <>
-                <p
-                  className="text-sm leading-relaxed text-stone-600 max-w-[760px]"
-                  data-testid="manager-review-description-display"
-                >
+                <p className="text-sm leading-relaxed text-stone-600 max-w-[760px]" data-testid="manager-review-description-display">
                   {props.courseDescription
                     ? props.courseDescription
                     : <span className="italic text-stone-400">No course description yet — click the pencil to add one.</span>}
@@ -561,9 +622,7 @@ export default function ManagerReviewClient(props: Props) {
                 >
                   <PencilIcon />
                 </button>
-                {descSaveState === "saved" && (
-                  <span className="mt-1 text-xs text-stone-500">Saved.</span>
-                )}
+                {descSaveState === "saved" && <span className="mt-1 text-xs text-stone-500">Saved.</span>}
               </>
             )}
           </div>
@@ -580,82 +639,54 @@ export default function ManagerReviewClient(props: Props) {
         </div>
       </header>
 
-      {/* ── Two-column body ─────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6">
-        {/* Left: video + timeline markers */}
+      {/* ── 60/40 two-column body (lg+); stacked on small screens ── */}
+      <div
+        className="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 items-start"
+        data-testid="manager-review-body"
+      >
+        {/* Left (3fr): shared video + PlayerControlBar */}
         <div className="space-y-4" data-testid="manager-review-left">
-          <section className="card card-body">
+          <section
+            className="rounded-lg border border-stone-200 bg-white overflow-hidden"
+            data-testid="portal-course-video-section"
+          >
             {props.videoUrl ? (
               <>
-                <video
-                  ref={videoRef}
-                  src={props.videoUrl}
-                  controls
-                  preload="metadata"
-                  className="w-full rounded-md bg-black"
-                  data-testid="manager-review-video"
-                  onLoadedMetadata={(e) => {
-                    const d = (e.target as HTMLVideoElement).duration;
-                    if (Number.isFinite(d) && d > 0) setVideoDuration(d);
-                  }}
-                />
-                {/* EP-TRAIN-4Y-AA §4 — synchronized timeline track with
-                    checkpoint markers. Independent from the native
-                    controls (which don't support interactive overlays
-                    across browsers). Each marker's left position is
-                    atSecond / duration. */}
-                {props.checkpoints.length > 0 && durationForMarkers > 0 && (
-                  <div
-                    className="relative mt-3 h-9 select-none"
-                    data-testid="manager-review-checkpoint-timeline"
-                    aria-label="Checkpoint timeline"
+                <div className="relative w-full aspect-video bg-stone-100">
+                  <video
+                    ref={videoRef}
+                    src={props.videoUrl}
+                    preload="metadata"
+                    playsInline
+                    className="absolute inset-0 w-full h-full bg-stone-900"
+                    data-testid="portal-course-video"
+                    onLoadedMetadata={(e) => {
+                      const d = (e.target as HTMLVideoElement).duration;
+                      if (Number.isFinite(d) && d > 0) setVideoDuration(d);
+                    }}
+                    onClick={() => {
+                      const v = videoRef.current;
+                      if (!v) return;
+                      if (v.paused) void v.play().catch(() => {/* ignore */});
+                      else v.pause();
+                    }}
                   >
-                    {/* Track */}
-                    <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-stone-200" />
-                    {sortedCheckpoints.map((c) => {
-                      const pct = Math.min(100, Math.max(0, (c.atSecond / durationForMarkers) * 100));
-                      const isActive = c.id === currentCheckpointId;
-                      const draftIdx = sortedCheckpoints.findIndex((x) => x.id === c.id);
-                      const matchingDraft = checkpointDrafts[draftIdx] ?? null;
-                      const qLabel = matchingDraft?.questionText?.slice(0, 80) ?? "";
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => seekToCheckpoint(c.id, c.atSecond)}
-                          onKeyDown={(e) => handleMarkerKey(e, c)}
-                          title={`Checkpoint ${draftIdx + 1} · ${formatTime(c.atSecond)}${qLabel ? ` · ${qLabel}${qLabel.length === 80 ? "…" : ""}` : ""}`}
-                          aria-label={`Seek to checkpoint ${draftIdx + 1} at ${formatTime(c.atSecond)}`}
-                          data-testid={`manager-review-checkpoint-marker-${c.id}`}
-                          data-marker-active={isActive ? "true" : "false"}
-                          className={[
-                            "absolute top-1/2 -translate-x-1/2 -translate-y-1/2 inline-flex items-center justify-center",
-                            "h-6 w-6 rounded-full border transition-all",
-                            "focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-club-green",
-                            isActive
-                              ? "bg-club-green text-white border-club-green scale-110 shadow"
-                              : "bg-white text-stone-700 border-stone-300 hover:border-club-green hover:text-club-green",
-                          ].join(" ")}
-                          style={{ left: `${pct}%` }}
-                        >
-                          <span className="text-[10px] font-semibold font-mono leading-none">
-                            {draftIdx + 1}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="text-xs text-stone-500">
-                    Duration: {formatTime(durationForMarkers > 0 ? durationForMarkers : null)}
-                  </span>
-                  {props.checkpoints.length > 0 && (
-                    <span className="text-xs text-stone-500">
-                      {props.checkpoints.length} checkpoint{props.checkpoints.length === 1 ? "" : "s"}
-                    </span>
-                  )}
+                    Your browser does not support the video tag.
+                  </video>
                 </div>
+                {/* Shared control bar — manager mode (numbered + clickable
+                    markers, no seek clamp, no cleared-count footer). */}
+                <PlayerControlBar
+                  videoRef={videoRef}
+                  sortedCheckpoints={playerCheckpoints}
+                  cleared={emptyCleared}
+                  videoDurationSec={durationForMarkers > 0 ? durationForMarkers : props.videoDurationSec}
+                  firstUnclearedRequiredAtSecond={Number.POSITIVE_INFINITY}
+                  markerLabels={markerLabels}
+                  onMarkerClick={handleMarkerClick}
+                  activeMarkerId={currentCheckpointId ?? undefined}
+                  allowUnrestrictedSeek={true}
+                />
               </>
             ) : (
               <div className="rounded-md bg-stone-100 p-8 text-center text-sm text-stone-500">
@@ -665,13 +696,17 @@ export default function ManagerReviewClient(props: Props) {
           </section>
         </div>
 
-        {/* Right: one question at a time */}
-        <div className="space-y-4" data-testid="manager-review-right">
+        {/* Right (2fr): tabs + one-question-at-a-time review, stretches vertically. */}
+        <div className="space-y-4 flex flex-col" data-testid="manager-review-right">
           <div className="flex items-center gap-2 text-sm" data-testid="manager-review-tabs">
             <button
               type="button"
               className={`btn btn-sm ${mode === "checkpoints" ? "btn-primary" : "btn-secondary"}`}
-              onClick={() => setMode("checkpoints")}
+              onClick={() => {
+                if (!guardUnsaved("Switch tabs")) return;
+                setMode("checkpoints");
+                setEditing(null);
+              }}
               data-testid="manager-review-mode-checkpoints"
               aria-pressed={mode === "checkpoints"}
             >
@@ -680,7 +715,11 @@ export default function ManagerReviewClient(props: Props) {
             <button
               type="button"
               className={`btn btn-sm ${mode === "final" ? "btn-primary" : "btn-secondary"}`}
-              onClick={() => setMode("final")}
+              onClick={() => {
+                if (!guardUnsaved("Switch tabs")) return;
+                setMode("final");
+                setEditing(null);
+              }}
               data-testid="manager-review-mode-final"
               aria-pressed={mode === "final"}
             >
@@ -688,144 +727,268 @@ export default function ManagerReviewClient(props: Props) {
             </button>
           </div>
 
-          <section className="card card-body" data-testid="manager-review-question-pane">
+          <section
+            className="card card-body flex-1"
+            data-testid="manager-review-question-pane"
+          >
             {current ? (
-              <>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-stone-500 font-mono">
-                    Question {currentIndex + 1} of {totalInMode}
-                    {current.destination === "UNKNOWN" && (
-                      <span className="ml-2 text-amber-700" title="Destination could not be resolved from the generation plan.">
-                        · destination unknown
+              editing && editing.draftId === current.id ? (
+                /* ── Inline-edit mode (AB §4) ───────────────────────── */
+                <div className="space-y-4" data-testid="manager-review-edit-pane">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-stone-500 font-mono">
+                      Editing question {currentIndex + 1} of {totalInMode}
+                    </span>
+                    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800">
+                      Unsaved edits
+                    </span>
+                  </div>
+
+                  <label className="block">
+                    <span className="label">Question text</span>
+                    <textarea
+                      className="input mt-1 w-full"
+                      rows={4}
+                      value={editing.questionText}
+                      onChange={(e) =>
+                        setEditing((prev) => (prev ? { ...prev, questionText: e.target.value } : prev))
+                      }
+                      data-testid="manager-review-edit-questionText"
+                    />
+                  </label>
+
+                  <div className="space-y-2">
+                    <span className="label">Options</span>
+                    {editing.options.map((o, i) => (
+                      <div key={i} className="flex items-start gap-2" data-testid={`manager-review-edit-option-${i}`}>
+                        <label className="mt-2.5 inline-flex items-center gap-1 text-xs text-stone-600 shrink-0">
+                          <input
+                            type="radio"
+                            name="correct-option"
+                            checked={o.isCorrect}
+                            onChange={() =>
+                              setEditing((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      options: prev.options.map((opt, j) => ({
+                                        ...opt,
+                                        isCorrect: j === i,
+                                      })),
+                                    }
+                                  : prev,
+                              )
+                            }
+                            data-testid={`manager-review-edit-option-correct-${i}`}
+                          />
+                          <span className="font-mono">{String.fromCharCode(65 + i)}.</span>
+                        </label>
+                        <textarea
+                          rows={2}
+                          className="input w-full"
+                          value={o.text}
+                          onChange={(e) =>
+                            setEditing((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    options: prev.options.map((opt, j) =>
+                                      j === i ? { ...opt, text: e.target.value } : opt,
+                                    ),
+                                  }
+                                : prev,
+                            )
+                          }
+                          data-testid={`manager-review-edit-option-text-${i}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <label className="block">
+                    <span className="label">Explanation (optional)</span>
+                    <textarea
+                      className="input mt-1 w-full"
+                      rows={3}
+                      value={editing.explanation}
+                      onChange={(e) =>
+                        setEditing((prev) => (prev ? { ...prev, explanation: e.target.value } : prev))
+                      }
+                      data-testid="manager-review-edit-explanation"
+                      placeholder="Why this answer is correct. Shown to employees after they answer."
+                    />
+                  </label>
+
+                  {editError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert" data-testid="manager-review-edit-error">
+                      {editError}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={editSaveState === "saving"}
+                      onClick={saveEdit}
+                      data-testid="manager-review-edit-save"
+                    >
+                      {editSaveState === "saving" ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={editSaveState === "saving"}
+                      onClick={cancelEdit}
+                      data-testid="manager-review-edit-cancel"
+                    >
+                      Cancel
+                    </button>
+                    {editSaveState === "saved" && (
+                      <span className="text-xs text-stone-500" data-testid="manager-review-edit-saved">
+                        Saved — awaiting re-validation.
                       </span>
                     )}
-                  </span>
-                  {status && (
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${toneClass}`}
-                      data-testid="manager-review-status"
-                    >
-                      {status.label}
+                    <span className="ml-auto text-xs text-stone-400">
+                      Editing moves this draft to <strong>Pending re-validation</strong> and requires a reviewer to approve before it can be used.
                     </span>
-                  )}
+                  </div>
                 </div>
-                <h3 className="mt-3 text-base font-medium text-stone-900" data-testid="manager-review-question-text">
-                  {current.questionText}
-                </h3>
-                <ul className="mt-4 space-y-2">
-                  {current.options.map((o, i) => (
-                    <li
-                      key={i}
-                      className={`rounded-md border px-3 py-2 text-sm ${
-                        o.isCorrect
-                          ? "border-green-300 bg-green-50 text-green-900"
-                          : "border-stone-200 bg-white text-stone-800"
-                      }`}
-                      data-testid={`manager-review-option-${i}`}
-                    >
-                      <span className="font-mono text-xs text-stone-500 mr-2">
-                        {String.fromCharCode(65 + i)}.
-                      </span>
-                      {o.optionText}
-                      {o.isCorrect && (
-                        <span className="ml-2 text-xs font-semibold text-green-700">
-                          ✓ Correct answer
+              ) : (
+                /* ── Viewing mode (unchanged behaviour) ────────────── */
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-stone-500 font-mono">
+                      Question {currentIndex + 1} of {totalInMode}
+                      {current.destination === "UNKNOWN" && (
+                        <span className="ml-2 text-amber-700" title="Destination could not be resolved from the generation plan.">
+                          · destination unknown
                         </span>
                       )}
-                    </li>
-                  ))}
-                </ul>
-
-                {lastError && (
-                  <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
-                    {lastError}
+                    </span>
+                    {status && (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${toneClass}`}
+                        data-testid="manager-review-status"
+                      >
+                        {status.label}
+                      </span>
+                    )}
                   </div>
-                )}
+                  <h3 className="mt-3 text-base font-medium text-stone-900" data-testid="manager-review-question-text">
+                    {current.questionText}
+                  </h3>
+                  <ul className="mt-4 space-y-2">
+                    {current.options.map((o, i) => (
+                      <li
+                        key={i}
+                        className={`rounded-md border px-3 py-2 text-sm ${
+                          o.isCorrect
+                            ? "border-green-300 bg-green-50 text-green-900"
+                            : "border-stone-200 bg-white text-stone-800"
+                        }`}
+                        data-testid={`manager-review-option-${i}`}
+                      >
+                        <span className="font-mono text-xs text-stone-500 mr-2">
+                          {String.fromCharCode(65 + i)}.
+                        </span>
+                        {o.optionText}
+                        {o.isCorrect && (
+                          <span className="ml-2 text-xs font-semibold text-green-700">
+                            ✓ Correct answer
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
 
-                <div className="mt-6 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    disabled={pendingBusy || current.isPromoted}
-                    onClick={handleAccept}
-                    data-testid="manager-review-accept"
-                    title={
-                      !props.canApprove && !props.canAuthor
-                        ? "You don't have permission to approve or promote."
-                        : undefined
-                    }
-                  >
-                    {current.isPromoted
-                      ? "Approved"
-                      : current.state === "APPROVED_DRAFT" && props.canAuthor
-                        ? "Promote"
-                        : "Accept"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    disabled={pendingBusy}
-                    onClick={handleDiscard}
-                    data-testid="manager-review-discard"
-                  >
-                    Discard
-                  </button>
-                  <a
-                    href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}`}
-                    className="btn btn-secondary btn-sm"
-                    data-testid="manager-review-edit"
-                  >
-                    Edit in full editor
-                  </a>
-                  <div className="ml-auto flex items-center gap-2">
+                  {lastError && (
+                    <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+                      {lastError}
+                    </div>
+                  )}
+
+                  <div className="mt-6 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={pendingBusy || current.isPromoted}
+                      onClick={handleAccept}
+                      data-testid="manager-review-accept"
+                      title={
+                        !props.canApprove && !props.canAuthor
+                          ? "You don't have permission to approve or promote."
+                          : undefined
+                      }
+                    >
+                      {current.isPromoted
+                        ? "Approved"
+                        : current.state === "APPROVED_DRAFT" && props.canAuthor
+                          ? "Promote"
+                          : "Accept"}
+                    </button>
+                    {/* AB §4 — "Edit in full editor" replaced with inline "Edit". */}
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      disabled={currentIndex === 0 || pendingBusy}
-                      onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
-                      data-testid="manager-review-prev"
+                      disabled={pendingBusy || current.isPromoted || current.state === "REJECTED" || current.state === "ARCHIVED"}
+                      onClick={beginEdit}
+                      data-testid="manager-review-edit"
                     >
-                      ← Prev
+                      Edit
                     </button>
                     <button
                       type="button"
                       className="btn btn-secondary btn-sm"
-                      disabled={currentIndex >= totalInMode - 1 || pendingBusy}
-                      onClick={() => setCurrentIndex((i) => Math.min(totalInMode - 1, i + 1))}
-                      data-testid="manager-review-next"
+                      disabled={pendingBusy}
+                      onClick={handleDiscard}
+                      data-testid="manager-review-discard"
                     >
-                      Next →
+                      Discard
                     </button>
+                    <div className="ml-auto flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={currentIndex === 0 || pendingBusy}
+                        onClick={() => {
+                          if (!guardUnsaved("Jump to the previous question")) return;
+                          setEditing(null);
+                          setCurrentIndex((i) => Math.max(0, i - 1));
+                        }}
+                        data-testid="manager-review-prev"
+                      >
+                        ← Prev
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={currentIndex >= totalInMode - 1 || pendingBusy}
+                        onClick={() => {
+                          if (!guardUnsaved("Jump to the next question")) return;
+                          setEditing(null);
+                          setCurrentIndex((i) => Math.min(totalInMode - 1, i + 1));
+                        }}
+                        data-testid="manager-review-next"
+                      >
+                        Next →
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </>
+                </>
+              )
             ) : mode === "final" && totalFinal === 0 ? (
-              // EP-TRAIN-4Y-AA §5 — explicit truthful FA empty state.
-              <div
-                className="space-y-3 text-sm text-stone-700"
-                data-testid="manager-review-final-empty"
-              >
-                <p className="font-medium text-stone-900">
-                  No final-assessment questions were generated yet.
-                </p>
+              <div className="space-y-3 text-sm text-stone-700" data-testid="manager-review-final-empty">
+                <p className="font-medium text-stone-900">No final-assessment questions were generated yet.</p>
                 <p className="text-stone-500">
-                  The AI generation for this course produced the checkpoint
-                  questions but no final-assessment questions. A targeted
-                  recovery can regenerate them — awaiting founder
-                  authorization.
+                  The AI generation for this course produced the checkpoint questions but no final-assessment questions. A targeted recovery can regenerate them — awaiting founder authorization.
                 </p>
               </div>
             ) : (
-              <div
-                className="space-y-3 text-sm text-stone-700"
-                data-testid="manager-review-no-drafts"
-              >
-                <p className="font-medium text-stone-900">
-                  AI preparation hasn&apos;t produced questions yet.
-                </p>
+              <div className="space-y-3 text-sm text-stone-700" data-testid="manager-review-no-drafts">
+                <p className="font-medium text-stone-900">AI preparation hasn&apos;t produced questions yet.</p>
                 <p className="text-stone-500">
-                  This usually means transcription or question generation hasn&apos;t completed
-                  for this course. Return to the preparation page to see the current stage.
+                  This usually means transcription or question generation hasn&apos;t completed for this course. Return to the preparation page to see the current stage.
                 </p>
                 <a
                   href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}/upload`}
