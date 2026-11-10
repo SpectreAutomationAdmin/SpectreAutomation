@@ -1,10 +1,10 @@
 # EP-TRAIN-4Y-AA — Acceptance Report
 
-**Status**: DELIVERED (pending post-deploy screenshot evidence)
-**Commit**: `be8f3ec4` on `ep-train-4y-b-impl/hybrid-auth-contract`
+**Status**: DELIVERED
+**Commits**: `be8f3ec4` (main) + `8bba5975` (timeline fallback) on `ep-train-4y-b-impl/hybrid-auth-contract`
 **Previous accepted baseline**: `0c625f44` (EP-TRAIN-4Y-Z pilot)
-**Fly deploy**: (pending — GitHub Actions run `42722382204`)
-**Staging URL**: https://staging.spectreautomation.com
+**Fly releases**: web v1132 / worker v367 / `sha-8bba5975502d`
+**Staging URL**: https://staging.spectreautomation.com (health: HTTP 200)
 **Boundaries honoured**: no GPU inference, no re-transcription, no prod changes, no secret rotation, no spending-limit changes, no auto-approval or auto-publication; 126 unrelated WIP files + stash `49c2af3d` preserved.
 
 Written for: founder + any later operator who needs to understand what moved and what it unlocked.
@@ -289,19 +289,64 @@ Separate doc: [docs/ep-train-4y-aa-final-assessment-recovery-design.md](docs/ep-
 
 ## Appendix A — Deploy completion evidence
 
-> *(To be completed after the GH Actions run finishes.)*
+### Two deploys landed
 
-- GH Actions run `42722382204`: **status**
-- Fly web release: v???? / sha-********
-- Fly worker release: v??? / sha-********
-- `/api/health`: HTTP ???
-- Playwright screenshots captured:
-  - `test-results/4yaa-review-header.png`
-  - `test-results/4yaa-review-timeline-markers.png`
-  - `test-results/4yaa-review-checkpoint-tab.png`
-  - `test-results/4yaa-review-final-empty-state.png`
-  - `test-results/4yaa-review-edit-title.png`
-  - `test-results/4yaa-review-edit-description.png`
+| Run | Commit | Fly web | Fly worker | Conclusion |
+|---|---|---|---|---|
+| `42722382204` | `be8f3ec4` (main AA changes) | v1131 / `sha-be8f3ec4f2ad` | v366 / `sha-be8f3ec4f2ad` | success |
+| `42724895708` | `8bba5975` (timeline `atSec` fallback) | v1132 / `sha-8bba5975502d` | v367 / `sha-8bba5975502d` | success |
+
+Both runs: 28/28 steps succeeded, including web build + web deploy + web machine tag verify + worker build + worker deploy + worker health + smoke login.
+
+Rollback anchor if needed: `70ee74f58f84` (Fly web v1130 / worker v365 — the 4Y-Z baseline).
+
+### Health
+
+- `GET https://staging.spectreautomation.com/api/health` → **HTTP 200**
+- Fly machine `app 8655607c957e58` iad: `started` · 1 total check / 1 passing
+- Fly machine `worker d891ed01c54d18` iad: `started`
+
+### Playwright screenshots (captured by `scripts/4yaa-review-screenshots.mjs` on v1132)
+
+All captured as PNGs in `./test-results/`. Each one was then re-opened and visually spot-checked:
+
+| Screenshot | What it proves |
+|---|---|
+| `4yaa-review-full.png` (247 KB) | Full 1600×1100 page — confirms inline title ("Employee Onboarding and Policies" with pencil) + inline AI description (319 chars with pencil) + Preview-as-employee top-right + 5 timeline markers + Checkpoints · 5 / Final assessment · 0 tabs + Q1-of-5 with "Needs review" badge + 4 options + Accept / Discard / Edit / Prev / Next controls. No redundant cards below the question pane. |
+| `4yaa-review-header.png` (31 KB) | Header strip only — inline title + description + preview button, pencil-affordances visible. |
+| `4yaa-review-timeline-markers.png` (strip) | Timeline track with **5 numbered green-outlined markers** (1-5) sitting on the stone-grey rail. Confirms the `atSec` fallback renders when TrainingCheckpoint rows are empty. |
+| `4yaa-review-checkpoint-tab.png` | Checkpoints tab showing Q1 — live text `"What is the first step in resolving a complaint … according to the transcript segments [15] and [18]?"` — the §7 leakage the new approval-side sanitiser will refuse. |
+| `4yaa-review-final-empty-state.png` | Final-assessment tab's truthful empty state: `"No final-assessment questions were generated yet. The AI generation for this course produced the checkpoint questions but no final-assessment questions. A targeted recovery can regenerate them — awaiting founder authorization."` |
+| `4yaa-review-edit-title.png` | Pencil-open title editor: input field with Save + Cancel buttons; description shows a pencil icon on hover indicating the same affordance below. |
+| `4yaa-review-edit-description.png` | Pencil-open description textarea with Save + Cancel + "Ctrl+Enter to save · Esc to cancel" hint. |
+
+### Live staging reconciliation
+
+`scripts/4yaa-staging-inspection.mjs` output (captured pre-deploy at 23:12 UTC, still the authoritative source):
+
+```
+course.title:                "Employee Onboarding and Policies"
+course.description (chars):  319
+attribution.source:          ai
+attribution.runId:           cmw9rrl1g000rj41xaoxvzqbb
+generationStatus.state:      COMPLETED
+draftCount:                  5
+breakdown:                   {"REQUIRES_HUMAN_REVIEW":5,...}
+shortfall.generatedCount:    5
+shortfall.shortfall:         10
+shortfall.dedupDecisions#:   5  (all cg-* groups; zero final)
+```
+
+Reconciles 1:1 with what the new review page shows: `Checkpoints · 5` (reads these 5 CP drafts), `Final assessment · 0` (the resolver finds no `final` group entries in the shortfall JSON).
+
+### Marker position note
+
+The timeline-markers screenshot shows marker 1 slightly clipped at the left edge because its `atSec` is at or near 0 seconds in the 4Y-Z plan. The marker is functional (click-seekable, keyboard-focusable); its visual clipping is a pure polish item and is logged as a follow-up — not a §4 regression.
+
+### Scripts shipped
+
+- `scripts/4yaa-staging-inspection.mjs` — authenticated staging probe used to establish the §1 baseline and the §7 live-leakage evidence.
+- `scripts/4yaa-review-screenshots.mjs` — authenticated Playwright driver that captures the 6 acceptance screenshots.
 
 ---
 
