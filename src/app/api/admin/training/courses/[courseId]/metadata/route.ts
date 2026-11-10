@@ -185,10 +185,23 @@ export async function PATCH(
   if (title !== undefined) data.title = title;
   if (description !== undefined) data.description = description;
 
+  // EP-TRAIN-4Y-AD §6 (2026-11-10) — manager edits must shield the
+  // course from subsequent AI/deterministic retries. Set the
+  // attribution source to "manager" + refresh the attributed-title
+  // snapshot to the NEW title so downstream writers (which use
+  // `inferCurrentSource`) classify this course as "manager" and
+  // refuse to overwrite.
+  const dataWithProvenance: Record<string, unknown> = { ...data };
+  if (title !== undefined) {
+    dataWithProvenance.aiMetadataAttributedTitle = title;
+  }
+  dataWithProvenance.aiMetadataAttributionAt = new Date();
+  dataWithProvenance.aiMetadataAttributionSource = "manager";
+
   try {
     await prisma.trainingCourse.update({
       where: { id: courseId },
-      data,
+      data: dataWithProvenance,
     });
   } catch (err) {
     return NextResponse.json(

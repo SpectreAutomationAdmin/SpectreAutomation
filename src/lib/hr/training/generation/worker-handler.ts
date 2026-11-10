@@ -1092,25 +1092,34 @@ async function maybeGenerateCourseMetadata(args: {
         clubId: true,
         club: { select: { name: true } },
         aiMetadataAttributionAt: true,
+        aiMetadataAttributionSource: true,
         aiMetadataAttributedTitle: true,
       },
     });
     if (!course) return { inferenceMs: 0, modalCalled: false };
-    const atPlaceholderStrings =
-      course.title === PROVISIONAL_TITLE ||
-      course.code.startsWith(PROVISIONAL_CODE_PREFIX);
-    const attributionSet = course.aiMetadataAttributionAt !== null;
-    const titleMatchesAttributedSnapshot =
-      attributionSet &&
-      course.aiMetadataAttributedTitle !== null &&
-      course.aiMetadataAttributedTitle === course.title;
-    const isProvisional = attributionSet
-      ? titleMatchesAttributedSnapshot
-      : atPlaceholderStrings;
-    if (!isProvisional) {
+    // EP-TRAIN-4Y-AD §4+§6 (2026-11-10) — consult the shared
+    // provenance helper so the worker and the deterministic HTTP
+    // fallback apply the same rules. For the "ai" proposed source
+    // this allows writes over provisional / deterministic / earlier
+    // "ai" (retry refresh) and refuses writes over "manager" — which
+    // protects a founder edit even when a background retry fires.
+    const { evaluateMetadataWrite } = await import("@/lib/hr/training/ai-metadata/metadata-provenance");
+    const writeDecision = evaluateMetadataWrite({
+      currentSnapshot: {
+        title: course.title,
+        code: course.code,
+        aiMetadataAttributionAt: course.aiMetadataAttributionAt,
+        aiMetadataAttributionSource: course.aiMetadataAttributionSource,
+        aiMetadataAttributedTitle: course.aiMetadataAttributedTitle,
+      },
+      proposedSource: "ai",
+    });
+    if (!writeDecision.allow) {
       logger.info("training.generation.worker.metadata.skipped_finalised", {
         courseId: args.courseId,
         courseVersionId: args.courseVersionId,
+        reasonCode: writeDecision.reasonCode,
+        currentSource: writeDecision.currentSource,
       });
       return { inferenceMs: 0, modalCalled: false };
     }
@@ -1168,6 +1177,29 @@ async function maybeGenerateCourseMetadata(args: {
     );
     const modalInferenceMs =
       (r.elapsedMs?.coldBoot ?? 0) + (r.elapsedMs?.generate ?? 0);
+
+    // EP-TRAIN-4Y-AD §5 (2026-11-10) — validate the Qwen output
+    // before persisting. If the model returned a title that looks
+    // like a transcript fragment, or a description that opens with
+    // "Hello everyone, welcome to …" (the Silver Springs transcript's
+    // own opening), REFUSE the write. The directive explicitly bans
+    // labelling transcript extraction as AI metadata.
+    const { validateProposedAiMetadata } = await import("@/lib/hr/training/ai-metadata/metadata-provenance");
+    const validation = validateProposedAiMetadata({
+      title: r.title,
+      description: r.description,
+    });
+    if (!validation.ok) {
+      logger.warn("training.generation.worker.metadata.rejected_by_validator", {
+        courseId: args.courseId,
+        courseVersionId: args.courseVersionId,
+        runId: args.runId,
+        titleFirst60: r.title.slice(0, 60),
+        findings: validation.findings.map((f) => f.code),
+      });
+      return { inferenceMs: modalInferenceMs, modalCalled: true };
+    }
+
     const { randomBytes } = await import("node:crypto");
     const codeSuffix = randomBytes(3).toString("hex").toUpperCase();
     let code = deriveMetadataCode(r.title, codeSuffix);

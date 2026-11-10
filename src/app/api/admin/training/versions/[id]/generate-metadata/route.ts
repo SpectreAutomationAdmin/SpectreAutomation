@@ -23,6 +23,9 @@ import { hasPermission } from "@/lib/rbac";
 import { updateDraft } from "@/lib/hr/training/courses";
 import { generateCourseMetadata } from "@/lib/hr/training/ai-metadata/course-metadata-generator";
 import { audit } from "@/lib/audit";
+import {
+  evaluateMetadataWrite,
+} from "@/lib/hr/training/ai-metadata/metadata-provenance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,38 +75,32 @@ export async function POST(
     );
   }
 
-  // EP-TRAIN-4Y-V §4 — the authoritative "manager has finalised the
-  // course identity" signal is:
-  //   - attribution is set, AND the current title DIFFERS from the
-  //     attributed snapshot (the manager edited post-system-write);
-  //   - OR, with attribution unset, the course is no longer at the
-  //     string-level provisional placeholders (pre-4Y-V courses
-  //     the manager already edited before the attribution column
-  //     existed).
-  const atPlaceholderStrings =
-    version.course.title === PROVISIONAL_TITLE ||
-    version.course.code.startsWith(PROVISIONAL_CODE_PREFIX);
-  const attributionSet = version.course.aiMetadataAttributionAt !== null;
-  const titleMatchesAttributedSnapshot =
-    attributionSet &&
-    version.course.aiMetadataAttributedTitle !== null &&
-    version.course.aiMetadataAttributedTitle === version.course.title;
-
-  // "Provisional" here means "the system is still the one authoring
-  // course identity for this course." Either (a) we haven't attributed
-  // anything yet AND the strings are still the AUTO-DRAFT placeholders,
-  // or (b) we previously attributed AND the manager hasn't touched the
-  // title since that attribution (i.e. a retry overwrites our own
-  // earlier write — fine — but refuses to stomp a manager edit).
-  const isProvisional = attributionSet
-    ? titleMatchesAttributedSnapshot
-    : atPlaceholderStrings;
-
-  if (!isProvisional) {
+  // EP-TRAIN-4Y-AD §4+§6 (2026-11-10) — provenance priority gate. The
+  // pre-AD guard only refused overwrites that DIFFERED from the
+  // attributed snapshot (i.e. manager edits); it did NOT refuse
+  // deterministic overwrites of AI-authored metadata. The regression
+  // the founder reported on 2026-11-10T15:59:46Z was exactly that:
+  // this route demoted Qwen's "Employee Onboarding and Policies" back
+  // to the transcript-derived "Getting Right Into It, …".
+  //
+  // The provenance helper's rule table is the single source of truth
+  // for every metadata writer in the codebase.
+  const writeDecision = evaluateMetadataWrite({
+    currentSnapshot: {
+      title: version.course.title,
+      code: version.course.code,
+      aiMetadataAttributionAt: version.course.aiMetadataAttributionAt,
+      aiMetadataAttributionSource: version.course.aiMetadataAttributionSource,
+      aiMetadataAttributedTitle: version.course.aiMetadataAttributedTitle,
+    },
+    proposedSource: "deterministic",
+  });
+  if (!writeDecision.allow) {
     return NextResponse.json({
       ok: true,
       applied: false,
-      skippedReason: "COURSE_ALREADY_FINALISED",
+      skippedReason: writeDecision.reasonCode,
+      currentSource: writeDecision.currentSource,
       metadata: null,
     });
   }
