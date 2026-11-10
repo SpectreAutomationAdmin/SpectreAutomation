@@ -1106,22 +1106,38 @@ Constraints:
 /** EP-TRAIN-4Y-N (2026-11-08) — context-aware final-assessment prompt.
  *  Exported for offline fixture tests.
  *
- *  EP-TRAIN-4Y-AH (2026-11-10) — now emits an EXPLICIT "Allowed segment
- *  ids" enumeration (`allowedSegmentIds`). The 4Y-AG recovery proved
- *  that without an explicit list, Qwen cites ids that look plausible
- *  numerically but fall outside the permitted set (fallthrough to
- *  worker grounding reject). The symmetric checkpoint prompt has always
- *  enumerated its window; this brings FA to the same contract. */
+ *  EP-TRAIN-4Y-AJ (2026-11-10) — the 4Y-AH slice added an explicit
+ *  "Allowed segment ids: [45, 46, …]" enumeration. The 4Y-AI run proved
+ *  this TEACHES the model to echo the ids back into questionText
+ *  (e.g. "What does segment [45] teach us…?"). The text-leakage
+ *  sanitiser then correctly rejected every one of the 7 returned
+ *  proposals via EXPLICIT_SEGMENT_ID_REFERENCE.
+ *
+ *  AJ repair:
+ *   - The prompt NO LONGER enumerates permitted ids in natural language.
+ *   - The prompt frames the `[N]` prefix on every transcript line as
+ *     an internal "reference tag" used ONLY for the structured
+ *     `sourceSegmentIds` field — NOT for employee-facing text.
+ *   - The prompt lists an explicit "forbidden mentions" set so Qwen
+ *     avoids the phrases that trip the sanitiser.
+ *   - `sourceSegmentIds` size is bounded (≤ 3 per question) to keep
+ *     the structured output tractable and reduce fa-1's token budget
+ *     pressure (see 4Y-AI §3).
+ *   - The worker-side grounding validator CONTINUES to reject cites
+ *     outside the permitted set; `allowedSegmentIds` therefore remains
+ *     a soft worker-side signal, NOT a prompt enumeration.
+ *   - If `allowedSegmentIds` is provided it is used ONLY to pass a
+ *     terse "evidence count" line (e.g. "27 evidence items available")
+ *     so the model sizes its citations sensibly. The actual numbers
+ *     are NEVER written to the prompt text. */
 export function buildFinalSystemPromptCtxV1(args: {
   readonly target: number;
   readonly los: readonly { readonly id: string; readonly title: string }[];
   readonly videoEndSec: number;
   readonly priorTopics: readonly string[];
-  /** EP-TRAIN-4Y-AH §3 — the canonical allowed segment id set for this
-   *  chunk. Enumerated verbatim. Qwen is INSTRUCTED to cite ONLY these
-   *  ids; grounding stays belt-and-suspenders. Optional for backwards
-   *  compat with AF-era plans; when absent the prompt reverts to the
-   *  AF wording ("cite ids from the full course transcript provided"). */
+  /** EP-TRAIN-4Y-AJ §2 — kept as a soft signal for the "evidence count"
+   *  line only. Qwen is NOT shown the integer list in the prompt;
+   *  worker grounding still enforces the canonical set. */
   readonly allowedSegmentIds?: readonly number[];
 }): string {
   const totalStr = formatTimestamp(args.videoEndSec);
@@ -1129,30 +1145,32 @@ export function buildFinalSystemPromptCtxV1(args: {
     ? args.los.map((lo) => `  • ${lo.title}`).join("\n")
     : "  • (none)";
   const priorBlock = args.priorTopics.length > 0
-    ? `\n7. The following question topics have ALREADY been generated for earlier checkpoints. You MAY reinforce an important concept ONLY if your question tests a meaningfully different application or decision; do NOT verbatim-restate or paraphrase any of these:\n${args.priorTopics.join("\n")}`
+    ? `\n10. The following question topics have ALREADY been generated for earlier checkpoints. You MAY reinforce an important concept ONLY if your question tests a meaningfully different application or decision; do NOT verbatim-restate or paraphrase any of these:\n${args.priorTopics.join("\n")}`
     : "";
-  const allowedBlock = Array.isArray(args.allowedSegmentIds) && args.allowedSegmentIds.length > 0
-    ? `\n\nAllowed segment ids (cite EXCLUSIVELY from this list — any other integer will be discarded):\n  [${args.allowedSegmentIds.join(", ")}]`
+  const evidenceCount =
+    Array.isArray(args.allowedSegmentIds) && args.allowedSegmentIds.length > 0
+      ? args.allowedSegmentIds.length
+      : null;
+  const evidenceLine = evidenceCount !== null
+    ? `\n\nEvidence passages available: ${evidenceCount}. Each passage is shown to you in the Transcript below, prefixed by a bracketed reference tag like [NN]. These tags are INTERNAL METADATA for the \`sourceSegmentIds\` JSON field ONLY.`
     : "";
-  const groundingClause = Array.isArray(args.allowedSegmentIds) && args.allowedSegmentIds.length > 0
-    ? `2. Each question MUST cite at least one segment id from the "Allowed segment ids" list above. Do NOT cite any id outside that list, under any circumstance.`
-    : `2. Each question MUST cite at least one transcript segment id from the full course transcript provided.`;
   return `You are a training-content authoring assistant for Spectre, a training platform used by private golf and country clubs.
 
 Produce up to ${args.target} multiple-choice question${args.target === 1 ? "" : "s"} for the FINAL assessment of a ${totalStr} training course. Final-assessment questions sit at the END of the course after the employee has watched all content.
 
 Course-level coverage learning objectives:
-${loLines}${allowedBlock}
+${loLines}${evidenceLine}
 
 Constraints:
 1. Prioritize important POLICIES, PROCEDURES, and EMPLOYEE DECISIONS the learner must retain after training — not trivia.
-${groundingClause}
+2. Ground every question in content from the Transcript passages shown below. Put the bracketed reference tag(s) of each supporting passage into \`sourceSegmentIds\` ONLY. Cite 1-3 tags per question; do NOT list the whole passage set.
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim. Diverse question types are encouraged across the final-assessment set.
-4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
+4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited passage(s).
 5. Prefer questions that test APPLICATION or JUDGMENT (what should the employee do in a situation?) over bare recall.
-6. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.${priorBlock}
+6. EMPLOYEE-FACING TEXT PURITY — \`questionText\`, every \`options[].text\`, and \`explanation\` are read by employees. They MUST NOT contain the words "segment", "segments", "transcript", "passage id", "source", "reference", bracketed numbers like "[12]" / "[12, 13]", or any digit used as a provenance reference. Phrase the question as if you had watched the video yourself — never cite the transcript in prose.
+7. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", or option bodies in the stem. The stem is independently understandable without the options.
 8. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
-9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.`;
+9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem. Phrase it as a short teaching note — not as a citation.${priorBlock}`;
 }
 
 async function safeFail(

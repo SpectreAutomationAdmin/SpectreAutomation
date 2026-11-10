@@ -83,7 +83,14 @@ describe("§6.2 — worker-excluded ids never appear in chunk eligibility OR the
     }
   });
 
-  it("the FA ctx-v1 prompt enumerates allowed ids and never forbidden ones", () => {
+  // EP-TRAIN-4Y-AJ §2 — the AH slice emitted an explicit
+  // "Allowed segment ids: [...]" enumeration. The AI run proved this
+  // trips the text-leakage sanitiser via Qwen echoing the ids. AJ
+  // dropped the raw enumeration from the prompt; the chunk's
+  // eligibleSegmentIds is now a worker-side gate only. These tests
+  // are rewritten to assert the AJ contract (no enumeration + explicit
+  // forbidden-mentions clause).
+  it("the FA ctx-v1 prompt does NOT enumerate raw segment ids (AJ repair)", () => {
     const prompt = buildFinalSystemPromptCtxV1({
       target: 3,
       los: [{ id: "lo-7", title: "test LO" }],
@@ -91,14 +98,14 @@ describe("§6.2 — worker-excluded ids never appear in chunk eligibility OR the
       priorTopics: [],
       allowedSegmentIds: [0, 1, 2, 83, 84, 85],
     });
-    expect(prompt).toContain("Allowed segment ids");
-    expect(prompt).toContain("[0, 1, 2, 83, 84, 85]");
-    expect(prompt).toContain("any other integer will be discarded");
-    // No forbidden ids should appear in the allowed-id line
-    expect(prompt).not.toMatch(/Allowed segment ids[^\n]*\b(68|82|160|161)\b/);
+    expect(prompt).not.toContain("Allowed segment ids");
+    expect(prompt).not.toContain("[0, 1, 2, 83, 84, 85]");
+    expect(prompt).toContain("Evidence passages available: 6");
+    // No forbidden ids should appear anywhere in the prompt body either.
+    expect(prompt).not.toMatch(/\b(68|82|160|161)\b/);
   });
 
-  it("FA ctx-v1 prompt without allowedSegmentIds falls back to AF wording (backwards compat)", () => {
+  it("FA ctx-v1 prompt without allowedSegmentIds omits the evidence-count line entirely", () => {
     const prompt = buildFinalSystemPromptCtxV1({
       target: 3,
       los: [{ id: "lo-1", title: "x" }],
@@ -106,7 +113,9 @@ describe("§6.2 — worker-excluded ids never appear in chunk eligibility OR the
       priorTopics: [],
     });
     expect(prompt).not.toContain("Allowed segment ids");
-    expect(prompt).toContain("cite at least one transcript segment id from the full course transcript provided");
+    expect(prompt).not.toContain("Evidence passages available");
+    // The employee-facing-text purity clause is present regardless.
+    expect(prompt).toContain('MUST NOT contain the words "segment"');
   });
 });
 
