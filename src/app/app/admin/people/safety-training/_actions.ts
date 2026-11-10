@@ -20,8 +20,10 @@ import {
   startNewDraft,
   restoreCourse,
   deleteDraftCourse,
+  deleteDraftVersion,
   permanentlyDeleteCourse,
 } from "@/lib/hr/training/courses";
+import { logger } from "@/lib/observability/logger";
 import { remediateVideoFastStart } from "@/lib/hr/training/video";
 import {
   createQuestion,
@@ -249,9 +251,21 @@ export async function restoreCourseAction(
 // EP-TRAIN-4E B2 (2026-10-31): hard-delete a never-published draft
 // with zero legitimate training history.  Server-side dependency check
 // refuses any deletion that would destroy employee evidence.
+//
+// EP-TRAIN-4Y-AC §6 (2026-11-10): catch EVERY exception (not only
+// AppError). An unhandled Prisma FK-restrict error here was the
+// origin of digest 1445682726 — it bubbled past this handler and
+// tripped the dashboard's error boundary, giving the manager the
+// "Application error: a server-side exception has occurred" page
+// instead of an actionable inline message. The service-layer fix in
+// `deleteDraftCourse` cleans AI-generation children in-tx; this
+// handler is the backstop so any FUTURE surprise (new child table
+// added without a cascade, transient DB error, …) is logged with a
+// correlation id and returned as a safe error to the client — never
+// re-thrown to Next.js.
 export async function deleteDraftCourseAction(
   courseId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; correlationId?: string }> {
   const principal = await requirePrincipal();
   try {
     await deleteDraftCourse(principal, courseId);
@@ -259,16 +273,61 @@ export async function deleteDraftCourseAction(
     return { ok: true };
   } catch (err) {
     if (isAppError(err)) return { ok: false, error: err.safeMessage };
-    throw err;
+    const correlationId = `dd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    logger.error("hr.training.course.delete-draft.unexpected", {
+      courseId,
+      correlationId,
+      errorName: (err as Error)?.name,
+      errorMessage: (err as Error)?.message,
+      errorCode: (err as { code?: string })?.code,
+    });
+    return {
+      ok: false,
+      error: `Delete failed due to an unexpected error. Please try again or share this reference with support: ${correlationId}`,
+      correlationId,
+    };
+  }
+}
+
+// EP-TRAIN-4Y-AC §3B (2026-11-10): delete a single DRAFT version
+// without touching its parent course. Preserves PUBLISHED versions +
+// every employee-training evidence row attached to them.
+export async function deleteDraftVersionAction(
+  versionId: string,
+): Promise<{ ok: true } | { ok: false; error: string; correlationId?: string }> {
+  const principal = await requirePrincipal();
+  try {
+    await deleteDraftVersion(principal, versionId);
+    revalidatePath("/app/admin/people/safety-training");
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) return { ok: false, error: err.safeMessage };
+    const correlationId = `ddv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    logger.error("hr.training.version.delete-draft.unexpected", {
+      versionId,
+      correlationId,
+      errorName: (err as Error)?.name,
+      errorMessage: (err as Error)?.message,
+      errorCode: (err as { code?: string })?.code,
+    });
+    return {
+      ok: false,
+      error: `Delete failed due to an unexpected error. Please try again or share this reference with support: ${correlationId}`,
+      correlationId,
+    };
   }
 }
 
 // EP-TRAIN-4E B4 (2026-10-31): hard-delete a course regardless of
 // state when (and ONLY when) zero legitimate training records
 // reference it.  For disposable test courses on staging/dev.
+//
+// EP-TRAIN-4Y-AC §6 (2026-11-10): same catch-all pattern as
+// deleteDraftCourseAction — never let an unhandled Prisma or runtime
+// error bubble past the action.
 export async function permanentlyDeleteCourseAction(
   courseId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; correlationId?: string }> {
   const principal = await requirePrincipal();
   try {
     await permanentlyDeleteCourse(principal, courseId);
@@ -276,7 +335,19 @@ export async function permanentlyDeleteCourseAction(
     return { ok: true };
   } catch (err) {
     if (isAppError(err)) return { ok: false, error: err.safeMessage };
-    throw err;
+    const correlationId = `pd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    logger.error("hr.training.course.delete-permanent.unexpected", {
+      courseId,
+      correlationId,
+      errorName: (err as Error)?.name,
+      errorMessage: (err as Error)?.message,
+      errorCode: (err as { code?: string })?.code,
+    });
+    return {
+      ok: false,
+      error: `Permanent delete failed due to an unexpected error. Please try again or share this reference with support: ${correlationId}`,
+      correlationId,
+    };
   }
 }
 

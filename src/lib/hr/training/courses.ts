@@ -742,13 +742,90 @@ export async function deleteDraftCourse(
     );
   }
 
+  // EP-TRAIN-4Y-AC §4 + §5 (2026-11-10) — safety gates added around
+  // the AI-generation child graph before we attempt the course
+  // delete. The pre-AC implementation issued
+  // `tx.trainingCourse.delete()` with no awareness of these tables,
+  // and the Postgres default (NO ACTION / RESTRICT) on
+  // `TrainingQuestionAiGenerationRun_courseId_fkey` raised
+  // `PrismaClientUnknownRequestError` which bubbled past the server
+  // action and tripped the dashboard's error boundary (digest
+  // 1445682726 on the founder-reported staging repro).
+  //
+  // Refuse when a draft has already been promoted — promotion means
+  // an APPROVED question is live in the course, which qualifies as
+  // "legitimate training content" and MUST be archived, not deleted.
+  const approvedPromotionCount = await prisma.trainingQuestionAiDraftPromotion.count({
+    where: { draft: { courseId } },
+  });
+  if (approvedPromotionCount > 0) {
+    throw new ConflictError(
+      `Can't delete: ${approvedPromotionCount} AI-reviewed question(s) have been approved and promoted into this course. Archive it instead; its training content and audit history will remain available to administrators.`,
+    );
+  }
+  // Refuse when any generation run is still active — a stale worker
+  // could recreate rows against a DELETE'd course FK and raise
+  // confusing errors on the next tick. Give the manager an actionable
+  // message: wait or cancel first.
+  const activeRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+    where: {
+      courseId,
+      executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+    select: { id: true, executionStatus: true, leaseExpiresAt: true },
+  });
+  if (activeRuns.length > 0) {
+    throw new ConflictError(
+      `Can't delete: ${activeRuns.length} AI generation job(s) are still active for this course (${activeRuns.map((r) => r.executionStatus).join(", ")}). Wait for them to finish or cancel them first.`,
+    );
+  }
+  const activeTranscriptionJobs = await prisma.trainingTranscriptionJob.count({
+    where: {
+      courseVersion: { courseId },
+      state: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+  });
+  if (activeTranscriptionJobs > 0) {
+    throw new ConflictError(
+      `Can't delete: ${activeTranscriptionJobs} transcription job(s) are still running for this course. Wait for them to finish before deleting.`,
+    );
+  }
+
   const videoKeys = course.versions.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string");
 
+  // EP-TRAIN-4Y-AC §5 (2026-11-10) — clean the AI-generation children
+  // IN THE SAME TRANSACTION as the course delete. Order matters:
+  //   1. TrainingQuestionAiDraft — cascades to validation / review /
+  //      state-transition / operationKey / promotion (sidecar). We
+  //      checked above that no promotion exists, so the cascade is
+  //      safe.
+  //   2. TrainingGroundingProjection — unreferenced after drafts are
+  //      gone (drafts hold the single RESTRICT edge into it).
+  //   3. TrainingQuestionAiGenerationRun — no inbound RESTRICT edges
+  //      once drafts are gone (drafts' `generationRunId` is nullable).
+  //   4. TrainingTranscriptionJob — unreferenced course-version child.
+  //   5. TrainingCourse.delete — cascades through TrainingCourseVersion
+  //      (Cascade) to its remaining children: questions / options /
+  //      checkpoints / obligations (all onDelete:Cascade).
+  //
+  // Anything that fails here rolls the entire tx back, leaving the
+  // course visible + the AI data intact — safer than a half-done
+  // delete.
   await withPostingGuard(
     principal,
     course.clubId,
     "hr.training.course.delete-draft",
-    async (tx) => tx.trainingCourse.delete({ where: { id: courseId } }),
+    async (tx) => {
+      await tx.trainingQuestionAiDraft.deleteMany({ where: { courseId } });
+      await tx.trainingGroundingProjection.deleteMany({
+        where: { courseVersion: { courseId } },
+      });
+      await tx.trainingQuestionAiGenerationRun.deleteMany({ where: { courseId } });
+      await tx.trainingTranscriptionJob.deleteMany({
+        where: { courseVersion: { courseId } },
+      });
+      await tx.trainingCourse.delete({ where: { id: courseId } });
+    },
     { entityType: COURSE_ENTITY, entityId: courseId },
   );
   await audit(principal, {
@@ -768,6 +845,119 @@ export async function deleteDraftCourse(
   // A failed R2 delete leaves orphan bytes that cost nothing more than
   // a sweep by a future ops task.
   await cleanupUnreferencedVideoObjects(course.clubId, videoKeys, courseId);
+}
+
+// EP-TRAIN-4Y-AC §3B (2026-11-10) — delete a single DRAFT version
+// without touching its parent course. Used when a course has a
+// published version (preserved untouched: assignments, completions,
+// assessment history, obligations, compliance records) and a newer
+// draft version the manager wants to discard.
+//
+// Preserves:
+//   - the parent TrainingCourse row
+//   - every PUBLISHED / RETIRED sibling version
+//   - all employee-training evidence that references the PUBLISHED
+//     versions (progress / attempts / completions / assignments)
+//
+// Refuses:
+//   - the version is not DRAFT
+//   - the version is the only version (use `deleteDraftCourse` instead)
+//   - the version has promoted AI drafts
+//   - an active transcription / generation job holds the version
+export async function deleteDraftVersion(
+  principal: Principal,
+  versionId: string,
+): Promise<void> {
+  const version = await prisma.trainingCourseVersion.findUnique({
+    where: { id: versionId },
+    include: {
+      course: {
+        select: {
+          id: true,
+          clubId: true,
+          code: true,
+          title: true,
+          versions: { select: { id: true, state: true, publishedAt: true } },
+        },
+      },
+    },
+  });
+  if (!version) throw new NotFoundError(VERSION_ENTITY, versionId);
+  assertTenantOwned({ clubId: version.course.clubId }, principal);
+  requirePermission(principal, version.course.clubId, "hr:training:publish");
+
+  if (version.state !== "DRAFT" || version.publishedAt !== null) {
+    throw new ConflictError(
+      `Can't delete: version is ${version.state} (not DRAFT). Only unpublished draft versions can be deleted this way.`,
+    );
+  }
+  if (version.course.versions.length <= 1) {
+    throw new ConflictError(
+      "This is the only version of the course. Use 'Delete draft course' to remove the whole course instead.",
+    );
+  }
+  const promoted = await prisma.trainingQuestionAiDraftPromotion.count({
+    where: { draft: { courseVersionId: versionId } },
+  });
+  if (promoted > 0) {
+    throw new ConflictError(
+      `Can't delete: ${promoted} AI-reviewed question(s) have been approved on this draft version. Archive or publish instead.`,
+    );
+  }
+  const activeRuns = await prisma.trainingQuestionAiGenerationRun.count({
+    where: {
+      courseVersionId: versionId,
+      executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+  });
+  if (activeRuns > 0) {
+    throw new ConflictError(
+      `Can't delete: ${activeRuns} AI generation job(s) are still active for this draft version. Wait for them to finish or cancel them first.`,
+    );
+  }
+  const activeTranscription = await prisma.trainingTranscriptionJob.count({
+    where: { courseVersionId: versionId, state: { in: ["REQUESTED", "QUEUED", "RUNNING"] } },
+  });
+  if (activeTranscription > 0) {
+    throw new ConflictError(
+      `Can't delete: ${activeTranscription} transcription job(s) are still running for this draft version. Wait for them to finish before deleting.`,
+    );
+  }
+
+  const videoKey = version.videoStorageKey;
+  await withPostingGuard(
+    principal,
+    version.course.clubId,
+    "hr.training.version.delete-draft",
+    async (tx) => {
+      // Same child-cleanup order as deleteDraftCourse, scoped to this
+      // version only. The version row has onDelete:Cascade on its
+      // course FK; at the version level the AI tables are RESTRICT
+      // via the courseVersion FK, so we clean them explicitly.
+      await tx.trainingQuestionAiDraft.deleteMany({ where: { courseVersionId: versionId } });
+      await tx.trainingGroundingProjection.deleteMany({ where: { courseVersionId: versionId } });
+      await tx.trainingQuestionAiGenerationRun.deleteMany({ where: { courseVersionId: versionId } });
+      await tx.trainingTranscriptionJob.deleteMany({ where: { courseVersionId: versionId } });
+      await tx.trainingCourseVersion.delete({ where: { id: versionId } });
+    },
+    { entityType: VERSION_ENTITY, entityId: versionId },
+  );
+  await audit(principal, {
+    action: "hr.training.version.delete-draft",
+    entityType: VERSION_ENTITY,
+    entityId: versionId,
+    clubId: version.course.clubId,
+    before: {
+      courseId: version.course.id,
+      courseCode: version.course.code,
+      versionNumber: version.version,
+      state: version.state,
+      videoStorageKey: videoKey ?? null,
+    },
+  });
+  if (videoKey) {
+    await cleanupUnreferencedVideoObjects(version.course.clubId, [videoKey], version.course.id);
+  }
 }
 
 /** PERMANENTLY delete a course regardless of state — ONLY when zero
@@ -802,13 +992,60 @@ export async function permanentlyDeleteCourse(
     );
   }
 
+  // EP-TRAIN-4Y-AC §4 + §5 (2026-11-10) — same AI-generation safety
+  // gates + child-cleanup order as deleteDraftCourse. A stale
+  // generation run or an approved AI question would otherwise raise a
+  // confusing crash here too (the pre-AC implementation used the
+  // same bare `trainingCourse.delete()`).
+  const approvedPromotionCount = await prisma.trainingQuestionAiDraftPromotion.count({
+    where: { draft: { courseId } },
+  });
+  if (approvedPromotionCount > 0) {
+    throw new ConflictError(
+      `Can't permanently delete: ${approvedPromotionCount} AI-reviewed question(s) have been approved and promoted into this course. Archive it instead.`,
+    );
+  }
+  const activeRuns = await prisma.trainingQuestionAiGenerationRun.count({
+    where: {
+      courseId,
+      executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+  });
+  if (activeRuns > 0) {
+    throw new ConflictError(
+      `Can't permanently delete: ${activeRuns} AI generation job(s) are still active for this course. Wait for them to finish or cancel them first.`,
+    );
+  }
+  const activeTranscriptionJobs = await prisma.trainingTranscriptionJob.count({
+    where: {
+      courseVersion: { courseId },
+      state: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+  });
+  if (activeTranscriptionJobs > 0) {
+    throw new ConflictError(
+      `Can't permanently delete: ${activeTranscriptionJobs} transcription job(s) are still running for this course. Wait for them to finish first.`,
+    );
+  }
+
   const videoKeys = course.versions.map((v) => v.videoStorageKey).filter((k): k is string => typeof k === "string");
 
   await withPostingGuard(
     principal,
     course.clubId,
     "hr.training.course.delete-permanent",
-    async (tx) => tx.trainingCourse.delete({ where: { id: courseId } }),
+    async (tx) => {
+      // Same AI-child cleanup order as deleteDraftCourse.
+      await tx.trainingQuestionAiDraft.deleteMany({ where: { courseId } });
+      await tx.trainingGroundingProjection.deleteMany({
+        where: { courseVersion: { courseId } },
+      });
+      await tx.trainingQuestionAiGenerationRun.deleteMany({ where: { courseId } });
+      await tx.trainingTranscriptionJob.deleteMany({
+        where: { courseVersion: { courseId } },
+      });
+      await tx.trainingCourse.delete({ where: { id: courseId } });
+    },
     { entityType: COURSE_ENTITY, entityId: courseId },
   );
   await audit(principal, {

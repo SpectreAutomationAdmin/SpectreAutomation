@@ -207,8 +207,19 @@ function CourseRow({
   // EP-TRAIN-4E B1 (2026-10-31): classify the row for state-aware
   // action rendering.  "active-draft-only" means the course has
   // NEVER been published (hasHistory is false AND no currentVersion).
-  const rowState: "active-draft-only" | "active-published" =
-    course.currentVersion ? "active-published" : "active-draft-only";
+  //
+  // EP-TRAIN-4Y-AC §3B (2026-11-10): "active-published-with-draft"
+  // adds a new classifier for courses that have both a PUBLISHED
+  // version AND an unpublished DRAFT version. The row renders a
+  // version-scoped "Delete draft" action that removes only the draft
+  // version — the published version + its employee-training evidence
+  // are preserved untouched.
+  const rowState: "active-draft-only" | "active-published" | "active-published-with-draft" =
+    course.currentVersion
+      ? course.draftVersion
+        ? "active-published-with-draft"
+        : "active-published"
+      : "active-draft-only";
   return (
     <tr data-testid={`training-active-row-${course.id}`}>
       <td>
@@ -240,6 +251,7 @@ function CourseRow({
               courseTitle={course.title}
               state={rowState}
               hasHistory={course.hasHistory}
+              draftVersionId={course.draftVersion?.id ?? null}
             />
           )}
         </div>

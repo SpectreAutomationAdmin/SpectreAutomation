@@ -1,23 +1,26 @@
 "use client";
 
 // EP-TRAIN-4E B1 (2026-10-31) — course-row actions component.
-//
-// Discreet inline actions on each row of the Safety & Training
-// catalogue.  Follows the house convention (inline buttons +
-// window.confirm, no bespoke modal primitive — see
-// src/app/app/admin/governance/monthly-package/archive/RowActions.tsx
-// for the canonical reference pattern).
+// EP-TRAIN-4Y-AC §3+§5+§6 (2026-11-10):
+//   §3B — new "active-published-with-draft" state renders a
+//         version-scoped Delete draft that targets the DRAFT version
+//         alone, preserving the published version + its employee-
+//         training evidence.
+//   §5 — confirmation copy updated to the directive's exact phrasing
+//        and now identifies the course. For the published-with-draft
+//        case the dialog explicitly states the published version will
+//        remain available.
+//   §6 — error UI stays inline; the action callers are already
+//        wrapped so a failure surfaces here as a readable message
+//        with a correlation id, never a dashboard crash.
 //
 // State-aware actions:
-//   - active DRAFT without publish history → "Delete draft" (hard delete)
-//   - active PUBLISHED → "Archive"
-//   - archived (course.retiredAt !== null) → "Restore"
-//   - any state WITH zero history → optional "Permanent delete" (secondary)
+//   - "active-draft-only"            → "Delete draft" (hard delete of the whole course)
+//   - "active-published-with-draft"  → "Delete draft version" (delete only the DRAFT version)
+//   - "active-published"             → "Archive"
+//   - "archived" + no history        → "Restore" + optional "Delete permanently"
 //
-// Edit/View is handled by the parent row's main link; this component
-// renders the destructive / lifecycle controls only.
-//
-// Server-side checks live in src/lib/hr/training/courses.ts.  This
+// Server-side checks live in src/lib/hr/training/courses.ts. This
 // client component only gates by state + offers an explicit confirm;
 // the server is still the source of truth.
 
@@ -27,6 +30,7 @@ import {
   archiveCourseAction,
   restoreCourseAction,
   deleteDraftCourseAction,
+  deleteDraftVersionAction,
   permanentlyDeleteCourseAction,
 } from "./_actions";
 
@@ -34,11 +38,18 @@ export interface CourseRowActionsProps {
   courseId: string;
   courseCode: string;
   courseTitle: string;
-  state: "active-draft-only" | "active-published" | "archived";
+  state:
+    | "active-draft-only"
+    | "active-published"
+    | "active-published-with-draft"
+    | "archived";
   /** Whether any TrainingProgress/Attempt/Completion/Assignment rows
    *  exist (any > 0 means permanent delete is unsafe and must be
    *  disabled). */
   hasHistory: boolean;
+  /** EP-TRAIN-4Y-AC §3B — version id when the course carries both a
+   *  published version AND an unpublished draft. Null otherwise. */
+  draftVersionId?: string | null;
 }
 
 export default function CourseRowActions({
@@ -47,12 +58,16 @@ export default function CourseRowActions({
   courseTitle,
   state,
   hasHistory,
+  draftVersionId,
 }: CourseRowActionsProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
 
-  function run(label: string, fn: () => Promise<{ ok: true } | { ok: false; error: string }>) {
+  function run(
+    _label: string,
+    fn: () => Promise<{ ok: true } | { ok: false; error: string; correlationId?: string }>,
+  ) {
     setErr(null);
     startTransition(async () => {
       const result = await fn();
@@ -75,8 +90,21 @@ export default function CourseRowActions({
   }
 
   function onDeleteDraft() {
-    if (!window.confirm(`Delete the draft course "${courseTitle}" (${courseCode})?\n\nThis cannot be undone.  The draft, its questions, checkpoints, and any uploaded video will be removed.`)) return;
+    // EP-TRAIN-4Y-AC §5 (2026-11-10) — directive-specified copy.
+    // "Delete this draft? This action cannot be undone." + course
+    // identity.
+    const msg = `Delete this draft? This action cannot be undone.\n\nCourse: "${courseTitle}" (${courseCode})\n\nThe draft, its questions, checkpoints, AI-generated candidates, generation history, and any uploaded video will be removed.`;
+    if (!window.confirm(msg)) return;
     run("delete-draft", () => deleteDraftCourseAction(courseId));
+  }
+
+  function onDeleteDraftVersion() {
+    if (!draftVersionId) return;
+    // EP-TRAIN-4Y-AC §5 (2026-11-10) — published-with-draft copy
+    // explicitly states the published version will remain available.
+    const msg = `Delete this draft? This action cannot be undone.\n\nCourse: "${courseTitle}" (${courseCode})\n\nOnly the unpublished DRAFT version will be removed.\nThe published version remains available — employee assignments, completions, assessment history, and compliance records are preserved.`;
+    if (!window.confirm(msg)) return;
+    run("delete-draft-version", () => deleteDraftVersionAction(draftVersionId));
   }
 
   function onPermanentDelete() {
@@ -92,7 +120,7 @@ export default function CourseRowActions({
   return (
     <div className="flex flex-col items-end gap-1" data-testid={`training-course-row-actions-${courseId}`}>
       <div className="flex items-center gap-3">
-        {state === "active-published" && (
+        {(state === "active-published" || state === "active-published-with-draft") && (
           <button
             type="button"
             onClick={onArchive}
@@ -101,6 +129,18 @@ export default function CourseRowActions({
             data-testid={`training-course-archive-${courseId}`}
           >
             Archive
+          </button>
+        )}
+        {state === "active-published-with-draft" && draftVersionId && (
+          <button
+            type="button"
+            onClick={onDeleteDraftVersion}
+            disabled={isPending}
+            className="text-xs text-stone-500 hover:text-red-800 underline underline-offset-4"
+            data-testid={`training-course-delete-draft-version-${courseId}`}
+            title="Delete only the unpublished draft version. The published version remains available."
+          >
+            Delete draft version
           </button>
         )}
         {state === "active-draft-only" && !hasHistory && (
@@ -143,7 +183,7 @@ export default function CourseRowActions({
       {err && (
         <span
           role="alert"
-          className="text-[11px] text-red-700"
+          className="text-[11px] text-red-700 max-w-[320px]"
           data-testid={`training-course-row-error-${courseId}`}
         >
           {err}
