@@ -175,24 +175,50 @@ export default async function ManagerReviewPage({
     // ARCHIVED parents, which the main query excluded) and inherit
     // the oldest ancestor's destination. This keeps the Checkpoints /
     // Final-assessment tabs accurate across edits.
-    const ancestorIds = rows
-      .map((r) => r.supersedesDraftId)
-      .filter((x): x is string => typeof x === "string" && x.length > 0);
-    const ancestors = ancestorIds.length
-      ? await prisma.trainingQuestionAiDraft.findMany({
-          where: {
-            clubId,
-            courseVersionId: version.id,
-            id: { in: ancestorIds },
-          },
-          select: {
-            id: true,
-            contentHash: true,
-            supersedesDraftId: true,
-            promotion: { select: { destination: true } },
-          },
-        })
-      : [];
+    //
+    // Chains up to 5 levels deep are resolved via BFS, which handles
+    // the realistic case of a manager editing twice (an initial AB §3
+    // bulk-cleanup + a subsequent manual edit, both of which supersede
+    // further). We stop at depth 5 so a malformed cycle terminates.
+    const ancestorsById = new Map<
+      string,
+      { id: string; contentHash: string; supersedesDraftId: string | null; promotion: { destination: string | null } | null }
+    >();
+    let frontier = Array.from(
+      new Set(
+        rows
+          .map((r) => r.supersedesDraftId)
+          .filter((x): x is string => typeof x === "string" && x.length > 0),
+      ),
+    );
+    for (let depth = 0; depth < 5 && frontier.length > 0; depth++) {
+      const batch = await prisma.trainingQuestionAiDraft.findMany({
+        where: {
+          clubId,
+          courseVersionId: version.id,
+          id: { in: frontier.filter((id) => !ancestorsById.has(id)) },
+        },
+        select: {
+          id: true,
+          contentHash: true,
+          supersedesDraftId: true,
+          promotion: { select: { destination: true } },
+        },
+      });
+      if (batch.length === 0) break;
+      for (const a of batch) {
+        ancestorsById.set(a.id, {
+          id: a.id,
+          contentHash: a.contentHash,
+          supersedesDraftId: a.supersedesDraftId,
+          promotion: a.promotion ?? null,
+        });
+      }
+      frontier = batch
+        .map((a) => a.supersedesDraftId)
+        .filter((x): x is string => typeof x === "string" && x.length > 0 && !ancestorsById.has(x));
+    }
+    const ancestors = Array.from(ancestorsById.values());
     // Deep resolution: if an ancestor is ALSO an edit, follow further
     // up. One extra findMany covers the realistic depth (manager edits
     // on this slice are one level deep); if a future slice stacks
@@ -226,11 +252,12 @@ export default async function ManagerReviewPage({
         destById.set(row.id, { kind: own.kind, groupKey: own.groupKey });
         continue;
       }
-      // Walk up at most 3 levels of supersedesDraftId to inherit.
+      // Walk up to 5 levels of supersedesDraftId to inherit — matches
+      // the BFS fan-out depth above.
       let cursor: string | null = row.supersedesDraftId ?? null;
       let resolvedKind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" = "UNKNOWN";
       let resolvedGroup: string | null = null;
-      for (let depth = 0; depth < 3 && cursor; depth++) {
+      for (let depth = 0; depth < 5 && cursor; depth++) {
         const anc = destByIdRaw.get(cursor);
         if (anc && anc.kind !== "UNKNOWN") {
           resolvedKind = anc.kind;
