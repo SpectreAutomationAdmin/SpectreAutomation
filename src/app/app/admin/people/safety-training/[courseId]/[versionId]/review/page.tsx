@@ -157,6 +157,7 @@ export default async function ManagerReviewPage({
         state: true,
         draftJson: true,
         contentHash: true,
+        supersedesDraftId: true,
         promotion: { select: { questionId: true, destination: true } },
       },
       take: 100,
@@ -166,13 +167,85 @@ export default async function ManagerReviewPage({
     // mapping to the client shape. Post-promotion rows prefer the
     // sidecar's immutable `destination`; pre-promotion rows fall back
     // to the shortfallReasonJson resolver.
+    //
+    // EP-TRAIN-4Y-AB §3 — manager-edited drafts carry a fresh
+    // contentHash that is absent from the original run's
+    // shortfallReasonJson, so the resolver alone classifies them as
+    // UNKNOWN. Walk the `supersedesDraftId` ancestry (including
+    // ARCHIVED parents, which the main query excluded) and inherit
+    // the oldest ancestor's destination. This keeps the Checkpoints /
+    // Final-assessment tabs accurate across edits.
+    const ancestorIds = rows
+      .map((r) => r.supersedesDraftId)
+      .filter((x): x is string => typeof x === "string" && x.length > 0);
+    const ancestors = ancestorIds.length
+      ? await prisma.trainingQuestionAiDraft.findMany({
+          where: {
+            clubId,
+            courseVersionId: version.id,
+            id: { in: ancestorIds },
+          },
+          select: {
+            id: true,
+            contentHash: true,
+            supersedesDraftId: true,
+            promotion: { select: { destination: true } },
+          },
+        })
+      : [];
+    // Deep resolution: if an ancestor is ALSO an edit, follow further
+    // up. One extra findMany covers the realistic depth (manager edits
+    // on this slice are one level deep); if a future slice stacks
+    // edits multiple deep, this still terminates — it just skips the
+    // deeper ancestors (destination falls back to UNKNOWN for them,
+    // which is the pre-AB behaviour).
+    const allForResolver = [
+      ...rows.map((r) => ({ id: r.id, contentHash: r.contentHash })),
+      ...ancestors.map((a) => ({ id: a.id, contentHash: a.contentHash })),
+    ];
     const annotated = annotateDraftsWithDestination({
-      drafts: rows.map((r) => ({ id: r.id, contentHash: r.contentHash })),
+      drafts: allForResolver,
       shortfallReasonJson: latestRun?.shortfallReasonJson ?? null,
     });
-    const destById = new Map(
+    const destByIdRaw = new Map(
       annotated.map((a) => [a.draft.id, { kind: a.destination, groupKey: a.planGroupKey }] as const),
     );
+    const ancestorPromoById = new Map(
+      ancestors.map((a) => [a.id, a.promotion?.destination ?? null] as const),
+    );
+    const ancestorParentById = new Map(
+      ancestors.map((a) => [a.id, a.supersedesDraftId ?? null] as const),
+    );
+    const destById = new Map<
+      string,
+      { kind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN"; groupKey: string | null }
+    >();
+    for (const row of rows) {
+      const own = destByIdRaw.get(row.id);
+      if (own && own.kind !== "UNKNOWN") {
+        destById.set(row.id, { kind: own.kind, groupKey: own.groupKey });
+        continue;
+      }
+      // Walk up at most 3 levels of supersedesDraftId to inherit.
+      let cursor: string | null = row.supersedesDraftId ?? null;
+      let resolvedKind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" = "UNKNOWN";
+      let resolvedGroup: string | null = null;
+      for (let depth = 0; depth < 3 && cursor; depth++) {
+        const anc = destByIdRaw.get(cursor);
+        if (anc && anc.kind !== "UNKNOWN") {
+          resolvedKind = anc.kind;
+          resolvedGroup = anc.groupKey;
+          break;
+        }
+        const promo = ancestorPromoById.get(cursor);
+        if (promo === "CHECKPOINT" || promo === "FINAL_ASSESSMENT") {
+          resolvedKind = promo;
+          break;
+        }
+        cursor = ancestorParentById.get(cursor) ?? null;
+      }
+      destById.set(row.id, { kind: resolvedKind, groupKey: resolvedGroup });
+    }
 
     drafts = rows.map((d) => {
       let body: {
