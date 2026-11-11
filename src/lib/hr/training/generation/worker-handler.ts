@@ -94,6 +94,7 @@ import {
   msToCostMicros,
   preInvocationBudgetGate,
   PILOT_BUDGET_USD_MICROS,
+  getPilotBudgetMicros,
 } from "./pilot-budget-guard";
 
 export interface HandlerDeps {
@@ -198,12 +199,16 @@ export async function handleGenerateJob(
   const plannedGroupCount = plan.proposedCheckpointGroups.length + 1;
   const plannedCallsThisAttempt = 1 + plannedGroupCount;
 
+  // EP-TRAIN-4Y-AN §2 — per-pilot budget override. Falls back to the
+  // $1 global when no override exists. ALL downstream
+  // preInvocationBudgetGate calls thread this same value.
+  const pilotBudgetMicros = getPilotBudgetMicros(claim.courseVersionId);
   const gatePreMetadata = preInvocationBudgetGate({
     priorAttemptCostMicros,
     currentAttemptCostMicros: 0,
     callsRemainingThisAttempt: plannedCallsThisAttempt,
     coldBootConsumed: false,
-  });
+  }, { budgetMicros: pilotBudgetMicros });
   if (!gatePreMetadata.allow) {
     logger.warn("training.generation.worker.pilot_budget_exceeded_pre_metadata", {
       runId: claim.runId,
@@ -211,7 +216,7 @@ export async function handleGenerateJob(
       courseVersionId: claim.courseVersionId,
       priorAttemptCostMicros,
       projectedTotalMicros: gatePreMetadata.projectedTotalMicros,
-      budgetMicros: PILOT_BUDGET_USD_MICROS,
+      budgetMicros: pilotBudgetMicros,
     });
     await safeFail(
       db,
@@ -504,7 +509,7 @@ export async function handleGenerateJob(
         currentAttemptCostMicros: msToCostMicros(totalInferenceMs),
         callsRemainingThisAttempt: remainingGroupCallsThisAttempt,
         coldBootConsumed,
-      });
+      }, { budgetMicros: pilotBudgetMicros });
       if (!gateBeforeGroup.allow) {
         logger.warn("training.generation.worker.pilot_budget_exceeded_mid_loop", {
           runId: claim.runId,
@@ -514,7 +519,7 @@ export async function handleGenerateJob(
           priorAttemptCostMicros,
           currentInferenceMs: totalInferenceMs,
           projectedTotalMicros: gateBeforeGroup.projectedTotalMicros,
-          budgetMicros: PILOT_BUDGET_USD_MICROS,
+          budgetMicros: pilotBudgetMicros,
           remainingGroupCalls: remainingGroupCallsThisAttempt,
         });
         await safeFail(

@@ -28,6 +28,37 @@ import { prisma as defaultPrisma } from "@/lib/prisma";
  *  cap in generation-service.ts and the $10 Modal account cap. */
 export const PILOT_BUDGET_USD_MICROS = 1_000_000; // $1.00 × 1e6
 
+/** EP-TRAIN-4Y-AN §2 — per-pilot budget overrides.
+ *
+ *  Scoped to specific (courseVersionId) tuples so a raise is applied
+ *  ONLY to the authorised pilot (directive §2 constraint: "Do not
+ *  change global budget policies for other tenants"). Any pilot NOT
+ *  in this table falls back to `PILOT_BUDGET_USD_MICROS` ($1.00).
+ *
+ *  Each entry must carry (versionId, budgetUsdMicros, authorisation
+ *  reference) as part of the auditable record. The auth reference is
+ *  a founder-issued directive slug — Spectre's generation history log
+ *  then ties the elevated spend to the directive that authorised it.
+ */
+export const PILOT_BUDGET_OVERRIDES: ReadonlyMap<string, {
+  readonly budgetUsdMicros: number;
+  readonly authorisation: string;
+}> = new Map([
+  // Silver Springs onboarding pilot — AN §1 raise to $2 for the
+  // single bounded shortfall-only completion attempt.
+  ["cmw8n6z9a000az4nx56vwh02f", {
+    budgetUsdMicros: 2_000_000,
+    authorisation: "EP-TRAIN-4Y-AN founder directive 2026-11-10",
+  }],
+]);
+
+/** Resolve the budget for a (courseVersionId). Returns the override if
+ *  one exists; otherwise the default $1 pilot cap. */
+export function getPilotBudgetMicros(courseVersionId: string): number {
+  const override = PILOT_BUDGET_OVERRIDES.get(courseVersionId);
+  return override?.budgetUsdMicros ?? PILOT_BUDGET_USD_MICROS;
+}
+
 // Observed Qwen-on-A10G runtime in prior EP-TRAIN-4Y-N / 4Y-V runs:
 // successful calls completed in 20-32 s typical, 84 s maximum; the
 // 4Y-V attempt 1 failure root cause was forced cancellation at the
@@ -89,18 +120,28 @@ export interface BudgetGateDecision {
 }
 
 /** Pure, DB-free, synchronous: decide whether the NEXT Modal
- *  invocation is permitted by the pilot budget. */
-export function preInvocationBudgetGate(state: PilotBudgetState): BudgetGateDecision {
+ *  invocation is permitted by the pilot budget.
+ *
+ *  EP-TRAIN-4Y-AN §2 — accepts an optional `budgetMicros` override so
+ *  per-pilot raises (e.g. the Silver Springs $2 directive) apply ONLY
+ *  to the authorised pilot. The default is the $1 global.
+ */
+export function preInvocationBudgetGate(
+  state: PilotBudgetState,
+  opts: { readonly budgetMicros?: number } = {},
+): BudgetGateDecision {
   const projected = projectPilotWorstCaseMicros(state);
-  if (projected > PILOT_BUDGET_USD_MICROS) {
+  const budgetMicros = opts.budgetMicros ?? PILOT_BUDGET_USD_MICROS;
+  if (projected > budgetMicros) {
+    const budgetUsd = (budgetMicros / 1_000_000).toFixed(2);
     return {
       allow: false,
       projectedTotalMicros: projected,
-      budgetMicros: PILOT_BUDGET_USD_MICROS,
+      budgetMicros,
       reason:
-        `Pilot $1 budget would be exceeded. Projected worst-case ` +
+        `Pilot $${budgetUsd} budget would be exceeded. Projected worst-case ` +
         `cumulative cost: ${projected} micros (budget: ` +
-        `${PILOT_BUDGET_USD_MICROS} micros). ` +
+        `${budgetMicros} micros). ` +
         `Prior-attempt cost: ${state.priorAttemptCostMicros}; ` +
         `current attempt: ${state.currentAttemptCostMicros}; ` +
         `remaining calls: ${state.callsRemainingThisAttempt}; ` +
@@ -110,7 +151,7 @@ export function preInvocationBudgetGate(state: PilotBudgetState): BudgetGateDeci
   return {
     allow: true,
     projectedTotalMicros: projected,
-    budgetMicros: PILOT_BUDGET_USD_MICROS,
+    budgetMicros,
   };
 }
 
