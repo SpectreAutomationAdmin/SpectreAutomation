@@ -87,6 +87,11 @@ import {
   type NormalisationTransform,
 } from "../ai-review/question-text-normaliser";
 import {
+  buildRetainedRejectedProposal,
+  type RetainedRejectedProposal,
+  type RejectionStage,
+} from "./rejected-proposal-retention";
+import {
   issuePilotAuthorization,
   ModalContractError,
   ENV_FINGERPRINT_SECRET,
@@ -430,6 +435,12 @@ export async function handleGenerateJob(
       refusedForSafety: boolean;
       refusalReason?: string;
     }>;
+    // EP-TRAIN-4Y-AR §2 — tenant-scoped, admin-access-only
+    // retention of rejected proposals so future diagnostics can
+    // read the ACTUAL text (not just finding codes). Preserves
+    // original + normalised stems, options, explanation, source
+    // segment ids, stage + rule codes, and a 30-day expiry.
+    rejectedProposals: RetainedRejectedProposal[];
     dedupDroppedCount: number;
     persistedCount: number;
     modalElapsedMs: number;
@@ -692,6 +703,7 @@ export async function handleGenerateJob(
         sanitizerDroppedCount: 0,
         sanitizerDropReasons: [],
         normalisationTrace: [],
+        rejectedProposals: [],
         dedupDroppedCount: 0,
         persistedCount: 0,
         modalElapsedMs: modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.generate,
@@ -719,6 +731,30 @@ export async function handleGenerateJob(
             citedOutsideEligible: citedOutside,
             citedExcluded,
           });
+          // AR §2 — retain full rejected proposal for admin diagnosis.
+          diag.rejectedProposals.push(
+            buildRetainedRejectedProposal({
+              proposalIndex: pi,
+              rejectionStage: "GROUNDING",
+              proposal: {
+                questionText: p.questionText,
+                options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+                explanation: p.explanation ?? null,
+                sourceSegmentIds: p.sourceSegmentIds,
+                questionType: p.questionType,
+              },
+              normalisedQuestionText: p.questionText,
+              normalisationTransforms: [],
+              normalisationRefusalReason: null,
+              findingCodes: [
+                citedOutside.length ? `CITED_OUTSIDE_ELIGIBLE:${citedOutside.join(",")}` : "",
+                citedExcluded.length ? `CITED_EXCLUDED:${citedExcluded.join(",")}` : "",
+              ].filter(Boolean).join(";"),
+              rejectedAt: new Date(),
+              generationRunId: claim.runId,
+              groupId: g.id,
+            }),
+          );
           continue;
         }
 
@@ -742,6 +778,32 @@ export async function handleGenerateJob(
           refusalReason: norm.refusalReason,
         });
 
+        // AR §2 — retention helper: build a retained record for a
+        // rejection at this stage (stem = normalised when the
+        // normaliser produced one, else original).
+        const retainRejection = (stage: RejectionStage, findingCodes: string): void => {
+          diag.rejectedProposals.push(
+            buildRetainedRejectedProposal({
+              proposalIndex: pi,
+              rejectionStage: stage,
+              proposal: {
+                questionText: p.questionText,
+                options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+                explanation: p.explanation ?? null,
+                sourceSegmentIds: p.sourceSegmentIds,
+                questionType: p.questionType,
+              },
+              normalisedQuestionText: textForSanitiser,
+              normalisationTransforms: [...norm.transforms],
+              normalisationRefusalReason: norm.refusalReason ?? null,
+              findingCodes,
+              rejectedAt: new Date(),
+              generationRunId: claim.runId,
+              groupId: g.id,
+            }),
+          );
+        };
+
         // EP-TRAIN-4Y-AA §7 — sanitiser drop BEFORE dedup. A
         // proposal that passes grounding but carries internal
         // pipeline terminology ("according to the transcript",
@@ -761,10 +823,16 @@ export async function handleGenerateJob(
         if (!san.ok) {
           diag.sanitizerDroppedCount++;
           sanitizerDropCount++;
+          const findingCodes = codesForAudit(san);
           diag.sanitizerDropReasons.push({
             proposalIndex: pi,
-            findingCodes: codesForAudit(san),
+            findingCodes,
           });
+          // AR §2 — retain. Classify as NORMALISATION_REFUSED when
+          // the normaliser safety-gated AND the sanitiser then
+          // failed on content the normaliser would have attempted
+          // to clean; otherwise ordinary SANITISER stage.
+          retainRejection(norm.refusedForSafety ? "NORMALISATION_REFUSED" : "SANITISER", findingCodes);
           continue;
         }
 
@@ -783,10 +851,12 @@ export async function handleGenerateJob(
         if (!struct.ok) {
           diag.sanitizerDroppedCount++;
           sanitizerDropCount++;
+          const findingCodes = ["STRUCTURE:" + struct.findings.map((f) => f.code).join(",")].join("");
           diag.sanitizerDropReasons.push({
             proposalIndex: pi,
-            findingCodes: ["STRUCTURE:" + struct.findings.map((f) => f.code).join(",")].join(""),
+            findingCodes,
           });
+          retainRejection("STRUCTURAL", findingCodes);
           continue;
         }
 
@@ -852,6 +922,7 @@ export async function handleGenerateJob(
         if (isDuplicate) {
           dedupDropCount++;
           diag.dedupDroppedCount++;
+          retainRejection("DEDUP", `DEDUP:${decision.verdict}`);
           continue;
         }
 
