@@ -82,6 +82,11 @@ import {
   codesForAudit,
 } from "../ai-review/question-text-sanitizer";
 import {
+  normaliseQuestionStem,
+  normalisationAuditSummary,
+  type NormalisationTransform,
+} from "../ai-review/question-text-normaliser";
+import {
   issuePilotAuthorization,
   ModalContractError,
   ENV_FINGERPRINT_SECRET,
@@ -410,6 +415,21 @@ export async function handleGenerateJob(
       proposalIndex: number;
       findingCodes: string;
     }>;
+    // EP-TRAIN-4Y-AQ §3 — deterministic normalisation trace. Records
+    // every transform applied to a stem BEFORE the sanitiser saw it,
+    // so audit can reconstruct the original text + the rule(s) used.
+    // Refusals (safety-gate trips) are recorded too, with
+    // appliedTransforms empty and refusalReason set. Normalisation
+    // NEVER bypasses the sanitiser — it only changes the TEXT the
+    // sanitiser then validates.
+    normalisationTrace: Array<{
+      proposalIndex: number;
+      beforeText: string;
+      afterText: string;
+      appliedTransforms: NormalisationTransform[];
+      refusedForSafety: boolean;
+      refusalReason?: string;
+    }>;
     dedupDroppedCount: number;
     persistedCount: number;
     modalElapsedMs: number;
@@ -671,6 +691,7 @@ export async function handleGenerateJob(
         groundingDropReasons: [],
         sanitizerDroppedCount: 0,
         sanitizerDropReasons: [],
+        normalisationTrace: [],
         dedupDroppedCount: 0,
         persistedCount: 0,
         modalElapsedMs: modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.generate,
@@ -701,13 +722,39 @@ export async function handleGenerateJob(
           continue;
         }
 
+        // EP-TRAIN-4Y-AQ §3 — deterministic normalisation stage.
+        // Runs BETWEEN structured parse and sanitiser. Only alters
+        // the questionText (stem). Only strips unambiguous leading
+        // source-reference framing + trailing parenthetical segment
+        // references. ANY ambiguous situation (multiple competing
+        // leading rules, empty result, lost WH-word, idempotency
+        // violation) is a safety-fail — the original text is handed
+        // unchanged to the sanitiser. Options, correct-answer,
+        // explanation, provenance are NEVER touched.
+        const norm = normaliseQuestionStem({ questionText: p.questionText });
+        const textForSanitiser = norm.ok ? norm.normalisedText : p.questionText;
+        diag.normalisationTrace.push({
+          proposalIndex: pi,
+          beforeText: norm.originalText.slice(0, 240),
+          afterText: norm.normalisedText.slice(0, 240),
+          appliedTransforms: [...norm.transforms],
+          refusedForSafety: norm.refusedForSafety,
+          refusalReason: norm.refusalReason,
+        });
+
         // EP-TRAIN-4Y-AA §7 — sanitiser drop BEFORE dedup. A
         // proposal that passes grounding but carries internal
         // pipeline terminology ("according to the transcript",
         // "Segment IDs: [...]", "[Last Name]", etc.) is discarded
         // so it never reaches persistence.
+        //
+        // AQ: the sanitiser sees the (potentially) NORMALISED stem,
+        // so a proposal whose ONLY sin was a leading "According to
+        // the training material, …" or a trailing "(see segment 4)"
+        // can now pass. Every other sanitiser rule still fires
+        // untouched — options, explanation, mid-sentence refs.
         const san = checkEmployeeFacingText({
-          questionText: p.questionText,
+          questionText: textForSanitiser,
           options: p.options.map((o) => ({ text: o.text })),
           explanation: p.explanation ?? null,
         });
@@ -729,7 +776,7 @@ export async function handleGenerateJob(
         // the DB.
         const { checkQuestionStructure } = await import("@/lib/hr/training/ai-review/question-structure-validator");
         const struct = checkQuestionStructure({
-          questionText: p.questionText,
+          questionText: textForSanitiser,
           options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
           explanation: p.explanation ?? null,
         });
@@ -744,9 +791,16 @@ export async function handleGenerateJob(
         }
 
         // Compute canonical body + content hash for dedup + persist.
+        //
+        // EP-TRAIN-4Y-AQ §4 — the NORMALISED stem is the one that
+        // participates in content-hashing, dedup, and persistence,
+        // because that's what the employee will read. Options,
+        // correct-answer identity, explanation, sourceSegmentIds —
+        // ALL untouched. The audit trail in diag.normalisationTrace
+        // preserves the original for forensics.
         const canonicalBody = {
           questionType: p.questionType,
-          questionText: p.questionText,
+          questionText: textForSanitiser,
           options: p.options.map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
           explanation: p.explanation,
           sourceSegmentIds: [...p.sourceSegmentIds],
@@ -778,9 +832,12 @@ export async function handleGenerateJob(
             sourceSegmentIds: gd.draft.sourceSegmentIds,
           })),
         ];
+        // AQ: dedup also sees the normalised stem so a Qwen proposal
+        // that would collide with a prior question under its framed
+        // form keeps colliding under its stripped form.
         const candidate: QuestionCandidate = {
           id: candidateContentHash,
-          questionText: p.questionText,
+          questionText: textForSanitiser,
           options: p.options,
           explanation: p.explanation,
           destination: g.id,
@@ -798,10 +855,12 @@ export async function handleGenerateJob(
           continue;
         }
 
+        // AQ: persisted draft body carries the NORMALISED stem.
+        const persistedProposal = { ...p, questionText: textForSanitiser };
         generatedDrafts.push({
           group: g.id,
           kind: g.kind,
-          draft: p,
+          draft: persistedProposal,
           contentHash: candidateContentHash,
           dedupDecision: decision,
         });
