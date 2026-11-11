@@ -219,7 +219,16 @@ No further action without explicit founder authorisation.
 
 ## Staging deploy
 
-Will be filled in after DRH-1 completes.
+| aspect | value |
+|---|---|
+| DRH-1 run (initial) | `42942277690` — FAILED exit 2 at Fly machine replacement (image pushed, deploy step failed) |
+| DRH-1 run (retry, per policy — 1 allowed) | `42943297802` — **SUCCESS** |
+| Rollback anchor | `sha-a4206af49271` (Fly web **v1149** — AP baseline) |
+| New release | Fly web **v1150** · `sha-921f72efaa08` |
+| Worker deploy | **NOT applicable** — no worker code changed; `spectre-staging-worker` stays at v384 (sha-a4206af49271) |
+| Migration | None (pure offline add) |
+| `/api/health` | **HTTP 200** |
+| Preservation probe (post-deploy) | 14/14 live drafts byte-identical · 0 AP drafts · 0 completions · `course.aiMetadataAttributionAt` unchanged (6th consecutive preservation run) |
 
 ---
 
