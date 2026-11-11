@@ -45,6 +45,36 @@ interface RawRequestBody {
   readonly confirm?: unknown;
   readonly targetTotal?: unknown;
   readonly maxPerChunk?: unknown;
+  readonly focusedRecovery?: unknown;
+}
+
+function coerceFocusedRecovery(raw: unknown):
+  | { readonly eligibleSegmentIds: readonly number[];
+      readonly coverageLearningObjectiveIds: readonly string[];
+      readonly focusTopicLabel: string;
+      readonly focusTopicSummary: string;
+      readonly priorTopicHintsForPrompt: readonly string[]; }
+  | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const eligibleSegmentIds = Array.isArray(r.eligibleSegmentIds) &&
+    r.eligibleSegmentIds.every((x) => typeof x === "number" && Number.isInteger(x) && x >= 0)
+    ? (r.eligibleSegmentIds as readonly number[]) : null;
+  const coverageLearningObjectiveIds = Array.isArray(r.coverageLearningObjectiveIds) &&
+    r.coverageLearningObjectiveIds.every((x) => typeof x === "string" && x.length > 0)
+    ? (r.coverageLearningObjectiveIds as readonly string[]) : null;
+  const focusTopicLabel = typeof r.focusTopicLabel === "string" ? r.focusTopicLabel : null;
+  const focusTopicSummary = typeof r.focusTopicSummary === "string" ? r.focusTopicSummary : null;
+  const priorTopicHintsForPrompt = Array.isArray(r.priorTopicHintsForPrompt) &&
+    r.priorTopicHintsForPrompt.every((x) => typeof x === "string" && x.length > 0)
+    ? (r.priorTopicHintsForPrompt as readonly string[]) : null;
+  if (!eligibleSegmentIds || eligibleSegmentIds.length === 0) return undefined;
+  if (!coverageLearningObjectiveIds || coverageLearningObjectiveIds.length === 0) return undefined;
+  if (!focusTopicLabel || !focusTopicSummary || !priorTopicHintsForPrompt) return undefined;
+  return {
+    eligibleSegmentIds, coverageLearningObjectiveIds,
+    focusTopicLabel, focusTopicSummary, priorTopicHintsForPrompt,
+  };
 }
 
 const CONFIRM_PREFIX = "AF-GPU-AUTHORIZED-";
@@ -97,6 +127,8 @@ export async function POST(
     typeof body.maxPerChunk === "number" && Number.isFinite(body.maxPerChunk) && body.maxPerChunk > 0
       ? Math.floor(body.maxPerChunk)
       : undefined;
+  // EP-TRAIN-4Y-AP §3 — optional focused-recovery override
+  const focusedRecovery = coerceFocusedRecovery(body.focusedRecovery);
 
   // Preflight path (default). No `confirm` or `preflight: true` or
   // `confirm` absent — always returns a dry report.
@@ -106,7 +138,7 @@ export async function POST(
     if (isPreflight) {
       const report = await preflightFinalAssessmentRecovery(
         principal, clubId,
-        { originalRunId: runId, targetTotal, maxPerChunk },
+        { originalRunId: runId, targetTotal, maxPerChunk, focusedRecovery },
       );
       return NextResponse.json({ ...report, ok: true });
     }
@@ -124,7 +156,7 @@ export async function POST(
 
     const result = await requestFinalAssessmentRecovery(
       principal, clubId,
-      { originalRunId: runId, targetTotal, maxPerChunk },
+      { originalRunId: runId, targetTotal, maxPerChunk, focusedRecovery },
     );
     return NextResponse.json({ ...result, ok: true });
   } catch (err) {

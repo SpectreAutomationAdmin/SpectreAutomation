@@ -372,7 +372,15 @@ export async function handleGenerateJob(
     }
   }
   // Point the closure at the populated list.
-  externalPriorHints = externalPriors.map((ep) => ({ questionText: ep.draft.questionText }));
+  // EP-TRAIN-4Y-AP §3 — if the plan carries a SEPARATE hints list
+  // (`priorTopicHintsForPrompt`), use it for the prompt bullet lines
+  // ONLY. Worker-side dedup (`externalPriors` above) continues to use
+  // `priorQuestionTextsForDedup` in full. This gates the prompt's size
+  // without weakening dedup coverage.
+  const hintsSource = Array.isArray(plan.priorTopicHintsForPrompt) && plan.priorTopicHintsForPrompt.length > 0
+    ? plan.priorTopicHintsForPrompt
+    : externalPriors.map((ep) => ep.draft.questionText);
+  externalPriorHints = hintsSource.map((qt) => ({ questionText: qt }));
   // Per-candidate dedup decision log for shortfallReasonJson.
   const dedupLog: Array<{
     group: string;

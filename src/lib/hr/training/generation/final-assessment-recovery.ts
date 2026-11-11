@@ -89,6 +89,28 @@ export interface RequestFinalAssessmentRecoveryInput {
   readonly targetTotal?: number;
   /** Operator-specified per-chunk ceiling. Defaults to §4's 3. */
   readonly maxPerChunk?: number;
+  /** EP-TRAIN-4Y-AP §3 — focused-recovery override. When present, the
+   *  recovery service BYPASSES the broad coverage planner and builds a
+   *  single chunk with explicitly-provided segment ids and LOs. The
+   *  prompt's bullet list shrinks dramatically (49 LOs → N) and the
+   *  transcript window narrows to just those segments. Worker-side
+   *  dedup still consults ALL 14 existing questions
+   *  (`priorQuestionTextsForDedup`); the prompt-only hint list
+   *  (`priorTopicHintsForPrompt`) carries the top-K most relevant to
+   *  guide generation.
+   *
+   *  Caller is responsible for verifying the transcript supports the
+   *  focused topic (directive §2). This service does NOT fetch or
+   *  interpret transcript content. */
+  readonly focusedRecovery?: {
+    readonly eligibleSegmentIds: readonly number[];
+    readonly coverageLearningObjectiveIds: readonly string[];
+    readonly focusTopicLabel: string;
+    readonly focusTopicSummary: string;
+    /** Top-K question texts to include in the prompt's "topics already
+     *  generated" avoidance list. Worker still dedups against ALL. */
+    readonly priorTopicHintsForPrompt: readonly string[];
+  };
 }
 
 export interface RequestFinalAssessmentRecoveryResult {
@@ -253,23 +275,50 @@ export async function requestFinalAssessmentRecovery(
     );
   }
 
-  // 5. Build FA coverage chunks over the original plan's LO list.
-  //    EP-TRAIN-4Y-AH §3 — pass plan-level exclusions AND plan-level
-  //    eligibleSegmentIds so the planner can derive per-chunk
-  //    eligibleSegmentIds (intersection of LO slice ∩ plan eligible ∩
-  //    complement of worker-excluded). Pre-AH callers passed neither
-  //    and the coverage set was wider than what the worker would
-  //    accept; that mismatch is what the 4Y-AG recovery proved.
-  const coverageRaw = buildFinalAssessmentCoverage({
-    learningObjectives: originalPlan.learningObjectives,
-    target: shortfall,
-    maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
-    planEligibleSegmentIds: originalPlan.eligibleSegmentIds,
-    planExcludedSegmentIndices: originalPlan.sourceEvidenceRequirements.excludedSegmentIndices,
-  });
-  const coverage = await rewriteFocusTopicSummaries(coverageRaw, {
-    db, clubId, resolvedTranscriptBuildId: originalPlan.resolvedTranscriptBuildId,
-  });
+  // 5. Build FA coverage chunks. Two paths:
+  //    - FOCUSED-RECOVERY (AP §3): caller provides an explicit chunk;
+  //      the broad planner is bypassed.
+  //    - BROAD recovery (AF/AH/AL): the planner slices LOs normally.
+  let coverage: Awaited<ReturnType<typeof buildFinalAssessmentCoverage>>;
+  if (input.focusedRecovery) {
+    const f = input.focusedRecovery;
+    if (shortfall !== 1) {
+      throw new FinalAssessmentRecoveryRejectedError(
+        "COVERAGE_INSUFFICIENT",
+        `Focused recovery requires shortfall=1; got ${shortfall}.`,
+        409,
+      );
+    }
+    coverage = {
+      chunks: [{
+        id: "fa-1",
+        targetQuestionCount: 1,
+        coverageLearningObjectiveIds: f.coverageLearningObjectiveIds,
+        focusTopicLabel: f.focusTopicLabel,
+        focusTopicSummary: f.focusTopicSummary,
+        eligibleSegmentIds: f.eligibleSegmentIds,
+      }],
+      supportedTarget: 1,
+      losPerChunk: f.coverageLearningObjectiveIds.length,
+      ineligibleLearningObjectiveIds: [],
+      chunkDebug: [{
+        id: "fa-1",
+        loTitles: [f.focusTopicLabel],
+        eligibleSegmentCount: f.eligibleSegmentIds.length,
+      }],
+    };
+  } else {
+    const coverageRaw = buildFinalAssessmentCoverage({
+      learningObjectives: originalPlan.learningObjectives,
+      target: shortfall,
+      maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
+      planEligibleSegmentIds: originalPlan.eligibleSegmentIds,
+      planExcludedSegmentIndices: originalPlan.sourceEvidenceRequirements.excludedSegmentIndices,
+    });
+    coverage = await rewriteFocusTopicSummaries(coverageRaw, {
+      db, clubId, resolvedTranscriptBuildId: originalPlan.resolvedTranscriptBuildId,
+    });
+  }
   if (coverage.chunks.length === 0) {
     throw new FinalAssessmentRecoveryRejectedError(
       "COVERAGE_INSUFFICIENT",
@@ -344,6 +393,11 @@ export async function requestFinalAssessmentRecovery(
     },
     proposedFinalAssessmentChunks: coverage.chunks,
     priorQuestionTextsForDedup: priorQuestionTexts,
+    // EP-TRAIN-4Y-AP §3 — focused recovery: feed Qwen only the K most
+    // relevant topic exclusions (from the directive-authorised
+    // caller), while the worker continues to dedup against ALL
+    // `priorQuestionTexts`.
+    priorTopicHintsForPrompt: input.focusedRecovery?.priorTopicHintsForPrompt,
     totalTargetQuestionCount: shortfall,
     sourceEvidenceRequirements: originalPlan.sourceEvidenceRequirements,
     generatedAt: now.toISOString(),
@@ -540,16 +594,39 @@ export async function preflightFinalAssessmentRecovery(
 
   const requestedTotal = input.targetTotal ?? plan.proposedFinalAssessment.targetQuestionCount;
   const shortfall = Math.max(0, requestedTotal - existingFinalAssessmentDraftCount);
-  const coverageRaw = buildFinalAssessmentCoverage({
-    learningObjectives: plan.learningObjectives,
-    target: shortfall,
-    maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
-    planEligibleSegmentIds: plan.eligibleSegmentIds,
-    planExcludedSegmentIndices: plan.sourceEvidenceRequirements.excludedSegmentIndices,
-  });
-  const coverage = await rewriteFocusTopicSummaries(coverageRaw, {
-    db, clubId, resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
-  });
+  let coverage: Awaited<ReturnType<typeof buildFinalAssessmentCoverage>>;
+  if (input.focusedRecovery && shortfall === 1) {
+    const f = input.focusedRecovery;
+    coverage = {
+      chunks: [{
+        id: "fa-1",
+        targetQuestionCount: 1,
+        coverageLearningObjectiveIds: f.coverageLearningObjectiveIds,
+        focusTopicLabel: f.focusTopicLabel,
+        focusTopicSummary: f.focusTopicSummary,
+        eligibleSegmentIds: f.eligibleSegmentIds,
+      }],
+      supportedTarget: 1,
+      losPerChunk: f.coverageLearningObjectiveIds.length,
+      ineligibleLearningObjectiveIds: [],
+      chunkDebug: [{
+        id: "fa-1",
+        loTitles: [f.focusTopicLabel],
+        eligibleSegmentCount: f.eligibleSegmentIds.length,
+      }],
+    };
+  } else {
+    const coverageRaw = buildFinalAssessmentCoverage({
+      learningObjectives: plan.learningObjectives,
+      target: shortfall,
+      maxPerChunk: input.maxPerChunk ?? FA_CHUNK_MAX_TARGET,
+      planEligibleSegmentIds: plan.eligibleSegmentIds,
+      planExcludedSegmentIndices: plan.sourceEvidenceRequirements.excludedSegmentIndices,
+    });
+    coverage = await rewriteFocusTopicSummaries(coverageRaw, {
+      db, clubId, resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
+    });
+  }
 
   return {
     preflight: true,

@@ -124,8 +124,20 @@ export interface AssessmentPlanV1 {
    *  so a shortfall-only recovery can seed dedup + priorTopics against
    *  them. Each entry is a human-readable question-text string (worker
    *  truncates for hint rendering). NEVER persisted on the draft row —
-   *  this is PLAN-only context. Optional for backwards compat. */
+   *  this is PLAN-only context. Optional for backwards compat.
+   *
+   *  EP-TRAIN-4Y-AO §2 — extended to include BOTH FA and CHECKPOINT
+   *  questions (cross-assessment dedup). This remains the authoritative
+   *  "dedup against" list — worker-side dedup uses ALL entries. */
   readonly priorQuestionTextsForDedup?: readonly string[];
+  /** EP-TRAIN-4Y-AP §3 — SEPARATE list for the natural-language prompt
+   *  hint block. When present, the worker's `priorTopicHints` feeds
+   *  from THIS list instead of `priorQuestionTextsForDedup`. Used by
+   *  the focused-recovery mode to seed the prompt with the top-K most
+   *  relevant exclusions while still dedup-ing against ALL existing
+   *  questions server-side. Optional; falls back to the full dedup
+   *  list when absent. */
+  readonly priorTopicHintsForPrompt?: readonly string[];
   readonly totalTargetQuestionCount: number;
   readonly sourceEvidenceRequirements: {
     readonly mustCiteAtLeastOneSegmentPerQuestion: true;
