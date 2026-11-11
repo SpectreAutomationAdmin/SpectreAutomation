@@ -72,17 +72,17 @@ interface PublishConfig {
 }
 
 interface RetainedRejectedProposalForReview {
-  runId: string;
-  groupId: string;
-  proposalIndex: number;
-  originalQuestionText: string;
-  originalExplanation: string | null;
-  options: Array<{ text: string; isCorrect: boolean }>;
-  sourceSegmentIds: number[];
-  findingCodes: string;
-  rejectionStage: string;
-  plainExplanation: string;
-  rejectedAt: string;
+  readonly runId: string;
+  readonly groupId: string;
+  readonly proposalIndex: number;
+  readonly originalQuestionText: string;
+  readonly originalExplanation: string | null;
+  readonly options: ReadonlyArray<{ readonly text: string; readonly isCorrect: boolean }>;
+  readonly sourceSegmentIds: readonly number[];
+  readonly findingCodes: string;
+  readonly rejectionStage: string;
+  readonly plainExplanation: string;
+  readonly rejectedAt: string;
 }
 
 interface Props {

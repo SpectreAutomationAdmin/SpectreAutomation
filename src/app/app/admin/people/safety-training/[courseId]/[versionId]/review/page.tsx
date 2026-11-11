@@ -116,8 +116,31 @@ export default async function ManagerReviewPage({
   // atSec-bearing plan from the FIRST run that carries a non-empty
   // `proposedCheckpointGroups`, which keeps AE2's chronological sort
   // stable across recovery.
-  const allCompletedRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
-    where: { clubId, courseVersionId: version.id, executionStatus: "COMPLETED" },
+  // EP-TRAIN-4Y-AU (2026-11-11) — the composed destination resolver
+  // must see EVERY TERMINAL run for this version, not only COMPLETED
+  // ones. The AR → AS lifecycle lands a successful manager-recovered
+  // draft inside the `shortfallReasonJson.perGroupDiagnostics[g]
+  // .recoveryHistory[]` of a run whose terminal state is FAILED
+  // (because the GPU call itself was rejected — the manager then
+  // corrected and persisted offline). Filtering to COMPLETED-only
+  // hides that recovery from the resolver, which collapses the
+  // recovered draft's destination to UNKNOWN, which then makes it
+  // render in BOTH tabs (observed as "Checkpoints · 6" in the
+  // founder's screenshot) and shows "destination unknown" in the
+  // header.
+  //
+  // Fix: query both COMPLETED and FAILED runs. CANCELLED runs are
+  // excluded because they didn't reach a terminal commit of their
+  // shortfall payload. RUNNING / QUEUED / REQUESTED are excluded
+  // because they haven't committed state yet. Ordering retains the
+  // original semantics (completed-first by completedAt, otherwise
+  // by requestedAt) so `planRun` selection is unchanged.
+  const allTerminalRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+    where: {
+      clubId,
+      courseVersionId: version.id,
+      executionStatus: { in: ["COMPLETED", "FAILED"] },
+    },
     orderBy: [{ completedAt: "asc" }, { requestedAt: "asc" }],
     select: {
       id: true,
@@ -126,12 +149,11 @@ export default async function ManagerReviewPage({
       completedAt: true,
     },
   });
-  // Fall back to all-runs (regardless of status) when no COMPLETED run
-  // exists — matches the pre-AF behaviour and keeps QUEUED / RUNNING
-  // runs visible to the reviewer (atSec markers come from whichever
-  // run has the plan).
-  const runsForResolver = allCompletedRuns.length > 0
-    ? allCompletedRuns
+  // Fallback: when no terminal run exists yet, include QUEUED /
+  // RUNNING too so the review surface renders during initial
+  // generation. atSec markers come from whichever run has the plan.
+  const runsForResolver = allTerminalRuns.length > 0
+    ? allTerminalRuns
     : await prisma.trainingQuestionAiGenerationRun.findMany({
         where: { clubId, courseVersionId: version.id },
         orderBy: [{ requestedAt: "asc" }],
