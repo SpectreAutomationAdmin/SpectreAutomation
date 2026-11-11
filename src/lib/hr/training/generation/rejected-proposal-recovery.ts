@@ -53,6 +53,7 @@ import { normaliseQuestionStem } from "../ai-review/question-text-normaliser";
 import { evaluateAgainstPriors, type QuestionCandidate } from "./dedup";
 import { sha256Hex, canonicalise } from "../ai-review/content-hash";
 import type { RetainedRejectedProposal } from "./rejected-proposal-retention";
+import { destinationKindForGroup } from "./destination-resolver";
 
 export interface RecoveredProposalEdits {
   readonly editedQuestionText: string;
@@ -192,6 +193,39 @@ export async function recoverRejectedProposal(
   const group = diagnostics.find((g) => g.group === input.groupId);
   if (!group) {
     throw new RejectedProposalRecoveryError("GROUP_NOT_FOUND", `Group '${input.groupId}' absent from diagnostics.`, 404);
+  }
+  // EP-TRAIN-4Y-AT §3 — refuse recovery when the group id does not
+  // match a KNOWN plan-naming convention. Prevents any future
+  // recovery from persisting a draft that would render as
+  // "destination unknown" in the review surface. The original AS
+  // defect was that the resolver didn't look at recoveryHistory[];
+  // this guard adds defence-in-depth so an unexpected group id (one
+  // the name convention can't map) is refused at write time BEFORE
+  // the draft lands in the DB. Known conventions:
+  //   - "final"      → FINAL_ASSESSMENT (legacy single-call FA)
+  //   - "fa-N"       → FINAL_ASSESSMENT (AF chunked FA)
+  //   - "cg-N"       → CHECKPOINT
+  //   - "ck-<cuid>"  → CHECKPOINT (future per-checkpoint buckets)
+  const isKnownGroupPattern =
+    input.groupId === "final" ||
+    /^fa-\d+$/.test(input.groupId) ||
+    /^cg-\d+$/.test(input.groupId) ||
+    /^ck-[a-z0-9]+$/.test(input.groupId);
+  if (!isKnownGroupPattern) {
+    throw new RejectedProposalRecoveryError(
+      "AMBIGUOUS_DESTINATION",
+      `Group '${input.groupId}' does not match a known plan-naming convention — refusing to persist a draft whose destination cannot be established.`,
+      422,
+    );
+  }
+  // Belt + braces: the derived destination must be definite.
+  const destinationKind = destinationKindForGroup(input.groupId);
+  if (destinationKind === "UNKNOWN") {
+    throw new RejectedProposalRecoveryError(
+      "AMBIGUOUS_DESTINATION",
+      `Group '${input.groupId}' does not resolve to CHECKPOINT or FINAL_ASSESSMENT.`,
+      422,
+    );
   }
   const retained = Array.isArray(group.rejectedProposals) ? group.rejectedProposals : [];
   const rejected = retained.find((r) => r.proposalIndex === input.proposalIndex);

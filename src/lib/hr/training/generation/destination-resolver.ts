@@ -39,10 +39,28 @@ interface DedupDecisionRow {
   readonly kept?: unknown;
 }
 
-/** Parse the shortfallReasonJson into a `contentHash → group` map,
- *  keeping only `kept: true` rows (duplicates were dropped and have
- *  no persisted draft). Unknown JSON shapes degrade to an empty map
- *  — the caller fans out every draft as UNKNOWN in that case. */
+interface PerGroupDiagnosticRow {
+  readonly group?: unknown;
+  readonly recoveryHistory?: unknown;
+}
+
+interface RecoveryHistoryEntry {
+  readonly contentHash?: unknown;
+  readonly savedAsDraftId?: unknown;
+}
+
+/** Parse the shortfallReasonJson into a `contentHash → group` map
+ *  across both sources that persist a draft in the DB:
+ *    1. `dedupDecisions[]` with `kept: true` — the normal GPU-sourced
+ *       draft produced by the worker.
+ *    2. `perGroupDiagnostics[g].recoveryHistory[]` — the AS manager
+ *       editorial recovery draft produced by the recovery service.
+ *  Both paths write a `TrainingQuestionAiDraft` row whose
+ *  `contentHash` the Manager Review surface must resolve to the
+ *  owning plan group so the destination (CHECKPOINT vs
+ *  FINAL_ASSESSMENT) is known. Unknown JSON shapes degrade to an
+ *  empty map — the caller fans out every draft as UNKNOWN in that
+ *  case. */
 export function parseShortfallGroupMap(
   shortfallReasonJson: string | null | undefined,
 ): Map<string, string> {
@@ -55,21 +73,52 @@ export function parseShortfallGroupMap(
     return map;
   }
   if (!parsed || typeof parsed !== "object") return map;
+
+  // (1) dedupDecisions — the GPU-generation-side path.
   const decisions = (parsed as { dedupDecisions?: unknown }).dedupDecisions;
-  if (!Array.isArray(decisions)) return map;
-  for (const raw of decisions) {
-    if (!raw || typeof raw !== "object") continue;
-    const row = raw as DedupDecisionRow;
-    if (row.kept !== true) continue;
-    if (typeof row.group !== "string") continue;
-    if (typeof row.candidateContentHash !== "string") continue;
-    // Deliberately do not overwrite: the FIRST kept row for a hash
-    // wins. Content hashes are unique by @@unique([clubId,
-    // courseVersionId, contentHash]) so this collision cannot happen
-    // within a single run, but double-registration is a stable
-    // tie-break.
-    if (!map.has(row.candidateContentHash)) {
-      map.set(row.candidateContentHash, row.group);
+  if (Array.isArray(decisions)) {
+    for (const raw of decisions) {
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as DedupDecisionRow;
+      if (row.kept !== true) continue;
+      if (typeof row.group !== "string") continue;
+      if (typeof row.candidateContentHash !== "string") continue;
+      // Deliberately do not overwrite: the FIRST kept row for a hash
+      // wins. Content hashes are unique by @@unique([clubId,
+      // courseVersionId, contentHash]) so this collision cannot
+      // happen within a single run, but double-registration is a
+      // stable tie-break.
+      if (!map.has(row.candidateContentHash)) {
+        map.set(row.candidateContentHash, row.group);
+      }
+    }
+  }
+
+  // (2) perGroupDiagnostics[g].recoveryHistory — the AS manager-
+  // editorial recovery path. EP-TRAIN-4Y-AT (2026-11-11). Every
+  // history entry already carries the group id implicitly via its
+  // containing `perGroupDiagnostics[g].group`, so we stamp the
+  // same group onto the recovered draft's contentHash. This fixes
+  // the Q7 "destination unknown" defect where an AS-recovered
+  // draft had no `kept: true` dedup row to anchor against.
+  const perGroupDiagnostics = (parsed as { perGroupDiagnostics?: unknown }).perGroupDiagnostics;
+  if (Array.isArray(perGroupDiagnostics)) {
+    for (const rawGroup of perGroupDiagnostics) {
+      if (!rawGroup || typeof rawGroup !== "object") continue;
+      const grow = rawGroup as PerGroupDiagnosticRow;
+      if (typeof grow.group !== "string") continue;
+      if (!Array.isArray(grow.recoveryHistory)) continue;
+      for (const rh of grow.recoveryHistory) {
+        if (!rh || typeof rh !== "object") continue;
+        const entry = rh as RecoveryHistoryEntry;
+        if (typeof entry.contentHash !== "string") continue;
+        if (typeof entry.savedAsDraftId !== "string") continue;
+        // First mapping wins per `candidateContentHash` so a prior
+        // dedup-kept row is NOT overwritten by a later recovery.
+        if (!map.has(entry.contentHash)) {
+          map.set(entry.contentHash, grow.group);
+        }
+      }
     }
   }
   return map;
