@@ -28,6 +28,7 @@ import {
   annotateDraftsWithComposedDestination,
   composeGroupMapsFromRuns,
 } from "@/lib/hr/training/generation/destination-resolver";
+import { listRetainedForManagerReview } from "@/lib/hr/training/generation/retained-proposals-reader";
 import ManagerReviewClient from "./ManagerReviewClient";
 
 export const runtime = "nodejs";
@@ -446,6 +447,11 @@ export default async function ManagerReviewPage({
     });
   }
 
+  // EP-TRAIN-4Y-AS §5 — retained rejected-proposal candidates that
+  // need a manager editorial correction. Scoped by clubId; already-
+  // recovered or expired records are filtered out server-side.
+  const retainedRejectedProposals = await listRetainedForManagerReview(clubId, version.id);
+
   // EP-TRAIN-4Y-AA §2 — the course-level AI title + description are
   // the authoritative source for the review header. Fall back to the
   // version's values only when the course row is somehow empty (a
@@ -482,6 +488,7 @@ export default async function ManagerReviewPage({
         canPublish={hasPermission(principal, clubId, "hr:training:publish")}
         courseId={params.courseId}
         publishConfig={publishConfig}
+        retainedRejectedProposals={retainedRejectedProposals}
       />
     </div>
   );

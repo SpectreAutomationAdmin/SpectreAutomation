@@ -71,6 +71,20 @@ interface PublishConfig {
   readinessReasons: string[];
 }
 
+interface RetainedRejectedProposalForReview {
+  runId: string;
+  groupId: string;
+  proposalIndex: number;
+  originalQuestionText: string;
+  originalExplanation: string | null;
+  options: Array<{ text: string; isCorrect: boolean }>;
+  sourceSegmentIds: number[];
+  findingCodes: string;
+  rejectionStage: string;
+  plainExplanation: string;
+  rejectedAt: string;
+}
+
 interface Props {
   versionId: string;
   courseId: string;
@@ -85,6 +99,7 @@ interface Props {
   canAuthor: boolean;
   canPublish: boolean;
   publishConfig: PublishConfig;
+  retainedRejectedProposals?: RetainedRejectedProposalForReview[];
 }
 
 function uuidV4(): string {
@@ -716,6 +731,16 @@ export default function ManagerReviewClient(props: Props) {
 
         {/* Right (2fr): tabs + one-question-at-a-time review, stretches vertically. */}
         <div className="space-y-4 flex flex-col" data-testid="manager-review-right">
+          {/* EP-TRAIN-4Y-AS §5 — Needs correction card. Discreet,
+              muted-amber card appears above the mode tabs ONLY when
+              there are retained rejected candidates. Clicking "Edit"
+              opens the correction dialog. */}
+          <RejectedCandidatesCard
+            candidates={props.retainedRejectedProposals ?? []}
+            versionId={props.versionId}
+            canAuthor={props.canAuthor}
+            onCorrected={() => router.refresh()}
+          />
           <div className="flex items-center gap-2 text-sm" data-testid="manager-review-tabs">
             <button
               type="button"
@@ -1021,5 +1046,192 @@ export default function ManagerReviewClient(props: Props) {
         </div>
       </div>
     </>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────
+// EP-TRAIN-4Y-AS §5 — Needs-correction card.
+// Discreet amber card on the manager review page. Opens a dialog
+// showing the original rejected text + the plain-English issue +
+// editable stem / options / explanation. On save, POSTs to the
+// recovery endpoint. The dialog closes on success and the page
+// refreshes so the new draft appears in the final-assessment tab.
+// ───────────────────────────────────────────────────────────────
+
+function RejectedCandidatesCard(p: {
+  candidates: RetainedRejectedProposalForReview[];
+  versionId: string;
+  canAuthor: boolean;
+  onCorrected: () => void;
+}) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  if (!p.candidates || p.candidates.length === 0) return null;
+  return (
+    <section
+      className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3"
+      data-testid="manager-review-needs-correction"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-serif text-stone-900">
+            Needs correction · {p.candidates.length}
+          </h3>
+          <p className="mt-0.5 text-xs text-stone-600">
+            {p.candidates.length === 1
+              ? "One AI-drafted question needs a small editorial correction before it can join the final assessment."
+              : `${p.candidates.length} AI-drafted questions need small editorial corrections before they can join the final assessment.`}
+          </p>
+        </div>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {p.candidates.map((c) => {
+          const key = `${c.runId}:${c.groupId}:${c.proposalIndex}`;
+          return (
+            <li
+              key={key}
+              className="rounded-md border border-amber-200 bg-white px-3 py-2"
+              data-testid="manager-review-needs-correction-item"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-stone-900">"{c.originalQuestionText}"</p>
+                  <p className="mt-0.5 text-xs text-stone-600">{c.plainExplanation}</p>
+                </div>
+                {p.canAuthor && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary shrink-0"
+                    onClick={() => setOpenId(openId === key ? null : key)}
+                    data-testid={`manager-review-needs-correction-edit-${key}`}
+                  >
+                    {openId === key ? "Close" : "Edit"}
+                  </button>
+                )}
+              </div>
+              {openId === key && (
+                <CorrectionDialog
+                  candidate={c}
+                  onClose={() => setOpenId(null)}
+                  onSaved={() => { setOpenId(null); p.onCorrected(); }}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function CorrectionDialog(p: {
+  candidate: RetainedRejectedProposalForReview;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [stem, setStem] = useState(p.candidate.originalQuestionText);
+  const [options, setOptions] = useState(p.candidate.options.map((o) => ({ ...o })));
+  const [explanation, setExplanation] = useState(p.candidate.originalExplanation ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      const resp = await fetch(
+        `/api/admin/ai-training/runs/${p.candidate.runId}/recover-rejected-proposal`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            groupId: p.candidate.groupId,
+            proposalIndex: p.candidate.proposalIndex,
+            editedQuestionText: stem,
+            editedOptions: options,
+            editedExplanation: explanation,
+          }),
+        },
+      );
+      const body = await resp.json();
+      if (!resp.ok || !body.ok) {
+        setError(body?.message ?? body?.error ?? `HTTP ${resp.status}`);
+        setSaving(false);
+        return;
+      }
+      p.onSaved();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-amber-200 pt-3" data-testid="manager-review-correction-dialog">
+      <label className="block">
+        <span className="label">Question text</span>
+        <textarea
+          className="input mt-1 w-full"
+          rows={3}
+          value={stem}
+          onChange={(e) => setStem(e.target.value)}
+          data-testid="manager-review-correction-stem"
+        />
+      </label>
+      <div className="space-y-1.5">
+        <span className="label">Options</span>
+        {options.map((o, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <label className="mt-2.5 inline-flex items-center gap-1 text-xs text-stone-600 shrink-0">
+              <input
+                type="radio"
+                name="correction-correct"
+                checked={o.isCorrect}
+                onChange={() =>
+                  setOptions((prev) => prev.map((x, j) => ({ ...x, isCorrect: j === i })))
+                }
+              />
+              Correct
+            </label>
+            <input
+              className="input flex-1"
+              value={o.text}
+              onChange={(e) =>
+                setOptions((prev) => prev.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))
+              }
+              data-testid={`manager-review-correction-option-${i}`}
+            />
+          </div>
+        ))}
+      </div>
+      <label className="block">
+        <span className="label">Explanation</span>
+        <textarea
+          className="input mt-1 w-full"
+          rows={4}
+          value={explanation}
+          onChange={(e) => setExplanation(e.target.value)}
+          data-testid="manager-review-correction-explanation"
+        />
+      </label>
+      {error && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700" data-testid="manager-review-correction-error">
+          {error}
+        </div>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <button type="button" className="btn btn-sm btn-secondary" onClick={p.onClose} disabled={saving}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={save}
+          disabled={saving || stem.trim().length === 0}
+          data-testid="manager-review-correction-save"
+        >
+          {saving ? "Saving…" : "Save & validate"}
+        </button>
+      </div>
+    </div>
   );
 }
