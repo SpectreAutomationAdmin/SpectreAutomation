@@ -284,6 +284,19 @@ export async function requestFinalAssessmentRecovery(
   // reject near-duplicates. Uses the AF composed group map to identify
   // which drafts are FA. Falls back to an empty list on any failure
   // (worker still functions; fewer dedup signals).
+  //
+  // EP-TRAIN-4Y-AO §2 (cross-assessment dedup repair) — the AN run
+  // produced a question whose topic overlapped a CHECKPOINT (CP Q1:
+  // "first step in resolving a complaint between two staff members").
+  // The AL seeding filtered to FINAL_ASSESSMENT only; checkpoint
+  // topics were invisible to dedup-v2's cross-run priors. The directive
+  // §2 requires BOTH FA and checkpoint drafts to be in the dedup
+  // context. The resolver treats any destination other than
+  // FINAL_ASSESSMENT as CHECKPOINT (or legacy `final`); the gate below
+  // now accepts both — i.e. everything that's a classified training
+  // question for this course version. Topic-level similarity is
+  // provided by dedup-v2's existing shingle-Jaccard check (0.3 topic
+  // threshold).
   let priorQuestionTexts: string[] = [];
   try {
     const allDrafts = await db.trainingQuestionAiDraft.findMany({
@@ -298,7 +311,13 @@ export async function requestFinalAssessmentRecovery(
       select: { contentHash: true, draftJson: true },
     });
     priorQuestionTexts = allDrafts
-      .filter((d) => destinationKindForGroup(composedMap.get(d.contentHash) ?? null) === "FINAL_ASSESSMENT")
+      .filter((d) => {
+        const kind = destinationKindForGroup(composedMap.get(d.contentHash) ?? null);
+        // AO §2 — accept BOTH checkpoint + FA destinations. UNKNOWN
+        // drafts (unmapped hash) are included conservatively: better
+        // one extra prior than silently miss a topic.
+        return kind === "FINAL_ASSESSMENT" || kind === "CHECKPOINT" || kind === "UNKNOWN";
+      })
       .map((d) => {
         try { return JSON.parse(d.draftJson || "{}").questionText as string ?? ""; }
         catch { return ""; }

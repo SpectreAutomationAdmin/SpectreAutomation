@@ -162,7 +162,7 @@ describe("§6.6 — AJ purity clause now explicitly forbids 'According to ...'",
     expect(prompt).toContain("According to the transcript");
     expect(prompt).toContain("According to the training");
     expect(prompt).toContain("According to the course content");
-    expect(prompt).toContain("never cite or refer to the source material in prose");
+    expect(prompt).toContain("cites, quotes or refers to the source document");
   });
 });
 
