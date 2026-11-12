@@ -144,23 +144,33 @@ test.describe("EP-TRAIN-4Y-AX — manual question authoring on staging", () => {
     expect(cpCheckpointId).toBeTruthy();
 
     // Reload the review page and confirm both manual questions appear.
+    // The page defaults to the Checkpoints tab when any CP draft exists,
+    // so we assert both tab counters first (they are page-level) and then
+    // switch tabs to inspect each manager-authored list section.
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForTimeout(2500);
-    // FA tab should show 10 AI + 1 manual = 11 total.
+
+    // Tab counters: page-level, visible regardless of active mode.
     const faTabAfter = await page.locator('[data-testid="manager-review-mode-final"]').innerText();
+    const cpTabAfter = await page.locator('[data-testid="manager-review-mode-checkpoints"]').innerText();
     expect(faTabAfter, "FA tab must reflect the new manual FA question").toMatch(/Final\s+assessment\s*·\s*11\b/);
-    // Manager-authored section should list the FA disposable.
+    expect(cpTabAfter, "CP tab must reflect the new manual CP question").toMatch(/Checkpoints\s*·\s*6\b/);
+
+    // CP tab active by default (there are AI CP drafts) — assert the
+    // disposable CP manual item is rendered in this tab's manual list.
+    await expect(page.locator(`[data-testid="manager-review-manual-item-${cpQId}"]`)).toBeVisible();
+
+    // Switch to the FA tab and assert the disposable FA manual item.
+    await page.locator('[data-testid="manager-review-mode-final"]').first().click();
+    await page.waitForTimeout(600);
     await expect(page.locator(`[data-testid="manager-review-manual-item-${faQId}"]`)).toBeVisible();
     await expect(
       page.locator(`[data-testid="manager-review-manual-item-${faQId}"]`),
     ).toContainText(DISPOSABLE_FA_PROMPT);
 
-    // CP tab should show 5 AI + 1 manual = 6 total.
+    // Switch back to the CP tab for the screenshot capture below.
     await page.locator('[data-testid="manager-review-mode-checkpoints"]').first().click();
     await page.waitForTimeout(500);
-    const cpTabAfter = await page.locator('[data-testid="manager-review-mode-checkpoints"]').innerText();
-    expect(cpTabAfter, "CP tab must reflect the new manual CP question").toMatch(/Checkpoints\s*·\s*6\b/);
-    await expect(page.locator(`[data-testid="manager-review-manual-item-${cpQId}"]`)).toBeVisible();
     await page.screenshot({ path: "test-results/4yax-screens/03-manual-cp-visible.png" });
     await page.locator('[data-testid="manager-review-mode-final"]').first().click();
     await page.waitForTimeout(500);
