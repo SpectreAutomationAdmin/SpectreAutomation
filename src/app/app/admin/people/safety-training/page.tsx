@@ -199,11 +199,17 @@ function CourseRow({
   const draftBadge = course.draftVersion
     ? { label: `Draft · v${course.draftVersion.version}`, tone: "amber" }
     : null;
-  const targetLink = course.draftVersion
-    ? `/app/admin/people/safety-training/${course.id}/${course.draftVersion.id}`
-    : course.currentVersion
-      ? `/app/admin/people/safety-training/${course.id}`
-      : `/app/admin/people/safety-training/${course.id}`;
+  // EP-TRAIN-4Y-AX §1 — the Active-Courses row links straight to the
+  // video-and-assessment /review workspace whenever ANY version exists
+  // (draft first, otherwise the published version) so the manager is
+  // never forced through an intermediate detail / editor page. The
+  // /review surface is read-only when the version isn't DRAFT, so
+  // link safety is preserved.
+  const targetVersionId =
+    course.draftVersion?.id ?? course.currentVersion?.id ?? null;
+  const targetLink = targetVersionId
+    ? `/app/admin/people/safety-training/${course.id}/${targetVersionId}/review`
+    : `/app/admin/people/safety-training/${course.id}`;
   // EP-TRAIN-4E B1 (2026-10-31): classify the row for state-aware
   // action rendering.  "active-draft-only" means the course has
   // NEVER been published (hasHistory is false AND no currentVersion).

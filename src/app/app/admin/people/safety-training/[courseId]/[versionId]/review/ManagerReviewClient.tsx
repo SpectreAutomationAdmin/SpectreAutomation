@@ -85,6 +85,23 @@ interface RetainedRejectedProposalForReview {
   readonly rejectedAt: string;
 }
 
+// EP-TRAIN-4Y-AX §2 — manager-authored questions rendered next to AI
+// drafts in each tab. `aiPromotion == null` on the server is the
+// inherent provenance marker; the client only sees already-filtered
+// manual rows here.
+export interface ManualQuestionForClient {
+  id: string;
+  prompt: string;
+  questionType: "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE";
+  destination: "CHECKPOINT" | "FINAL_ASSESSMENT";
+  checkpointId: string | null;
+  checkpointAtSecond: number | null;
+  options: Array<{ id: string; text: string; isCorrect: boolean }>;
+  displayOrder: number;
+  active: boolean;
+  updatedAt: string;
+}
+
 interface Props {
   versionId: string;
   courseId: string;
@@ -100,6 +117,8 @@ interface Props {
   canPublish: boolean;
   publishConfig: PublishConfig;
   retainedRejectedProposals?: RetainedRejectedProposalForReview[];
+  manualQuestions?: ManualQuestionForClient[];
+  isDraft?: boolean;
 }
 
 function uuidV4(): string {
@@ -166,8 +185,23 @@ export default function ManagerReviewClient(props: Props) {
     [props.drafts],
   );
   const activeDrafts = mode === "checkpoints" ? checkpointDrafts : finalDrafts;
-  const totalCheckpoint = checkpointDrafts.length;
-  const totalFinal = finalDrafts.length;
+
+  // EP-TRAIN-4Y-AX §2 — manager-authored questions, partitioned by tab.
+  const manualQuestions = useMemo<ManualQuestionForClient[]>(
+    () => props.manualQuestions ?? [],
+    [props.manualQuestions],
+  );
+  const manualCheckpoint = useMemo(
+    () => manualQuestions.filter((q) => q.destination === "CHECKPOINT"),
+    [manualQuestions],
+  );
+  const manualFinal = useMemo(
+    () => manualQuestions.filter((q) => q.destination === "FINAL_ASSESSMENT"),
+    [manualQuestions],
+  );
+  const totalCheckpoint = checkpointDrafts.length + manualCheckpoint.length;
+  const totalFinal = finalDrafts.length + manualFinal.length;
+  const canAddQuestion = !!props.isDraft && props.canAuthor;
 
   const [cpIndex, setCpIndex] = useState(0);
   const [faIndex, setFaIndex] = useState(0);
@@ -298,6 +332,171 @@ export default function ManagerReviewClient(props: Props) {
     setDescSaveState("idle");
     setEditingDesc(false);
   }, [props.courseDescription]);
+
+  // ── EP-TRAIN-4Y-AX §2 — manual question authoring state ─────────
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addPrompt, setAddPrompt] = useState("");
+  const [addQType, setAddQType] = useState<"SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE">("SINGLE_CHOICE");
+  const [addOptions, setAddOptions] = useState<Array<{ text: string; isCorrect: boolean }>>([
+    { text: "", isCorrect: true },
+    { text: "", isCorrect: false },
+    { text: "", isCorrect: false },
+    { text: "", isCorrect: false },
+  ]);
+  // Checkpoint-specific authoring fields (used only when mode === "checkpoints").
+  const [addCheckpointBindMode, setAddCheckpointBindMode] = useState<"existing" | "new">("new");
+  const [addCheckpointExistingId, setAddCheckpointExistingId] = useState<string | null>(null);
+  const [addCheckpointAtSec, setAddCheckpointAtSec] = useState<number | "">("");
+  const [addCheckpointLabel, setAddCheckpointLabel] = useState("");
+  const [addCheckpointRequiredToProceed, setAddCheckpointRequiredToProceed] = useState(true);
+  const [addCheckpointMaxRetries, setAddCheckpointMaxRetries] = useState<number | "">(3);
+
+  const resetAddForm = useCallback(() => {
+    setAddPrompt("");
+    setAddQType("SINGLE_CHOICE");
+    setAddOptions([
+      { text: "", isCorrect: true },
+      { text: "", isCorrect: false },
+      { text: "", isCorrect: false },
+      { text: "", isCorrect: false },
+    ]);
+    setAddCheckpointBindMode("new");
+    setAddCheckpointExistingId(null);
+    setAddCheckpointAtSec("");
+    setAddCheckpointLabel("");
+    setAddCheckpointRequiredToProceed(true);
+    setAddCheckpointMaxRetries(3);
+    setAddError(null);
+  }, []);
+
+  // When question type flips, normalise options to a valid starting
+  // shape. TRUE_FALSE → exactly 2; SINGLE_CHOICE → at least 2 with
+  // exactly one correct; MULTI_ANSWER → ≥2 with ≥1 correct and
+  // ≥1 incorrect. We keep what the manager has typed when possible.
+  const onChangeQType = useCallback((next: typeof addQType) => {
+    setAddQType(next);
+    setAddOptions((prev) => {
+      if (next === "TRUE_FALSE") {
+        return [
+          { text: "True", isCorrect: true },
+          { text: "False", isCorrect: false },
+        ];
+      }
+      const kept = prev.length >= 2 ? prev : [
+        { text: prev[0]?.text ?? "", isCorrect: !!prev[0]?.isCorrect },
+        { text: prev[1]?.text ?? "", isCorrect: !!prev[1]?.isCorrect },
+      ];
+      if (next === "SINGLE_CHOICE") {
+        // Force exactly one correct.
+        const anyCorrect = kept.some((o) => o.isCorrect);
+        if (!anyCorrect) kept[0] = { ...kept[0], isCorrect: true };
+        let seen = false;
+        return kept.map((o) => {
+          if (o.isCorrect && !seen) { seen = true; return o; }
+          return { ...o, isCorrect: false };
+        });
+      }
+      return kept;
+    });
+  }, []);
+
+  const useCurrentPlaybackTime = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const t = Math.round(v.currentTime || 0);
+    setAddCheckpointAtSec(t);
+  }, []);
+
+  const submitManualQuestion = useCallback(async () => {
+    if (addBusy) return;
+    setAddError(null);
+
+    const trimmedPrompt = addPrompt.trim();
+    if (trimmedPrompt.length < 3) { setAddError("Prompt must be at least 3 characters."); return; }
+    if (trimmedPrompt.length > 500) { setAddError("Prompt must be at most 500 characters."); return; }
+    const cleanedOptions = addOptions.map((o) => ({ text: o.text.trim(), isCorrect: o.isCorrect }));
+    if (cleanedOptions.some((o) => o.text.length === 0)) { setAddError("All option texts are required."); return; }
+    const correctCount = cleanedOptions.filter((o) => o.isCorrect).length;
+    if (addQType === "SINGLE_CHOICE" && correctCount !== 1) { setAddError("Mark exactly one option as correct."); return; }
+    if (addQType === "TRUE_FALSE" && (cleanedOptions.length !== 2 || correctCount !== 1)) {
+      setAddError("True/False needs exactly two options and one correct."); return;
+    }
+    if (addQType === "MULTI_ANSWER") {
+      if (correctCount < 1) { setAddError("Mark at least one correct option."); return; }
+      if (correctCount === cleanedOptions.length) { setAddError("Leave at least one option incorrect."); return; }
+    }
+
+    const body: Record<string, unknown> = {
+      prompt: trimmedPrompt,
+      options: cleanedOptions,
+      questionType: addQType,
+      destination: mode === "checkpoints" ? "CHECKPOINT" : "FINAL_ASSESSMENT",
+    };
+    if (mode === "checkpoints") {
+      if (addCheckpointBindMode === "existing") {
+        if (!addCheckpointExistingId) { setAddError("Choose a checkpoint."); return; }
+        body.checkpointId = addCheckpointExistingId;
+      } else {
+        if (addCheckpointAtSec === "" || !Number.isFinite(Number(addCheckpointAtSec)) || Number(addCheckpointAtSec) < 0) {
+          setAddError("Checkpoint timestamp (seconds) is required."); return;
+        }
+        body.newCheckpoint = {
+          atSecond: Number(addCheckpointAtSec),
+          label: addCheckpointLabel.trim() || null,
+          requiredToProceed: addCheckpointRequiredToProceed,
+          maxRetries: addCheckpointMaxRetries === "" ? 3 : Number(addCheckpointMaxRetries),
+        };
+      }
+    }
+
+    setAddBusy(true);
+    try {
+      const resp = await fetch(`/api/admin/training/versions/${props.versionId}/manual-questions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const resBody = (await resp.json().catch(() => ({}))) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        issues?: Array<{ path: string; message: string }>;
+      };
+      if (!resp.ok || resBody.ok !== true) {
+        const first = resBody.issues?.[0];
+        const msg = first ? `${first.path}: ${first.message}` : (resBody.message ?? resBody.error ?? `HTTP ${resp.status}`);
+        setAddError(msg);
+        setAddBusy(false);
+        return;
+      }
+      resetAddForm();
+      setAddPanelOpen(false);
+      router.refresh();
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : "Unknown error.");
+    } finally {
+      setAddBusy(false);
+    }
+  }, [addBusy, addPrompt, addOptions, addQType, mode, addCheckpointBindMode, addCheckpointExistingId, addCheckpointAtSec, addCheckpointLabel, addCheckpointRequiredToProceed, addCheckpointMaxRetries, props.versionId, resetAddForm, router]);
+
+  const deleteManualQuestion = useCallback(async (questionId: string) => {
+    if (!window.confirm("Delete this manager-authored question? This can't be undone.")) return;
+    try {
+      const resp = await fetch(`/api/admin/training/versions/${props.versionId}/manual-questions/${questionId}`, {
+        method: "DELETE",
+      });
+      if (!resp.ok) {
+        const b = await resp.json().catch(() => ({}));
+        window.alert(`Delete failed: ${b?.message ?? resp.status}`);
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Unknown error.");
+    }
+  }, [props.versionId, router]);
 
   // ── Review action handlers ──────────────────────────────────────
   const refreshDraftState = useCallback(async (draftId: string) => {
@@ -521,8 +720,13 @@ export default function ManagerReviewClient(props: Props) {
     [sortedCheckpoints],
   );
 
-  // ── Empty state (no video + no drafts) ──────────────────────────
-  if (!props.videoUrl && props.drafts.length === 0) {
+  // ── Empty state (no video + no AI drafts + no manual questions) ──
+  // EP-TRAIN-4Y-AX §2 — relaxed so the review workspace still renders
+  // when the manager has already authored at least one manual question
+  // but no video is uploaded yet. Manual authoring is still possible
+  // with no video for final-assessment questions; checkpoints need a
+  // video playhead.
+  if (!props.videoUrl && props.drafts.length === 0 && manualQuestions.length === 0 && !canAddQuestion) {
     return (
       <div className="card card-body text-sm text-stone-500" data-testid="manager-review-empty">
         No video uploaded yet. <a href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}`} className="text-club-green hover:underline">Upload one here →</a>
@@ -545,12 +749,24 @@ export default function ManagerReviewClient(props: Props) {
   return (
     <>
       {/* ── Breadcrumb + inline header ─────────────────────────── */}
-      <div className="mb-5">
+      {/* EP-TRAIN-4Y-AX §1 — the Active Courses list is the parent
+          surface; the course-detail / version-editor page remains
+          available for secondary configuration (publish readiness,
+          lifecycle actions) via the "Settings" affordance below. */}
+      <div className="mb-5 flex items-center gap-3">
+        <a
+          href="/app/admin/people/safety-training"
+          className="text-sm text-stone-500 hover:text-club-ink"
+        >
+          ← Safety &amp; Training
+        </a>
+        <span className="text-stone-300">·</span>
         <a
           href={`/app/admin/people/safety-training/${props.courseId}/${props.versionId}`}
           className="text-sm text-stone-500 hover:text-club-ink"
+          data-testid="manager-review-settings-link"
         >
-          ← Course editor
+          Settings &amp; publish
         </a>
       </div>
 
@@ -768,7 +984,326 @@ export default function ManagerReviewClient(props: Props) {
             >
               Final assessment · {totalFinal}
             </button>
+            {canAddQuestion && (
+              <button
+                type="button"
+                className="btn btn-sm btn-primary ml-auto"
+                onClick={() => {
+                  if (!guardUnsaved("Open the add-question form")) return;
+                  setAddPanelOpen((v) => !v);
+                  if (!addPanelOpen) resetAddForm();
+                }}
+                data-testid="manager-review-add-question-open"
+                aria-expanded={addPanelOpen}
+              >
+                {addPanelOpen ? "Close" : "+ Add question"}
+              </button>
+            )}
           </div>
+
+          {/* ── EP-TRAIN-4Y-AX §2 — inline add-question form ──── */}
+          {canAddQuestion && addPanelOpen && (
+            <section
+              className="rounded-lg border border-club-green/40 bg-white p-4 space-y-3"
+              data-testid="manager-review-add-question-panel"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-serif text-stone-900">
+                  Add {mode === "checkpoints" ? "a checkpoint" : "a final-assessment"} question
+                </h3>
+                <span className="text-[11px] uppercase tracking-wide text-stone-500">Manager-authored</span>
+              </div>
+
+              <label className="block">
+                <span className="label">Question type</span>
+                <select
+                  className="input mt-1 w-full"
+                  value={addQType}
+                  onChange={(e) => onChangeQType(e.target.value as typeof addQType)}
+                  data-testid="manager-review-add-question-type"
+                  disabled={addBusy}
+                >
+                  <option value="SINGLE_CHOICE">Single choice</option>
+                  <option value="MULTI_ANSWER">Multiple answers</option>
+                  <option value="TRUE_FALSE">True / False</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="label">Question stem</span>
+                <textarea
+                  className="input mt-1 w-full"
+                  rows={3}
+                  value={addPrompt}
+                  onChange={(e) => setAddPrompt(e.target.value)}
+                  placeholder="Write a clear, standalone question."
+                  data-testid="manager-review-add-question-prompt"
+                  disabled={addBusy}
+                />
+              </label>
+
+              <div className="space-y-1.5">
+                <span className="label">Options</span>
+                {addOptions.map((o, i) => (
+                  <div key={i} className="flex items-start gap-2" data-testid={`manager-review-add-option-${i}`}>
+                    <label className="mt-2.5 inline-flex items-center gap-1 text-xs text-stone-600 shrink-0">
+                      {addQType === "MULTI_ANSWER" ? (
+                        <input
+                          type="checkbox"
+                          checked={o.isCorrect}
+                          onChange={() =>
+                            setAddOptions((prev) => prev.map((x, j) => (j === i ? { ...x, isCorrect: !x.isCorrect } : x)))
+                          }
+                          data-testid={`manager-review-add-option-correct-${i}`}
+                          disabled={addBusy}
+                        />
+                      ) : (
+                        <input
+                          type="radio"
+                          name="manager-review-add-correct"
+                          checked={o.isCorrect}
+                          onChange={() =>
+                            setAddOptions((prev) => prev.map((x, j) => ({ ...x, isCorrect: j === i })))
+                          }
+                          data-testid={`manager-review-add-option-correct-${i}`}
+                          disabled={addBusy}
+                        />
+                      )}
+                      Correct
+                    </label>
+                    <input
+                      className="input flex-1"
+                      value={o.text}
+                      onChange={(e) =>
+                        setAddOptions((prev) => prev.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))
+                      }
+                      placeholder={`Option ${i + 1}`}
+                      data-testid={`manager-review-add-option-text-${i}`}
+                      disabled={addBusy || addQType === "TRUE_FALSE"}
+                    />
+                    {addQType !== "TRUE_FALSE" && addOptions.length > 2 && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary shrink-0"
+                        onClick={() =>
+                          setAddOptions((prev) => prev.filter((_, j) => j !== i))
+                        }
+                        disabled={addBusy}
+                        aria-label={`Remove option ${i + 1}`}
+                      >
+                        −
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {addQType !== "TRUE_FALSE" && addOptions.length < 8 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setAddOptions((prev) => [...prev, { text: "", isCorrect: false }])}
+                    disabled={addBusy}
+                    data-testid="manager-review-add-option-add"
+                  >
+                    + Add option
+                  </button>
+                )}
+              </div>
+
+              {mode === "checkpoints" && (
+                <fieldset className="rounded-md border border-stone-200 bg-stone-50 px-3 py-3 space-y-2">
+                  <legend className="px-1 text-xs font-medium text-stone-700">Checkpoint placement</legend>
+                  <div className="flex items-center gap-4 text-sm">
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="manager-review-add-cp-bind"
+                        checked={addCheckpointBindMode === "new"}
+                        onChange={() => setAddCheckpointBindMode("new")}
+                        disabled={addBusy}
+                      />
+                      New checkpoint at…
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="manager-review-add-cp-bind"
+                        checked={addCheckpointBindMode === "existing"}
+                        onChange={() => setAddCheckpointBindMode("existing")}
+                        disabled={addBusy || sortedCheckpoints.length === 0}
+                      />
+                      Existing checkpoint
+                    </label>
+                  </div>
+                  {addCheckpointBindMode === "new" && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="block">
+                        <span className="label">Timestamp (seconds)</span>
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            type="number"
+                            className="input w-full"
+                            min={0}
+                            step={1}
+                            value={addCheckpointAtSec}
+                            onChange={(e) => setAddCheckpointAtSec(e.target.value === "" ? "" : Number(e.target.value))}
+                            data-testid="manager-review-add-cp-atsec"
+                            disabled={addBusy}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-secondary shrink-0"
+                            onClick={useCurrentPlaybackTime}
+                            disabled={addBusy || !props.videoUrl}
+                            data-testid="manager-review-add-cp-use-playback"
+                            title="Use the video's current playback time"
+                          >
+                            Use current time
+                          </button>
+                        </div>
+                      </label>
+                      <label className="block">
+                        <span className="label">Label (optional)</span>
+                        <input
+                          type="text"
+                          className="input mt-1 w-full"
+                          value={addCheckpointLabel}
+                          onChange={(e) => setAddCheckpointLabel(e.target.value)}
+                          placeholder="e.g. Checkpoint 3 — Safety"
+                          data-testid="manager-review-add-cp-label"
+                          disabled={addBusy}
+                        />
+                      </label>
+                      <label className="inline-flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={addCheckpointRequiredToProceed}
+                          onChange={(e) => setAddCheckpointRequiredToProceed(e.target.checked)}
+                          data-testid="manager-review-add-cp-required"
+                          disabled={addBusy}
+                        />
+                        Required to proceed
+                      </label>
+                      <label className="block">
+                        <span className="label">Max retries</span>
+                        <input
+                          type="number"
+                          className="input mt-1 w-full"
+                          min={0}
+                          max={10}
+                          value={addCheckpointMaxRetries}
+                          onChange={(e) => setAddCheckpointMaxRetries(e.target.value === "" ? "" : Number(e.target.value))}
+                          data-testid="manager-review-add-cp-maxretries"
+                          disabled={addBusy}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {addCheckpointBindMode === "existing" && (
+                    <label className="block">
+                      <span className="label">Checkpoint</span>
+                      <select
+                        className="input mt-1 w-full"
+                        value={addCheckpointExistingId ?? ""}
+                        onChange={(e) => setAddCheckpointExistingId(e.target.value || null)}
+                        data-testid="manager-review-add-cp-existing"
+                        disabled={addBusy}
+                      >
+                        <option value="">— Select a checkpoint —</option>
+                        {sortedCheckpoints.map((c, i) => (
+                          <option key={c.id} value={c.id}>
+                            {`${i + 1}. ${c.title} (${c.atSecond}s)`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </fieldset>
+              )}
+
+              {addError && (
+                <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700" role="alert" data-testid="manager-review-add-error">
+                  {addError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => { setAddPanelOpen(false); resetAddForm(); }}
+                  disabled={addBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={submitManualQuestion}
+                  disabled={addBusy}
+                  data-testid="manager-review-add-save"
+                >
+                  {addBusy ? "Saving…" : "Save question"}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* ── EP-TRAIN-4Y-AX §2 — manager-authored question list ── */}
+          {(mode === "checkpoints" ? manualCheckpoint : manualFinal).length > 0 && (
+            <section
+              className="rounded-lg border border-stone-200 bg-white"
+              data-testid="manager-review-manual-section"
+            >
+              <header className="flex items-center justify-between px-4 py-2 border-b border-stone-200">
+                <h3 className="text-sm font-serif text-stone-900">Manager-authored</h3>
+                <span className="text-[11px] uppercase tracking-wide text-stone-500">
+                  {(mode === "checkpoints" ? manualCheckpoint : manualFinal).length}
+                </span>
+              </header>
+              <ul className="divide-y divide-stone-100">
+                {(mode === "checkpoints" ? manualCheckpoint : manualFinal).map((q) => (
+                  <li key={q.id} className="px-4 py-3" data-testid={`manager-review-manual-item-${q.id}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-stone-900">{q.prompt}</p>
+                        <p className="mt-1 text-[11px] text-stone-500">
+                          {q.questionType.replace("_", " ").toLowerCase()}
+                          {q.destination === "CHECKPOINT" && q.checkpointAtSecond !== null
+                            ? ` · checkpoint at ${q.checkpointAtSecond}s`
+                            : q.destination === "FINAL_ASSESSMENT"
+                              ? " · final assessment"
+                              : ""}
+                          {" · "}Manager-authored
+                        </p>
+                        <ul className="mt-1.5 text-xs text-stone-700 space-y-0.5">
+                          {q.options.map((o, i) => (
+                            <li key={o.id}>
+                              <span className="font-mono text-stone-500">{String.fromCharCode(65 + i)}.</span>{" "}
+                              <span className={o.isCorrect ? "text-emerald-800 font-medium" : ""}>
+                                {o.text}
+                              </span>
+                              {o.isCorrect && <span className="ml-1 text-[10px] text-emerald-700">(correct)</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      {canAddQuestion && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary shrink-0 text-red-700"
+                          onClick={() => void deleteManualQuestion(q.id)}
+                          data-testid={`manager-review-manual-delete-${q.id}`}
+                          aria-label="Delete manager-authored question"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section
             className="card card-body flex-1"

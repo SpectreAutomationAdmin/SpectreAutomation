@@ -474,6 +474,70 @@ export default async function ManagerReviewPage({
   // recovered or expired records are filtered out server-side.
   const retainedRejectedProposals = await listRetainedForManagerReview(clubId, version.id);
 
+  // EP-TRAIN-4Y-AX §2 (2026-11-11) — load manager-authored
+  // TrainingQuestion rows for this version so the review workspace can
+  // render them alongside the AI drafts in their respective tabs. A
+  // question's provenance is determined structurally: a non-null
+  // `aiPromotion` means the question was promoted from an AI draft;
+  // a NULL aiPromotion means it is manager-authored. No schema change;
+  // no new column.
+  //
+  // Safety: the loader includes an `aiPromotion` select so the client
+  // never surfaces an AI-promoted question through the manual list
+  // (which would double-count it against the AI-drafts tab). Promoted
+  // questions are filtered out server-side.
+  type ManualQuestionDest = "CHECKPOINT" | "FINAL_ASSESSMENT";
+  interface ManualQuestionForClient {
+    id: string;
+    prompt: string;
+    questionType: "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE";
+    destination: ManualQuestionDest;
+    checkpointId: string | null;
+    checkpointAtSecond: number | null;
+    options: Array<{ id: string; text: string; isCorrect: boolean }>;
+    displayOrder: number;
+    active: boolean;
+    updatedAt: string;
+  }
+  let manualQuestions: ManualQuestionForClient[] = [];
+  if (canRead) {
+    const rows = await prisma.trainingQuestion.findMany({
+      where: { courseVersionId: version.id, courseVersion: { course: { clubId } } },
+      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        prompt: true,
+        questionType: true,
+        checkpointId: true,
+        checkpoint: { select: { atSecond: true } },
+        displayOrder: true,
+        active: true,
+        updatedAt: true,
+        aiPromotion: { select: { questionId: true } },
+        options: {
+          orderBy: { displayOrder: "asc" },
+          select: { id: true, text: true, isCorrect: true },
+        },
+      },
+    });
+    manualQuestions = rows
+      .filter((r) => !r.aiPromotion)
+      .map((r) => ({
+        id: r.id,
+        prompt: r.prompt,
+        questionType: (r.questionType === "MULTI_ANSWER" || r.questionType === "TRUE_FALSE"
+          ? r.questionType
+          : "SINGLE_CHOICE") as ManualQuestionForClient["questionType"],
+        destination: (r.checkpointId ? "CHECKPOINT" : "FINAL_ASSESSMENT") as ManualQuestionDest,
+        checkpointId: r.checkpointId ?? null,
+        checkpointAtSecond: r.checkpoint?.atSecond ?? null,
+        options: r.options.map((o) => ({ id: o.id, text: o.text, isCorrect: o.isCorrect })),
+        displayOrder: r.displayOrder,
+        active: r.active,
+        updatedAt: r.updatedAt.toISOString(),
+      }));
+  }
+
   // EP-TRAIN-4Y-AA §2 — the course-level AI title + description are
   // the authoritative source for the review header. Fall back to the
   // version's values only when the course row is somehow empty (a
@@ -511,6 +575,8 @@ export default async function ManagerReviewPage({
         courseId={params.courseId}
         publishConfig={publishConfig}
         retainedRejectedProposals={retainedRejectedProposals}
+        manualQuestions={manualQuestions}
+        isDraft={version.state === "DRAFT"}
       />
     </div>
   );
