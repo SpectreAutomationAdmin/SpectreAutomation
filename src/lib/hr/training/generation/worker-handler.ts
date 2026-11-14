@@ -1259,7 +1259,21 @@ function buildSystemPrompt(kind: "CHECKPOINT" | "FINAL_ASSESSMENT", target: numb
 }
 
 /** EP-TRAIN-4Y-N (2026-11-08) — context-aware checkpoint prompt.
- *  Exported for offline fixture tests. */
+ *  Exported for offline fixture tests.
+ *
+ *  EP-TRAIN-4Y-BD (2026-11-14) — add EMPLOYEE-FACING TEXT PURITY
+ *  clause (constraint §7). The 4Y-AI slice proved the FA prompt
+ *  could still leak provenance into employee-facing text when the
+ *  model was handed an explicit segment-id list; 4Y-AJ hardened the
+ *  FA prompt with an explicit purity clause. The checkpoint prompt
+ *  was never updated to match. The 4Y-BD forensic trace found
+ *  Qwen writing "Segment ID 54" / "Segment ID 46" / "Segment ID 48"
+ *  into the EXPLANATION of the one CP proposal returned for
+ *  cmwgl11wv002jh25jb8gfzlwi; the employee-facing-text sanitiser
+ *  correctly dropped it under EXPLICIT_SEGMENT_ID_REFERENCE, which
+ *  left zero CP drafts on a run that had 1 live proposal to persist.
+ *  The repair below is lifted verbatim from the FA prompt's §6
+ *  purity clause so CP + FA stay in lockstep. */
 export function buildCheckpointSystemPromptCtxV1(args: {
   readonly atSec: number;
   readonly target: number;
@@ -1277,7 +1291,7 @@ export function buildCheckpointSystemPromptCtxV1(args: {
     ? `[${args.windowSegmentIds.join(", ")}]`
     : "(empty)";
   const priorBlock = args.priorTopics.length > 0
-    ? `\n7. The following question topics have ALREADY been generated for earlier checkpoints — do NOT ask a question that duplicates or paraphrases any of these:\n${args.priorTopics.join("\n")}`
+    ? `\n10. The following question topics have ALREADY been generated for earlier checkpoints — do NOT ask a question that duplicates or paraphrases any of these:\n${args.priorTopics.join("\n")}`
     : "";
   return `You are a training-content authoring assistant for Spectre, a training platform used by private golf and country clubs.
 
@@ -1286,19 +1300,20 @@ Produce up to ${args.target} multiple-choice question${args.target === 1 ? "" : 
 Checkpoint learning objective${args.los.length === 1 ? "" : "s"}:
 ${loLines}
 
-Evidence window — the transcript segments shown BEFORE this checkpoint moment, which are the ONLY content the employee has seen so far:
-  segment ids: ${windowStr}
+Evidence window — the transcript segments shown BEFORE this checkpoint moment, which are the ONLY content the employee has seen so far. The bracketed reference tag on each transcript line (for example \`[NN]\`) is INTERNAL METADATA for the \`sourceSegmentIds\` JSON field ONLY:
+  evidence passages: ${windowStr}
 
 Constraints:
 1. Assess ONLY material covered in the evidence window. Do NOT ask about anything later in the course that the employee has not yet watched.
-2. Each question MUST cite at least one transcript segment id that appears in the evidence window.
+2. Each question MUST cite at least one transcript segment id that appears in the evidence window. Put the bracketed reference tag(s) of each supporting passage into \`sourceSegmentIds\` ONLY. Cite 1-3 tags per question; do NOT list the whole passage set.
 3. Prefer SINGLE_CHOICE; TRUE_FALSE is acceptable when the source material directly supports a binary claim.
 4. Do NOT invent facts — every answer must be explicitly stated or directly supported by the cited segment(s).
 5. Keep the question focused on the LISTED learning objective(s), not peripheral content.
 6. Prefer a question that tests APPLICATION or JUDGMENT (what should the employee do?) over bare recall when the source material supports it.
-7. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.
-8. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
-9. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem.${priorBlock}`;
+7. EMPLOYEE-FACING TEXT PURITY — \`questionText\`, every \`options[].text\`, and \`explanation\` are read by employees. They MUST NOT contain the words "segment", "segments", "transcript", "passage id", "source", "reference", bracketed numbers like "[12]" / "[12, 13]", or any digit used as a provenance reference. They MUST NOT begin with or contain the phrases "According to the transcript", "According to the training", "According to the training material", "According to the course content", "According to the course", "According to the material", "According to the presentation", "Per the transcript", "Per the training", "As stated in the video", "As stated in the training", "Based on the presentation", "Based on the training", "Based on the course", or any similar pointer that cites, quotes or refers to the source document. The question stem must be answerable by someone who watched the video but is tested on retention — it must NEVER mention how the information was conveyed. Phrase every sentence as if you had learned the content yourself; the employee already knows the context.
+8. QUESTION STRUCTURE — \`questionText\` is the stem ONLY. Do NOT include answer choices in the stem. Do NOT include "A)" / "B)" / "C)" / "D)" labels, "Correct Answer: …", "Segment IDs: …", or option bodies in the stem. The stem is independently understandable without the options.
+9. \`options[].text\` is the answer body ONLY. Do NOT prefix with "A) " / "B) ". Do NOT duplicate the stem. One option has \`isCorrect: true\`; every other option has \`isCorrect: false\`.
+10. \`explanation\` is grounded context for WHY the correct option is correct. Do NOT append the explanation to the stem. Phrase it as a short teaching note — not as a citation.${priorBlock}`;
 }
 
 /** EP-TRAIN-4Y-N (2026-11-08) — context-aware final-assessment prompt.

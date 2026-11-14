@@ -49,10 +49,15 @@ export const DURATION_SIZING_POLICY: readonly DurationSizingBucket[] = [
     defaultCheckpointCount: 3, defaultFinalCount: 6,
   },
   {
+    // EP-TRAIN-4Y-BD §2 (2026-11-14) — the founder directive raised
+    // the 10-15 min bucket's default minimum from 4 CP to 5 CP. The
+    // bucket's min / max envelope widens so a 643-s video still has
+    // room for manager down-sizing, and `defaultCheckpointCount`
+    // becomes the published floor for this duration class.
     label: "10-15 minutes",
     minSec: 600, maxSec: 900,
-    checkpointMin: 3, checkpointMax: 5, finalMin: 6, finalMax: 10,
-    defaultCheckpointCount: 4, defaultFinalCount: 8,
+    checkpointMin: 5, checkpointMax: 7, finalMin: 6, finalMax: 10,
+    defaultCheckpointCount: 5, defaultFinalCount: 8,
   },
   {
     label: "15-30 minutes",

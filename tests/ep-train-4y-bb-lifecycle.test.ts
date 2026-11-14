@@ -49,12 +49,13 @@ function findStage(stages: readonly Stage[], id: StageId): Stage {
 }
 
 describe("EP-TRAIN-4Y-BB §2 — duration-based sizing", () => {
-  it("maps 643-sec video to the 10-15 min bucket (default 4 CP + 8 FA)", () => {
+  it("maps 643-sec video to the 10-15 min bucket (default 5 CP + 8 FA — EP-TRAIN-4Y-BD §2)", () => {
     const r = sizeForDuration(643);
     expect(r.bucket.label).toBe("10-15 minutes");
-    expect(r.checkpointCount).toBe(4);
+    // EP-TRAIN-4Y-BD §2 raised the 10-15 min default from 4 CP to 5 CP.
+    expect(r.checkpointCount).toBe(5);
     expect(r.finalCount).toBe(8);
-    expect(r.totalCount).toBe(12);
+    expect(r.totalCount).toBe(13);
   });
 
   it("maps every table bucket to its documented defaults", () => {
@@ -63,7 +64,8 @@ describe("EP-TRAIN-4Y-BB §2 — duration-based sizing", () => {
       [60, 1, 4],       // under 3 min
       [240, 2, 5],      // 3-5 min
       [540, 3, 6],      // 5-10 min
-      [643, 4, 8],      // 10-15 min (current course)
+      // EP-TRAIN-4Y-BD §2 — 10-15 min bucket default CP floor is 5.
+      [643, 5, 8],      // 10-15 min (current course)
       [1200, 6, 10],    // 15-30 min
       [2700, 10, 12],   // 30-60 min
       [5400, 14, 16],   // over 60 min
@@ -74,11 +76,14 @@ describe("EP-TRAIN-4Y-BB §2 — duration-based sizing", () => {
     }
   });
 
-  it("clamps caller overrides to the bucket's min/max", () => {
+  it("clamps caller overrides to the 10-15 min bucket's min/max (BD: min=5, max=7)", () => {
     const bucket = DURATION_SIZING_POLICY.find((b) => b.label === "10-15 minutes")!;
-    expect(clampToBucket(bucket, { checkpointCount: 100 })).toEqual({ checkpointCount: 5, finalCount: 8 });
-    expect(clampToBucket(bucket, { checkpointCount: -3 })).toEqual({ checkpointCount: 3, finalCount: 8 });
-    expect(clampToBucket(bucket, { finalCount: 50 })).toEqual({ checkpointCount: 4, finalCount: 10 });
+    // Above max → clamp to max (BD max=7).
+    expect(clampToBucket(bucket, { checkpointCount: 100 })).toEqual({ checkpointCount: 7, finalCount: 8 });
+    // Below min → clamp up to min (BD min=5 — the published floor).
+    expect(clampToBucket(bucket, { checkpointCount: -3 })).toEqual({ checkpointCount: 5, finalCount: 8 });
+    // FA override only → default CP (5 per BD) + clamped FA.
+    expect(clampToBucket(bucket, { finalCount: 50 })).toEqual({ checkpointCount: 5, finalCount: 10 });
   });
 
   it("falls back to the first bucket for null / 0 duration", () => {
