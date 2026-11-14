@@ -24,9 +24,22 @@
 import { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 
-/** Pilot budget (application-side). Distinct from the $10/day/club
- *  cap in generation-service.ts and the $10 Modal account cap. */
-export const PILOT_BUDGET_USD_MICROS = 1_000_000; // $1.00 × 1e6
+/** Default per-course processing budget (application-side).
+ *  Distinct from the $10/day/club cap in generation-service.ts and
+ *  the $10 Modal account cap.
+ *
+ *  EP-TRAIN-4Y-BA §2 — raised from the historical $1 pilot default
+ *  to $5.00. Right-sized plans for routine 10-min training videos
+ *  project worst-case ≤ $1.50 (see §9 of the BA report); $5 leaves
+ *  room for one bounded retry per Modal call without tripping the
+ *  gate. Over-$5 courses still require an explicit founder-issued
+ *  override via `PER_COURSE_BUDGET_OVERRIDES` (below).
+ *
+ *  The historical name `PILOT_BUDGET_USD_MICROS` is preserved as an
+ *  alias so prior callers compile unchanged.
+ */
+export const DEFAULT_PER_COURSE_BUDGET_USD_MICROS = 5_000_000; // $5.00
+export const PILOT_BUDGET_USD_MICROS = DEFAULT_PER_COURSE_BUDGET_USD_MICROS;
 
 /** EP-TRAIN-4Y-AN §2 — per-pilot budget overrides.
  *

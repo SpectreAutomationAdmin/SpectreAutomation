@@ -359,11 +359,25 @@ export function buildTopicAwareAssessmentPlan(
     finalTarget = Math.max(0, target - checkpointTarget);
   }
 
-  const proposedCheckpointGroups: AssessmentPlanCheckpointGroup[] = placed.map((p, i) => ({
+  // EP-TRAIN-4Y-BA §5 — Right-size the group count to checkpointTarget.
+  //
+  // The 4Y-AZ probe found a plan with 30 placed checkpoints and a
+  // nominal checkpointTarget=1 that expanded into 30 CP questions
+  // because every group received `Math.max(1, floor(1/30)) = 1`
+  // question. The `Math.max(1, ...)` floor is correct per-group —
+  // the fix is to CULL the placed list to at most `checkpointTarget`
+  // entries first, selecting evenly-spaced representatives so the
+  // video's narrative arc still covers beginning / middle / end.
+  const selectedPlaced: InternalCheckpoint[] =
+    placed.length <= checkpointTarget
+      ? placed
+      : evenlyPickIndices(placed.length, checkpointTarget).map((i) => placed[i]);
+
+  const proposedCheckpointGroups: AssessmentPlanCheckpointGroup[] = selectedPlaced.map((p, i) => ({
     id: `cg-${i + 1}`,
     atSec: Math.round(p.atSec * 1000) / 1000,
     learningObjectiveIds: [p.loId],
-    targetQuestionCount: Math.max(1, Math.floor(checkpointTarget / Math.max(1, placed.length))),
+    targetQuestionCount: Math.max(1, Math.floor(checkpointTarget / Math.max(1, selectedPlaced.length))),
   }));
   // Rebalance remainder into the first group so the sum matches.
   let allocated = 0;
@@ -371,6 +385,16 @@ export function buildTopicAwareAssessmentPlan(
   if (proposedCheckpointGroups.length > 0 && allocated !== checkpointTarget) {
     const delta = checkpointTarget - allocated;
     (proposedCheckpointGroups[0] as { targetQuestionCount: number }).targetQuestionCount += delta;
+  }
+
+  // Record how many placed candidates were dropped so the caller can
+  // surface it as a plan-shaping shortfall (not GPU shortfall).
+  const planCulledForTarget = placed.length - selectedPlaced.length;
+  if (planCulledForTarget > 0) {
+    shortfalls.push({
+      reason: "SPACING_FORCED_FEWER_CHECKPOINTS",
+      detail: `${planCulledForTarget} placed checkpoint(s) culled: only ${checkpointTarget} CP question(s) requested per plan target`,
+    });
   }
   // If after rebalance the first group dropped to zero, the group
   // itself is a defect — cull it.
@@ -417,4 +441,30 @@ export function buildTopicAwareAssessmentPlan(
     shortfalls,
     rulesVersion: PLACEMENT_RULES_VERSION,
   };
+}
+
+// EP-TRAIN-4Y-BA §5 — Evenly-spaced index selection. Picks `k`
+// indices from [0, n) such that the first and last indices are at
+// the endpoints (or near them when n ≤ k) and the rest are distributed
+// as uniformly as possible. Pure, deterministic.
+export function evenlyPickIndices(n: number, k: number): number[] {
+  if (k <= 0 || n <= 0) return [];
+  if (k >= n) return Array.from({ length: n }, (_, i) => i);
+  const picked: number[] = [];
+  // k=1 → pick the midpoint so a single CP lands near the video middle.
+  if (k === 1) return [Math.floor(n / 2)];
+  const step = (n - 1) / (k - 1);
+  for (let i = 0; i < k; i++) {
+    picked.push(Math.round(i * step));
+  }
+  // Dedupe while preserving order (round can collide at small n).
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const i of picked) {
+    if (!seen.has(i)) {
+      seen.add(i);
+      out.push(i);
+    }
+  }
+  return out;
 }

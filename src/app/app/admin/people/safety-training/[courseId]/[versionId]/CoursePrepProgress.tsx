@@ -113,21 +113,18 @@ export default function CoursePrepProgress({ versionId }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      // EP-TRAIN-4Y-AZ §3 — Each poll triggers the idempotent
-      // auto-prepare orchestration. The server-side endpoint enqueues
-      // transcription (if the video is uploaded and no job exists) and
-      // the generation run (once transcript is ready). Automation is
-      // the normal workflow; the Start-preparation button remains only
-      // as explicit recovery.
+      // EP-TRAIN-4Y-BA §3 — The 4Y-AZ orchestration-from-polling
+      // approach has been reverted: polling MUST NOT trigger GPU-
+      // generating side effects. The 4Y-AZ auto-prepare poll created
+      // a runaway loop against the current course (one new FAILED
+      // run every 5 seconds because FAILED wasn't in the "already
+      // active" filter). The directive is explicit: "A GET request
+      // or page render must never initiate new GPU expenditure."
       //
-      // auto-prepare is tolerant of failures and only reports state;
-      // we fire-and-forget. The authoritative view comes from
-      // /preparation-status in the same tick.
-      void fetch(
-        `/api/admin/training/versions/${versionId}/auto-prepare`,
-        { method: "POST", cache: "no-store" },
-      ).catch(() => { /* non-fatal; next poll retries */ });
-
+      // Server-side orchestration now lives in the transcription
+      // worker's post-success handler (chains straight into
+      // generation when an authorization record exists for the
+      // version). The page is read-only.
       const resp = await fetch(
         `/api/admin/training/versions/${versionId}/preparation-status`,
         { cache: "no-store" },

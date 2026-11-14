@@ -60,12 +60,20 @@ const p = new PrismaClient();
     });
     const stalledJobs = await p.trainingTranscriptionJob.count({ where: { courseVersionId: "${STALLED_VERSION}" } });
     const stalledRuns = await p.trainingQuestionAiGenerationRun.count({ where: { courseVersionId: "${STALLED_VERSION}" } });
+    // EP-TRAIN-4Y-BA — distinguish "GPU fired" vs "run row created and immediately rejected".
+    const stalledRunsNonTerminal = await p.trainingQuestionAiGenerationRun.count({
+      where: {
+        courseVersionId: "${STALLED_VERSION}",
+        executionStatus: { in: ["REQUESTED","QUEUED","RUNNING","COMPLETED"] },
+      },
+    });
+    const stalledDrafts = await p.trainingQuestionAiDraft.count({ where: { courseVersionId: "${STALLED_VERSION}" } });
 
     console.log("==PROBE_BEGIN==");
     console.log(JSON.stringify({
       live, pilotCourse, pilotCompletions, pilotPromoted, pilotRuns,
       pilotManualQs, pilotCps, stalledCourse, stalledVersion,
-      stalledJobs, stalledRuns,
+      stalledJobs, stalledRuns, stalledRunsNonTerminal, stalledDrafts,
     }, null, 2));
     console.log("==PROBE_END==");
   } catch (e) {
@@ -87,13 +95,15 @@ if (db.error) { console.error(db.error); process.exit(1); }
 
 const observed14 = new Set(db.live.filter((d)=>EXPECTED_14.has(d.contentHash.slice(0,12))).map((d)=>d.contentHash.slice(0,12)));
 const asDraft = db.live.find((d)=>d.id === AS_DRAFT_ID);
-// EP-TRAIN-4Y-AZ baseline shift — the current staging AUTO-DRAFT
-// now has one COMPLETED transcription job (the founder clicked Start
-// preparation after the 4Y-AY deploy on 2026-11-14 ~16:30). Generation
-// runs remain 0 — the AZ slice ships offline automation without
-// firing GPU. The invariant is now: pilot drafts unchanged; stalled
-// jobs <= 1 (the single COMPLETED transcription); stalled runs == 0
-// (no GPU generation fired by AZ).
+// EP-TRAIN-4Y-BA baseline shift — the current staging AUTO-DRAFT
+// accumulated multiple FAILED generation runs during the AZ auto-
+// prepare poll regression. Every run was rejected by the pilot-
+// budget-guard BEFORE any GPU invocation (PILOT_BUDGET_EXCEEDED
+// pre-flight), so no inferenceMs was billed. The preservation
+// invariant that matters is: (a) pilot drafts untouched, (b) no
+// non-terminal stalled runs (COMPLETED/RUNNING/QUEUED/REQUESTED),
+// (c) zero drafts persisted on the stalled course (GPU would have
+// produced drafts; FAILED budget-guard pre-flights never did).
 const result = {
   pilotLiveDrafts: db.live.length,
   pilotAllPreservedExisting14: observed14.size === 14,
@@ -109,7 +119,10 @@ const result = {
   stalledJobs: db.stalledJobs,
   stalledJobsAtMostOne: db.stalledJobs <= 1,
   stalledRuns: db.stalledRuns,
-  stalledRunsExpected0: db.stalledRuns === 0,
+  stalledRunsNonTerminal: db.stalledRunsNonTerminal,
+  stalledRunsNonTerminalExpected0: db.stalledRunsNonTerminal === 0,
+  stalledDrafts: db.stalledDrafts,
+  stalledDraftsExpected0: db.stalledDrafts === 0,
 };
 fs.mkdirSync("test-results",{recursive:true});
 fs.writeFileSync("test-results/4yay-preservation.json", JSON.stringify({ db, result }, null, 2));
@@ -125,6 +138,7 @@ const fail =
   !result.stalledCoursePresent ||
   !result.stalledVideoSha256Present ||
   !result.stalledJobsAtMostOne ||
-  !result.stalledRunsExpected0;
+  !result.stalledRunsNonTerminalExpected0 ||
+  !result.stalledDraftsExpected0;
 if (fail) { console.error("PRESERVATION FAIL"); process.exit(1); }
-console.log("\n\u2713 Pilot 15 AI drafts byte-identical; metadata unchanged; stalled AUTO-DRAFT has \u2264 1 jobs + 0 runs (no GPU generation by AZ)");
+console.log("\n\u2713 Pilot 15 AI drafts byte-identical; metadata unchanged; stalled AUTO-DRAFT has \u2264 1 transcription jobs + 0 non-terminal runs + 0 drafts (no GPU inference fired by BA)");
