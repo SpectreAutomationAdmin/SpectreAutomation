@@ -66,6 +66,7 @@ interface PreparationProgress {
     readonly lastActivityAt: string | null;
     readonly completedStageCount: number;
     readonly totalStageCount: 7;
+    readonly weightedPercent: number;
   };
   readonly stages: readonly Stage[];
 }
@@ -112,6 +113,21 @@ export default function CoursePrepProgress({ versionId }: Props) {
 
   const refresh = useCallback(async () => {
     try {
+      // EP-TRAIN-4Y-AZ §3 — Each poll triggers the idempotent
+      // auto-prepare orchestration. The server-side endpoint enqueues
+      // transcription (if the video is uploaded and no job exists) and
+      // the generation run (once transcript is ready). Automation is
+      // the normal workflow; the Start-preparation button remains only
+      // as explicit recovery.
+      //
+      // auto-prepare is tolerant of failures and only reports state;
+      // we fire-and-forget. The authoritative view comes from
+      // /preparation-status in the same tick.
+      void fetch(
+        `/api/admin/training/versions/${versionId}/auto-prepare`,
+        { method: "POST", cache: "no-store" },
+      ).catch(() => { /* non-fatal; next poll retries */ });
+
       const resp = await fetch(
         `/api/admin/training/versions/${versionId}/preparation-status`,
         { cache: "no-store" },
@@ -165,8 +181,12 @@ export default function CoursePrepProgress({ versionId }: Props) {
     setStarting(true);
     setStartError(null);
     try {
+      // Explicit recovery: fire auto-prepare once synchronously. The
+      // orchestration endpoint handles whichever stage is currently
+      // BLOCKED (transcription or generation). Polling loop will pick
+      // up the state change on the next tick.
       const resp = await fetch(
-        `/api/admin/training/versions/${versionId}/start-preparation`,
+        `/api/admin/training/versions/${versionId}/auto-prepare`,
         { method: "POST", cache: "no-store" },
       );
       if (!resp.ok) {
@@ -208,9 +228,14 @@ export default function CoursePrepProgress({ versionId }: Props) {
 
   const { data } = status;
   const now = new Date(nowTick);
-  const overallPct = Math.round(
-    (data.overall.completedStageCount / data.overall.totalStageCount) * 100,
-  );
+  // Work-time weighted overall %. Falls back to stage-count ratio if
+  // an older server build didn't populate weightedPercent.
+  const overallPct =
+    typeof data.overall.weightedPercent === "number"
+      ? data.overall.weightedPercent
+      : Math.round(
+          (data.overall.completedStageCount / data.overall.totalStageCount) * 100,
+        );
   // Current-stage elapsed is live-ticked between polls when the stage
   // is RUNNING or QUEUED (the server's elapsedMs is a snapshot).
   const currentStage = data.stages.find(
@@ -250,9 +275,20 @@ export default function CoursePrepProgress({ versionId }: Props) {
           >
             {overallPct}%
           </div>
-          <div className="text-xs text-stone-500 tabular-nums">
+          <div
+            className="text-xs text-stone-500 tabular-nums"
+            data-testid="training-prep-overall-stage-count"
+          >
             {data.overall.completedStageCount} of {data.overall.totalStageCount} stages
           </div>
+          {currentStage && currentStage.status !== "COMPLETED" && (
+            <div
+              className="mt-1 text-xs text-stone-500 tabular-nums"
+              data-testid="training-prep-active-op"
+            >
+              Active: <span className="font-medium text-stone-700">{currentStage.label}</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -276,18 +312,30 @@ export default function CoursePrepProgress({ versionId }: Props) {
         ))}
       </ol>
 
-      {/* Controlled-recovery action — rendered when the current stage
-          is BLOCKED and the server says canRecover. Today this is the
-          "transcribe" stage when no job has been enqueued yet. */}
-      {currentStage?.status === "BLOCKED" && currentStage.canRecover && currentStage.id === "transcribe" && (
+      {/* Controlled-recovery action — rendered whenever the current
+          stage is BLOCKED and the server classifies it canRecover.
+          Covers the transcribe gap (no transcription job yet) and the
+          objectives gap (no generation run yet). The 4Y-AZ auto-prepare
+          orchestration normally covers both automatically; this button
+          is the explicit fallback. */}
+      {currentStage?.status === "BLOCKED" &&
+        currentStage.canRecover &&
+        (currentStage.id === "transcribe" || currentStage.id === "objectives") && (
         <div
           className="mt-5 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4"
           data-testid="training-prep-recovery"
         >
           <div className="text-sm text-amber-900">
-            <strong className="font-semibold">Preparation hasn’t started yet.</strong>
+            <strong className="font-semibold">
+              {currentStage.id === "transcribe"
+                ? "Preparation hasn’t started yet."
+                : "Analysis hasn’t started yet."}
+            </strong>
             {" "}
-            {currentStage.blockedReason ?? "Click the button to begin transcription."}
+            {currentStage.blockedReason ??
+              (currentStage.id === "transcribe"
+                ? "Click the button to begin transcription."
+                : "Click the button to begin learning-objective analysis.")}
           </div>
           <button
             type="button"
@@ -296,7 +344,7 @@ export default function CoursePrepProgress({ versionId }: Props) {
             disabled={starting}
             data-testid="training-prep-start-button"
           >
-            {starting ? "Starting…" : "Start preparation"}
+            {starting ? "Starting…" : "Continue preparation"}
           </button>
         </div>
       )}

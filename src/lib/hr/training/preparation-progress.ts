@@ -85,6 +85,11 @@ export interface PreparationProgress {
     readonly lastActivityAt: string | null;
     readonly completedStageCount: number;
     readonly totalStageCount: 7;
+    /** Work-time weighted (0-100). The stage-count ratio
+     *  `completedStageCount/totalStageCount` is a poor proxy for real
+     *  progress because transcription and the two generation stages
+     *  dominate wall clock. See `STAGE_WEIGHTS` in this module. */
+    readonly weightedPercent: number;
   };
   readonly stages: readonly Stage[];
 }
@@ -194,17 +199,24 @@ export async function computePreparationProgress(
   };
 
   // ── 2. INGEST (server-side probe + thumbnail) ────────────────────
+  // elapsedMs is deliberately unmeasured for the completed state:
+  // Spectre does not record a per-milestone timestamp (duration +
+  // thumbnail are written inside the same upload-completion handler),
+  // and using `now - version.updatedAt` keeps ticking forever since
+  // the version row is updated by later writes — that was the
+  // apparent-"56 min preparation" bug the 4Y-AZ report calls out.
   const ingestCompleted =
     uploadCompleted &&
     typeof version.videoDurationSec === "number" &&
     version.videoDurationSec > 0;
   const ingestHasThumbnail = !!version.videoThumbnailStorageKey;
+  const ingestFullyCompleted = ingestCompleted && ingestHasThumbnail;
   const ingest: Stage = {
     id: "ingest",
     label: STAGE_LABELS.ingest,
     status: !uploadCompleted
       ? "WAITING"
-      : ingestCompleted
+      : ingestFullyCompleted
         ? "COMPLETED"
         : "RUNNING",
     progress: uploadCompleted
@@ -219,12 +231,18 @@ export async function computePreparationProgress(
           unit: "milestones",
         }
       : null,
-    startedAt: uploadCompleted ? isoOrNull(version.updatedAt) : null,
-    completedAt: ingestCompleted ? isoOrNull(version.updatedAt) : null,
-    lastActivityAt: isoOrNull(version.updatedAt),
-    elapsedMs: uploadCompleted
-      ? elapsedMs(version.updatedAt, now)
-      : null,
+    // For the RUNNING transitional window only, surface when the upload
+    // completed so the manager sees the elapsed. For COMPLETED ingest
+    // we deliberately omit startedAt + elapsedMs — the duration is
+    // unmeasured and typically sub-second.
+    startedAt: uploadCompleted && !ingestFullyCompleted ? isoOrNull(version.updatedAt) : null,
+    completedAt: ingestFullyCompleted ? isoOrNull(version.updatedAt) : null,
+    lastActivityAt: ingestFullyCompleted ? isoOrNull(version.updatedAt) : isoOrNull(version.updatedAt),
+    elapsedMs: ingestFullyCompleted
+      ? null  // intentionally unmeasured — see comment above
+      : uploadCompleted
+        ? elapsedMs(version.updatedAt, now)
+        : null,
     failureReason: null,
     blockedReason: null,
     canRecover: uploadCompleted && !ingestCompleted,
@@ -430,6 +448,7 @@ export async function computePreparationProgress(
     .sort()
     .pop() ?? null;
   const completedCount = stages.filter((s) => s.status === "COMPLETED").length;
+  const weightedPercent = computeWeightedOverallPercent(stages);
 
   return {
     versionId: version.id,
@@ -440,9 +459,56 @@ export async function computePreparationProgress(
       lastActivityAt,
       completedStageCount: completedCount,
       totalStageCount: 7,
+      weightedPercent,
     },
     stages,
   };
+}
+
+// ─── Work-time weighted overall % ───────────────────────────────────
+//
+// Observed Silver Springs timings (same video family, 643 s, 34 MB):
+//   upload       ~2 min   (browser + server commit)   —   1  "unit"
+//   ingest       <1 s     (ffprobe + thumbnail)       —   1
+//   transcribe   1-2 min  (faster-whisper on A10G)    —   8
+//   objectives   <1 s     (deterministic plan build)  —   1
+//   checkpoints  3-8 min  (Qwen generation, 5 groups) —   24
+//   assessment   3-8 min  (Qwen generation, 10 FA)    —   24
+//   ready         0        (derived)                   —   1
+//
+// Weights sum to 60. Within each stage we count as DONE the completed
+// fraction (progress.percent/100 if progress exists, else 0 or 1 by
+// status). This produces an overall % that reflects meaningful work
+// done rather than simply "stages crossed" — fixes the 4Y-AZ critique
+// that upload+ingest+transcribe+objectives all finishing shouldn't
+// show 57% when the big generation stages haven't started.
+const STAGE_WEIGHTS: Record<StageId, number> = {
+  upload: 1,
+  ingest: 1,
+  transcribe: 8,
+  objectives: 1,
+  checkpoints: 24,
+  assessment: 24,
+  ready: 1,
+};
+
+function computeWeightedOverallPercent(stages: readonly Stage[]): number {
+  let totalWeight = 0;
+  let doneWeight = 0;
+  for (const s of stages) {
+    const w = STAGE_WEIGHTS[s.id];
+    totalWeight += w;
+    if (s.status === "COMPLETED") {
+      doneWeight += w;
+    } else if (s.progress && s.progress.denominator > 0) {
+      // Partial credit from the real numerator/denominator.
+      doneWeight += (w * s.progress.numerator) / s.progress.denominator;
+    }
+    // WAITING / QUEUED / BLOCKED / FAILED with no partial progress
+    // contribute 0 to doneWeight, which is correct.
+  }
+  if (totalWeight <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((100 * doneWeight) / totalWeight)));
 }
 
 // ─── Stage classifiers ──────────────────────────────────────────────
@@ -645,7 +711,10 @@ function classifyObjectives(input: ObjectivesInput): Stage {
   }
   // The assessment plan being present on the run is the authoritative
   // "objectives extracted" signal — the plan builder populates
-  // learningObjectives before persisting the row.
+  // learningObjectives before persisting the row. The plan builder is
+  // DETERMINISTIC and server-local (no GPU), so when it ran it
+  // completed in <1s. We report a bounded 1s elapsed when run.startedAt
+  // exists, otherwise null.
   if (planLearningObjectiveCount && planLearningObjectiveCount > 0) {
     return {
       id: "objectives",
@@ -660,33 +729,62 @@ function classifyObjectives(input: ObjectivesInput): Stage {
       startedAt: isoOrNull(run?.startedAt),
       completedAt: isoOrNull(attributionAt ?? run?.startedAt),
       lastActivityAt: isoOrNull(attributionAt ?? run?.startedAt),
-      elapsedMs: elapsedMs(run?.startedAt, attributionAt ?? now),
+      elapsedMs: run?.startedAt && attributionAt ? elapsedMs(run.startedAt, attributionAt) : null,
       failureReason: null,
       blockedReason: null,
       canRecover: false,
       measurementMethod: MEASUREMENT_METHOD.objectives,
     };
   }
-  // Transcript ready but no plan yet → QUEUED (waiting for generation
-  // run to start) unless a run exists with RUNNING state.
+  // Transcript ready but NO generation run exists at all. Historically
+  // this classified as fabricated RUNNING — the EP-TRAIN-4Y-AZ bug.
+  // Nothing is actually running; the stall is that no code path has
+  // created the generation run. Classify as BLOCKED+canRecover so the
+  // UI exposes a Continue affordance (or so auto-prepare's poll can
+  // enqueue it, see /auto-prepare integration below).
+  if (!run) {
+    return {
+      id: "objectives",
+      label: STAGE_LABELS.objectives,
+      status: "BLOCKED",
+      progress: null,
+      startedAt: null,
+      completedAt: null,
+      lastActivityAt: null,
+      elapsedMs: null,
+      failureReason: null,
+      blockedReason: "Waiting to start learning-objective analysis",
+      canRecover: true,
+      measurementMethod: MEASUREMENT_METHOD.objectives,
+    };
+  }
+  // A run exists but has not produced a plan yet. Reflect its actual
+  // lifecycle state honestly.
   const status: StageStatus =
-    run?.executionStatus === "REQUESTED" || run?.executionStatus === "QUEUED"
+    run.executionStatus === "REQUESTED" || run.executionStatus === "QUEUED"
       ? "QUEUED"
-      : run?.executionStatus === "COMPLETED" || run?.executionStatus === "FAILED"
-        ? "FAILED"
-        : "RUNNING";
+      : run.executionStatus === "RUNNING"
+        ? "RUNNING"
+        : run.executionStatus === "COMPLETED" || run.executionStatus === "FAILED"
+          ? "FAILED"
+          : "QUEUED";
   return {
     id: "objectives",
     label: STAGE_LABELS.objectives,
     status,
     progress: null,
-    startedAt: isoOrNull(run?.startedAt),
+    startedAt: isoOrNull(run.startedAt),
     completedAt: null,
-    lastActivityAt: isoOrNull(run?.leaseExpiresAt ?? run?.startedAt),
-    elapsedMs: elapsedMs(run?.startedAt, now),
-    failureReason: null,
+    lastActivityAt: isoOrNull(run.leaseExpiresAt ?? run.startedAt),
+    elapsedMs: run.startedAt ? elapsedMs(run.startedAt, now) : null,
+    failureReason:
+      status === "FAILED"
+        ? run.executionStatus === "COMPLETED"
+          ? "Generation completed without producing a plan."
+          : "Generation failed before producing a plan."
+        : null,
     blockedReason: null,
-    canRecover: false,
+    canRecover: status === "FAILED",
     measurementMethod: MEASUREMENT_METHOD.objectives,
   };
 }

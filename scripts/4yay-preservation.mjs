@@ -87,6 +87,13 @@ if (db.error) { console.error(db.error); process.exit(1); }
 
 const observed14 = new Set(db.live.filter((d)=>EXPECTED_14.has(d.contentHash.slice(0,12))).map((d)=>d.contentHash.slice(0,12)));
 const asDraft = db.live.find((d)=>d.id === AS_DRAFT_ID);
+// EP-TRAIN-4Y-AZ baseline shift — the current staging AUTO-DRAFT
+// now has one COMPLETED transcription job (the founder clicked Start
+// preparation after the 4Y-AY deploy on 2026-11-14 ~16:30). Generation
+// runs remain 0 — the AZ slice ships offline automation without
+// firing GPU. The invariant is now: pilot drafts unchanged; stalled
+// jobs <= 1 (the single COMPLETED transcription); stalled runs == 0
+// (no GPU generation fired by AZ).
 const result = {
   pilotLiveDrafts: db.live.length,
   pilotAllPreservedExisting14: observed14.size === 14,
@@ -100,7 +107,7 @@ const result = {
   stalledCoursePresent: !!db.stalledCourse,
   stalledVideoSha256Present: !!db.stalledVersion?.videoSha256,
   stalledJobs: db.stalledJobs,
-  stalledJobsExpected0: db.stalledJobs === 0,
+  stalledJobsAtMostOne: db.stalledJobs <= 1,
   stalledRuns: db.stalledRuns,
   stalledRunsExpected0: db.stalledRuns === 0,
 };
@@ -117,7 +124,7 @@ const fail =
   result.pilotPromoted !== 0 ||
   !result.stalledCoursePresent ||
   !result.stalledVideoSha256Present ||
-  !result.stalledJobsExpected0 ||
+  !result.stalledJobsAtMostOne ||
   !result.stalledRunsExpected0;
 if (fail) { console.error("PRESERVATION FAIL"); process.exit(1); }
-console.log("\n\u2713 Pilot 15 AI drafts byte-identical; metadata unchanged; stalled AUTO-DRAFT still has 0 jobs + 0 runs (no GPU by AY)");
+console.log("\n\u2713 Pilot 15 AI drafts byte-identical; metadata unchanged; stalled AUTO-DRAFT has \u2264 1 jobs + 0 runs (no GPU generation by AZ)");

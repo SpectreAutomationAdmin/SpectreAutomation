@@ -22,6 +22,12 @@ import {
   buildPlanAndRequestGeneration,
   BuildAndEnqueueRejected,
 } from "@/lib/hr/training/generation/enqueue-helper";
+import {
+  requestTranscription,
+  markQueued,
+  JobRejectedError,
+} from "@/lib/hr/training/transcription/job-service";
+import { enqueue } from "@/lib/queue";
 import { logger } from "@/lib/observability/logger";
 
 export const runtime = "nodejs";
@@ -152,9 +158,49 @@ export async function POST(
     });
     if (activeTranscribe) {
       report.transcript = { state: "ALREADY_QUEUED", jobId: activeTranscribe.id };
+    } else {
+      // EP-TRAIN-4Y-AZ §3 — actually enqueue. Prior to AZ this branch
+      // only reported WOULD_ENQUEUE (the source comment said "In a
+      // non-mock build this is where enqueue() would run"), which left
+      // every new upload stalled at "Preparing video" indefinitely.
+      // The enqueue is governed by the existing gates inside
+      // requestTranscription (tenant scope, DRAFT-only, cost cap,
+      // credential precheck) — automation does NOT bypass them.
+      try {
+        const result = await requestTranscription(principal, clubId, {
+          courseVersionId: versionId,
+        });
+        if (!result.idempotent) {
+          await markQueued(clubId, result.jobId);
+          await enqueue({
+            kind: "TRAINING_TRANSCRIBE_VIDEO",
+            clubId,
+            payload: { jobId: result.jobId },
+            maxAttempts: 2,
+            idempotencyKey: `training-transcribe:${result.jobId}`,
+          });
+        }
+        report.transcript = {
+          state: result.idempotent ? "ALREADY_QUEUED" : "WOULD_ENQUEUE",
+          jobId: result.jobId,
+        };
+      } catch (err) {
+        if (err instanceof JobRejectedError) {
+          // Legitimate rejection (cost cap, credential absent, etc.)
+          // — surface for operator visibility but do NOT 4xx the
+          // orchestration report. The /preparation-status GET will
+          // reflect the actual DB state next poll.
+          logger.info("training.auto_prepare.transcribe_auto_enqueue.rejected", {
+            clubId,
+            courseVersionId: versionId,
+            rejectionCode: err.rejectionCode,
+          });
+          report.transcript = { state: "WOULD_ENQUEUE" };
+        } else {
+          throw err;
+        }
+      }
     }
-    // else: WOULD_ENQUEUE already set. In a non-mock build this is where
-    // `enqueue({ kind: "TRAINING_TRANSCRIBE_VIDEO", ... })` would run.
   }
 
   // ─── Generation idempotency (only interesting once transcript ready)
