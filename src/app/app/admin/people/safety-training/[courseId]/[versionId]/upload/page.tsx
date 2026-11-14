@@ -21,6 +21,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import VideoUploader from "../VideoUploader";
 import CoursePrepProgress from "../CoursePrepProgress";
+import { computePreparationProgress } from "@/lib/hr/training/preparation-progress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,20 +43,25 @@ export default async function CourseUploadEntry({
   });
   if (!version) redirect("/app/admin/people/safety-training");
 
-  // EP-TRAIN-4Y-U §6 — only auto-redirect to review once AI
-  // preparation has actually produced reviewable drafts. If the
-  // video is uploaded but generation hasn't produced drafts, stay
-  // on the preparation page so the manager sees the real pipeline
-  // state (CoursePrepProgress below the dropzone).
-  const draftCount = version.videoSha256
-    ? await prisma.trainingQuestionAiDraft.count({
-        where: { clubId, courseVersionId: version.id },
-      })
-    : 0;
-  if (version.videoSha256 && draftCount > 0) {
-    redirect(
-      `/app/admin/people/safety-training/${params.courseId}/${params.versionId}/review`,
+  // EP-TRAIN-4Y-BB §5+§6 — redirect gated on the canonical
+  // preparation outcome. Previously (4Y-U) any single draft row
+  // redirected the manager into review, which hid shortfalls like
+  // "4 FA produced but 0 CP persisted" behind a "course ready"
+  // facade. Now the redirect fires ONLY when outcome is
+  // READY_FOR_REVIEW (every stage COMPLETED and planned ≤ produced
+  // for both buckets). PARTIALLY_GENERATED / BLOCKED / PREPARING
+  // / FAILED all keep the manager on the preparation page so they
+  // see the real pipeline state and the shortfall affordance.
+  if (version.videoSha256) {
+    const progress = await computePreparationProgress(
+      { clubId, versionId: version.id },
+      prisma,
     );
+    if (progress?.overall.outcome === "READY_FOR_REVIEW") {
+      redirect(
+        `/app/admin/people/safety-training/${params.courseId}/${params.versionId}/review`,
+      );
+    }
   }
 
   const videoPresent = !!version.videoSha256;

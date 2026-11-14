@@ -57,6 +57,13 @@ interface Stage {
   readonly measurementMethod: string;
 }
 
+type PreparationOutcome =
+  | "PREPARING"
+  | "BLOCKED"
+  | "FAILED"
+  | "PARTIALLY_GENERATED"
+  | "READY_FOR_REVIEW";
+
 interface PreparationProgress {
   readonly versionId: string;
   readonly overall: {
@@ -67,6 +74,13 @@ interface PreparationProgress {
     readonly completedStageCount: number;
     readonly totalStageCount: 7;
     readonly weightedPercent: number;
+    readonly outcome: PreparationOutcome;
+    readonly generationShortfall: {
+      readonly checkpointProduced: number;
+      readonly checkpointPlanned: number;
+      readonly finalProduced: number;
+      readonly finalPlanned: number;
+    } | null;
   };
   readonly stages: readonly Stage[];
 }
@@ -308,6 +322,40 @@ export default function CoursePrepProgress({ versionId }: Props) {
           <StageRow key={s.id} stage={s} now={now} liveElapsedMs={s.id === data.overall.currentStageId ? liveElapsedMs : s.elapsedMs} />
         ))}
       </ol>
+
+      {/* EP-TRAIN-4Y-BB §6 — PARTIALLY_GENERATED surface. */}
+      {data.overall.outcome === "PARTIALLY_GENERATED" && data.overall.generationShortfall && (
+        <div
+          className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+          data-testid="training-prep-partial"
+        >
+          <strong className="font-semibold">Course partially generated.</strong>{" "}
+          Produced {" "}
+          <span className="tabular-nums">
+            {data.overall.generationShortfall.checkpointProduced} of {data.overall.generationShortfall.checkpointPlanned}
+          </span>{" "}
+          checkpoint questions and{" "}
+          <span className="tabular-nums">
+            {data.overall.generationShortfall.finalProduced} of {data.overall.generationShortfall.finalPlanned}
+          </span>{" "}
+          final-assessment questions. You can open the review workspace to inspect
+          the partial draft, or continue preparation to request a recovery run.
+          <div className="mt-3">
+            <button
+              type="button"
+              className="btn-primary btn-sm"
+              onClick={handleStart}
+              disabled={starting}
+              data-testid="training-prep-recover-shortfall"
+            >
+              {starting ? "Starting…" : "Continue preparation"}
+            </button>
+            <span className="ml-3 text-xs text-amber-800">
+              The partial draft is already viewable in Safety &amp; Training → Active Courses → Review.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Controlled-recovery action — rendered whenever the current
           stage is BLOCKED and the server classifies it canRecover.

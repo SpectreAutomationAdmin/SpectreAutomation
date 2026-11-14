@@ -205,11 +205,33 @@ export async function POST(
 
   // ─── Generation idempotency (only interesting once transcript ready)
   if (report.transcript.state === "ALREADY_COMPLETED") {
+    // EP-TRAIN-4Y-BB §7 — Guard against legacy-polling GPU firings.
+    //
+    // Prior to BB, this filter only considered REQUESTED/QUEUED/
+    // RUNNING/COMPLETED as "active". FAILED runs were ignored, so a
+    // browser that kept POSTing from a lingering session created a
+    // new run every 5 seconds whenever the previous one failed
+    // (108+ FAILED runs observed on cmwgl11wv002jh25jb8gfzlwi).
+    //
+    // Fix: a run whose executionStatus is FAILED in the last
+    // RECENT_FAILURE_COOLDOWN_MS window ALSO counts as "already
+    // seen" — repeated polls must not re-enqueue immediately. A
+    // manual Continue-preparation click goes through the explicit
+    // `/start-preparation` or `/generate` paths, bypassing this
+    // guard by design (both are user-initiated POSTs, not polls).
+    const RECENT_FAILURE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+    const recentFailureCutoff = new Date(Date.now() - RECENT_FAILURE_COOLDOWN_MS);
     const existingRun = await prisma.trainingQuestionAiGenerationRun.findFirst({
       where: {
         clubId,
         courseVersionId: versionId,
-        executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING", "COMPLETED"] },
+        OR: [
+          { executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING", "COMPLETED"] } },
+          {
+            executionStatus: "FAILED",
+            completedAt: { gte: recentFailureCutoff },
+          },
+        ],
       },
       orderBy: { requestedAt: "desc" },
       select: { id: true, executionStatus: true },
@@ -217,7 +239,11 @@ export async function POST(
     if (existingRun) {
       report.generation = {
         state:
-          existingRun.executionStatus === "COMPLETED" ? "ALREADY_COMPLETED" : "ALREADY_QUEUED",
+          existingRun.executionStatus === "COMPLETED"
+            ? "ALREADY_COMPLETED"
+            : existingRun.executionStatus === "FAILED"
+              ? "ALREADY_QUEUED" // recent failure — same UI treatment: do not re-enqueue
+              : "ALREADY_QUEUED",
         runId: existingRun.id,
       };
     } else {

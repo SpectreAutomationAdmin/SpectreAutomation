@@ -165,22 +165,71 @@ export default async function ManagerReviewPage({
         },
       });
 
-  // Pick the first run whose plan has non-empty checkpoint groups —
-  // this is the "original run with checkpoints", the authoritative
-  // source for atSec timestamps. FA recovery runs have an empty
-  // checkpointGroups array in their plans; they must NOT drive atSec.
-  let planRun: (typeof runsForResolver)[number] | undefined;
-  for (const r of runsForResolver) {
-    if (!r.assessmentPlanJson) continue;
+  // EP-TRAIN-4Y-BB §1+§3 — Pick the planRun that actually represents
+  // the generation that produced the drafts on this course. The 4Y-AA
+  // selector picked the FIRST run with non-empty checkpoint groups,
+  // which for `cmwgl11wv002jh25jb8gfzlwi` meant one of the 108+
+  // pre-BA FAILED runs whose stale plans had 30 CP groups. The
+  // review page then rendered 30 timeline markers while only 1 CP
+  // was actually planned in the successful run — the "30 question
+  // markers from an obsolete plan" the BB directive forbids.
+  //
+  // Priority order (most-authoritative first):
+  //   1. A COMPLETED run that produced drafts (any CP-group count).
+  //   2. A RUNNING / QUEUED / REQUESTED run (in-flight; its plan is
+  //      authoritative for the current attempt).
+  //   3. ANY run with a non-empty CP group AND inferenceMs !== null
+  //      (i.e. a run that actually started inference — not a pre-
+  //      flight budget-rejected run).
+  //   4. Fall back to any run with a non-empty CP plan (preserves the
+  //      prior AA fallback behaviour for courses whose only runs
+  //      failed before inference began).
+  const nonTerminalRunsAll = await prisma.trainingQuestionAiGenerationRun.findMany({
+    where: { clubId, courseVersionId: version.id },
+    orderBy: { requestedAt: "desc" },
+    select: {
+      id: true, shortfallReasonJson: true, assessmentPlanJson: true,
+      completedAt: true, executionStatus: true, inferenceMs: true,
+    },
+  });
+  function planHasCheckpointGroups(json: string | null): boolean {
+    if (!json) return false;
     try {
-      const planObj = JSON.parse(r.assessmentPlanJson) as {
+      const planObj = JSON.parse(json) as {
         proposedCheckpointGroups?: Array<{ id?: unknown; atSec?: unknown }>;
       };
-      if ((planObj.proposedCheckpointGroups ?? []).length > 0) {
-        planRun = r;
-        break;
-      }
-    } catch { /* fall through */ }
+      return (planObj.proposedCheckpointGroups ?? []).length > 0;
+    } catch { return false; }
+  }
+  let planRun: (typeof runsForResolver)[number] | undefined;
+  // Priority 1: COMPLETED run with CP groups in its plan.
+  for (const r of nonTerminalRunsAll) {
+    if (r.executionStatus !== "COMPLETED") continue;
+    if (planHasCheckpointGroups(r.assessmentPlanJson)) { planRun = r as unknown as typeof runsForResolver[number]; break; }
+  }
+  // Priority 2: in-flight run (RUNNING/QUEUED/REQUESTED).
+  if (!planRun) {
+    for (const r of nonTerminalRunsAll) {
+      if (!(r.executionStatus === "RUNNING" || r.executionStatus === "QUEUED" || r.executionStatus === "REQUESTED")) continue;
+      if (planHasCheckpointGroups(r.assessmentPlanJson)) { planRun = r as unknown as typeof runsForResolver[number]; break; }
+    }
+  }
+  // Priority 3: any run whose plan has CP groups AND actually started
+  // inference (inferenceMs is not null). Budget pre-flight FAILED runs
+  // have inferenceMs=null and must NOT drive marker rendering.
+  if (!planRun) {
+    for (const r of nonTerminalRunsAll) {
+      if (r.inferenceMs == null) continue;
+      if (planHasCheckpointGroups(r.assessmentPlanJson)) { planRun = r as unknown as typeof runsForResolver[number]; break; }
+    }
+  }
+  // Priority 4: legacy fallback for courses whose only runs failed
+  // before inference began. Preserves 4Y-AA behaviour for tenants
+  // that never got past pre-flight.
+  if (!planRun) {
+    for (const r of runsForResolver) {
+      if (planHasCheckpointGroups(r.assessmentPlanJson)) { planRun = r; break; }
+    }
   }
   // Legacy compat for any downstream code that still names `latestRun`.
   const latestRun = planRun ?? runsForResolver[runsForResolver.length - 1] ?? null;

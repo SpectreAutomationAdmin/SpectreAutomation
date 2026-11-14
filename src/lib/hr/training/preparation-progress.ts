@@ -42,6 +42,29 @@ export type StageId =
   | "assessment"
   | "ready";
 
+/**
+ * EP-TRAIN-4Y-BB §5 — Preparation lifecycle outcome. Derived from the
+ * seven-stage classifier. Distinguishes the five canonical states a
+ * course version can be in from the manager's perspective:
+ *
+ *  - PREPARING           any upstream stage is still RUNNING / QUEUED
+ *                        (and no terminal failure)
+ *  - BLOCKED             a stage is BLOCKED with canRecover=true
+ *                        (transcribe stalled, objectives stalled, etc.)
+ *  - FAILED              a stage is FAILED permanently (no recovery)
+ *  - PARTIALLY_GENERATED generation run COMPLETED but produced fewer
+ *                        drafts than the plan requested — manager
+ *                        should inspect the partial result
+ *  - READY_FOR_REVIEW    every stage COMPLETED AND draft counts meet
+ *                        the plan's targets
+ */
+export type PreparationOutcome =
+  | "PREPARING"
+  | "BLOCKED"
+  | "FAILED"
+  | "PARTIALLY_GENERATED"
+  | "READY_FOR_REVIEW";
+
 export type StageStatus =
   | "WAITING"
   | "QUEUED"
@@ -90,6 +113,16 @@ export interface PreparationProgress {
      *  progress because transcription and the two generation stages
      *  dominate wall clock. See `STAGE_WEIGHTS` in this module. */
     readonly weightedPercent: number;
+    /** EP-TRAIN-4Y-BB §5 — canonical preparation outcome. */
+    readonly outcome: PreparationOutcome;
+    /** When outcome is PARTIALLY_GENERATED, the per-bucket breakdown
+     *  of produced-vs-planned drafts. Null otherwise. */
+    readonly generationShortfall: {
+      readonly checkpointProduced: number;
+      readonly checkpointPlanned: number;
+      readonly finalProduced: number;
+      readonly finalPlanned: number;
+    } | null;
   };
   readonly stages: readonly Stage[];
 }
@@ -449,6 +482,14 @@ export async function computePreparationProgress(
     .pop() ?? null;
   const completedCount = stages.filter((s) => s.status === "COMPLETED").length;
   const weightedPercent = computeWeightedOverallPercent(stages);
+  const { outcome, generationShortfall } = classifyOutcome({
+    stages,
+    checkpointProduced: cpCount,
+    checkpointPlanned: planCheckpointGroupTarget ?? 0,
+    finalProduced: faCount,
+    finalPlanned: planFinalAssessmentTarget ?? 0,
+    runStatus: run?.executionStatus ?? null,
+  });
 
   return {
     versionId: version.id,
@@ -460,9 +501,66 @@ export async function computePreparationProgress(
       completedStageCount: completedCount,
       totalStageCount: 7,
       weightedPercent,
+      outcome,
+      generationShortfall,
     },
     stages,
   };
+}
+
+// ─── Outcome classification (BB §5) ─────────────────────────────────
+
+interface ClassifyOutcomeInput {
+  readonly stages: readonly Stage[];
+  readonly checkpointProduced: number;
+  readonly checkpointPlanned: number;
+  readonly finalProduced: number;
+  readonly finalPlanned: number;
+  readonly runStatus: string | null;
+}
+
+function classifyOutcome(input: ClassifyOutcomeInput): {
+  outcome: PreparationOutcome;
+  generationShortfall: PreparationProgress["overall"]["generationShortfall"];
+} {
+  const { stages, checkpointProduced, checkpointPlanned, finalProduced, finalPlanned, runStatus } = input;
+  const allCompleted = stages.every((s) => s.status === "COMPLETED");
+  const anyBlocked = stages.some((s) => s.status === "BLOCKED");
+  const anyFailed = stages.some((s) => s.status === "FAILED");
+  const generationCompleted = runStatus === "COMPLETED";
+  const shortfall =
+    checkpointPlanned > 0 && checkpointProduced < checkpointPlanned
+      ? true
+      : finalPlanned > 0 && finalProduced < finalPlanned
+        ? true
+        : false;
+
+  const shortfallDetail = {
+    checkpointProduced,
+    checkpointPlanned,
+    finalProduced,
+    finalPlanned,
+  };
+
+  // READY_FOR_REVIEW requires every stage COMPLETED AND no shortfall.
+  if (allCompleted && !shortfall) {
+    return { outcome: "READY_FOR_REVIEW", generationShortfall: null };
+  }
+  // PARTIALLY_GENERATED — generation run COMPLETED but at least one
+  // bucket fell short of its plan target.
+  if (generationCompleted && shortfall) {
+    return { outcome: "PARTIALLY_GENERATED", generationShortfall: shortfallDetail };
+  }
+  // FAILED — any stage permanently failed.
+  if (anyFailed) {
+    return { outcome: "FAILED", generationShortfall: shortfall ? shortfallDetail : null };
+  }
+  // BLOCKED — a stage blocked with canRecover=true.
+  if (anyBlocked) {
+    return { outcome: "BLOCKED", generationShortfall: null };
+  }
+  // Default: PREPARING.
+  return { outcome: "PREPARING", generationShortfall: null };
 }
 
 // ─── Work-time weighted overall % ───────────────────────────────────

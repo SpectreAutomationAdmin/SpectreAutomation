@@ -29,6 +29,7 @@ import {
   type AssessmentPlanV1,
 } from "./assessment-plan";
 import { buildTopicAwareAssessmentPlan } from "./placement";
+import { sizeForDuration } from "./duration-sizing";
 
 export interface BuildAndEnqueueInput {
   readonly clubId: string;
@@ -112,12 +113,29 @@ export async function buildPlanAndRequestGeneration(
     orderBy: [{ segmentIndex: "asc" }],
   });
 
-  // When BOTH checkpoint/final overrides are set, we use the baseline
-  // builder directly with the explicit split — the topic-aware builder
-  // doesn't yet consume those overrides. Future slice can port them.
-  const hasExplicitSplit =
+  // EP-TRAIN-4Y-BB §2 — Duration-based AI question sizing.
+  //
+  // When the caller did NOT pass an explicit (checkpointCount, finalCount)
+  // split AND did NOT pass a targetTotalQuestions, we derive both from
+  // the video's duration bucket. A 643-second video now defaults to
+  // 4 CP + 8 FA (the 10-15 min bucket) instead of the historical
+  // ratio-split of targetTotalQuestions=6. Callers that DO pass an
+  // explicit split or total still take precedence.
+  const hasCallerExplicitSplit =
     typeof input.checkpointCount === "number" &&
     typeof input.finalCount === "number";
+  let derivedCheckpointCount: number | undefined;
+  let derivedFinalCount: number | undefined;
+  if (!hasCallerExplicitSplit && typeof input.targetTotalQuestions !== "number") {
+    const sized = sizeForDuration(version.videoDurationSec);
+    derivedCheckpointCount = sized.checkpointCount;
+    derivedFinalCount = sized.finalCount;
+  }
+  const effectiveCheckpointCount = input.checkpointCount ?? derivedCheckpointCount;
+  const effectiveFinalCount = input.finalCount ?? derivedFinalCount;
+  const hasExplicitSplit =
+    typeof effectiveCheckpointCount === "number" &&
+    typeof effectiveFinalCount === "number";
 
   let plan: AssessmentPlanV1;
   if (hasExplicitSplit) {
@@ -127,8 +145,8 @@ export async function buildPlanAndRequestGeneration(
       sourceVideoSha256: version.videoSha256,
       segments: segments.map((s) => ({ segmentIndex: s.segmentIndex, text: s.text })),
       videoDurationSec: version.videoDurationSec,
-      checkpointCount: input.checkpointCount,
-      finalCount: input.finalCount,
+      checkpointCount: effectiveCheckpointCount,
+      finalCount: effectiveFinalCount,
       checkpointGroupStrategy: input.checkpointGroupStrategy ?? "DEFAULT",
       generatedByUserId: principal.id,
     });
