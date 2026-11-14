@@ -192,12 +192,29 @@ export default function CoursePrepProgress({ versionId }: Props) {
     setStarting(true);
     setStartError(null);
     try {
-      // Explicit recovery: fire auto-prepare once synchronously. The
-      // orchestration endpoint handles whichever stage is currently
-      // BLOCKED (transcription or generation). Polling loop will pick
-      // up the state change on the next tick.
+      // EP-TRAIN-4Y-BC §6 — explicit two-step: FIRST stamp a durable
+      // GENERATE_RECOVERY authorization (an AuditLog row scoped to
+      // this version + 2h TTL), THEN delegate. Legacy browser polling
+      // cannot complete this step and therefore cannot fire GPU.
+      const authResp = await fetch(
+        `/api/admin/training/versions/${versionId}/authorize-recovery`,
+        { method: "POST", cache: "no-store" },
+      );
+      if (!authResp.ok) {
+        setStartError(`Could not authorize preparation (HTTP ${authResp.status}).`);
+        return;
+      }
+      // If a PARTIALLY_GENERATED shortfall is in effect, prefer the
+      // targeted recovery endpoint (sizes exactly to the missing
+      // counts). Otherwise fall back to auto-prepare for first-time
+      // generation; auto-prepare's generation branch now honours the
+      // GENERATE_FULL authorization that /start-preparation writes.
+      const needsShortfallRecovery =
+        status.kind === "ok" && status.data.overall.outcome === "PARTIALLY_GENERATED";
       const resp = await fetch(
-        `/api/admin/training/versions/${versionId}/auto-prepare`,
+        needsShortfallRecovery
+          ? `/api/admin/training/versions/${versionId}/recover-shortfall`
+          : `/api/admin/training/versions/${versionId}/auto-prepare`,
         { method: "POST", cache: "no-store" },
       );
       if (!resp.ok) {
@@ -214,7 +231,7 @@ export default function CoursePrepProgress({ versionId }: Props) {
     } finally {
       setStarting(false);
     }
-  }, [versionId, refresh]);
+  }, [versionId, refresh, status]);
 
   if (status.kind === "loading") {
     return (

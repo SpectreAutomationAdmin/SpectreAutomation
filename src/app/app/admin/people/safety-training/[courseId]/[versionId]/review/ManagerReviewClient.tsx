@@ -112,6 +112,12 @@ interface Props {
   videoUrl: string | null;
   drafts: Draft[];
   checkpoints: Checkpoint[];
+  /** EP-TRAIN-4Y-BC §1 — planned checkpoint positions (from the plan
+   *  that produced the drafts). Rendered visually distinct from live
+   *  markers; never carries an interactive question. Empty when the
+   *  plan has no checkpoint groups OR all planned positions are now
+   *  satisfied by live markers. */
+  plannedCheckpoints?: Checkpoint[];
   canApprove: boolean;
   canAuthor: boolean;
   canPublish: boolean;
@@ -970,6 +976,11 @@ export default function ManagerReviewClient(props: Props) {
               aria-pressed={mode === "checkpoints"}
             >
               Checkpoints · {totalCheckpoint}
+              {(props.plannedCheckpoints ?? []).length > 0 && totalCheckpoint < (props.plannedCheckpoints ?? []).length && (
+                <span className="ml-1 text-xs text-stone-500">
+                  / {(props.plannedCheckpoints ?? []).length} planned
+                </span>
+              )}
             </button>
             <button
               type="button"
@@ -1000,6 +1011,25 @@ export default function ManagerReviewClient(props: Props) {
               </button>
             )}
           </div>
+
+          {/* EP-TRAIN-4Y-BC §5 — explicit "no CP questions yet" message
+              when on the Checkpoints tab and zero live questions exist
+              but the plan proposed at least one. Replaces the AY-era
+              fabricated-live-marker UX. */}
+          {mode === "checkpoints" && totalCheckpoint === 0 && (props.plannedCheckpoints ?? []).length > 0 && (
+            <div
+              className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+              data-testid="manager-review-cp-none-yet"
+            >
+              <strong className="font-semibold">
+                No checkpoint questions have been generated yet.
+              </strong>{" "}
+              {(props.plannedCheckpoints ?? []).length === 1
+                ? "One is planned for this course."
+                : `${(props.plannedCheckpoints ?? []).length} are planned for this course.`}{" "}
+              Return to the preparation screen to authorize a recovery run.
+            </div>
+          )}
 
           {/* ── EP-TRAIN-4Y-AX §2 — inline add-question form ──── */}
           {canAddQuestion && addPanelOpen && (

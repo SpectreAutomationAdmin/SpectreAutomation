@@ -29,6 +29,7 @@ import {
 } from "@/lib/hr/training/transcription/job-service";
 import { enqueue } from "@/lib/queue";
 import { logger } from "@/lib/observability/logger";
+import { hasFreshProcessingAuthorization } from "@/lib/hr/training/generation/processing-authorization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -246,6 +247,20 @@ export async function POST(
               : "ALREADY_QUEUED",
         runId: existingRun.id,
       };
+    } else if (!(await hasFreshProcessingAuthorization({
+      clubId,
+      courseVersionId: versionId,
+      operation: "GENERATE_FULL",
+    }))) {
+      // EP-TRAIN-4Y-BC §6 — durable authorization required. The BB
+      // 5-minute cooldown was insufficient against legacy-browser
+      // polling that persists past deploys. Only explicit user
+      // endpoints (/start-preparation, /authorize-recovery) can
+      // write a fresh authorization record; a GET or poll never does.
+      logger.info("training.auto_prepare.generation.refused_no_authorization", {
+        clubId, courseVersionId: versionId,
+      });
+      report.generation = { state: "WOULD_ENQUEUE" };
     } else {
       // EP-TRAIN-4Y-V §5 — auto-trigger. Transcript is ready AND no
       // run exists → enqueue the default-plan generation run NOW so

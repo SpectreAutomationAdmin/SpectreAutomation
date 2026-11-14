@@ -67,6 +67,34 @@ export default async function ManagerReviewPage({
   const canRead = hasPermission(principal, clubId, "hr:training:ai:read");
 
   const checkpoints = await listCheckpointsForVersion(version.id);
+  // EP-TRAIN-4Y-BC §1 — per-checkpoint active question count for the
+  // live-marker invariant. A persisted TrainingCheckpoint only
+  // qualifies as a "live" marker when at least one bound
+  // TrainingQuestion is active=true.
+  const activeQuestionCountsByCheckpointId = checkpoints.length === 0
+    ? new Map<string, number>()
+    : await (async () => {
+        const grouped = await prisma.trainingQuestion.groupBy({
+          by: ["checkpointId"],
+          where: {
+            courseVersionId: version.id,
+            active: true,
+            checkpointId: { in: checkpoints.map((c) => c.id) },
+          },
+          _count: { checkpointId: true },
+        });
+        const m = new Map<string, number>();
+        for (const row of grouped) {
+          if (row.checkpointId) m.set(row.checkpointId, row._count.checkpointId);
+        }
+        return m;
+      })();
+  const checkpointsWithActiveCount = checkpoints.map((c) => ({
+    id: c.id,
+    label: c.label,
+    atSecond: c.atSecond,
+    activeQuestionCount: activeQuestionCountsByCheckpointId.get(c.id) ?? 0,
+  }));
   const readiness = await checkPublishReadiness(version.id);
 
   // Audience summary for the pre-publish review card.
@@ -617,7 +645,8 @@ export default async function ManagerReviewPage({
             : null
         }
         drafts={drafts}
-        checkpoints={resolveCheckpointMarkers(checkpoints, latestRun?.assessmentPlanJson ?? null)}
+        checkpoints={resolveLiveCheckpointMarkers(checkpointsWithActiveCount)}
+        plannedCheckpoints={resolvePlannedCheckpointMarkers(latestRun?.assessmentPlanJson ?? null)}
         canApprove={canApprove}
         canAuthor={canAuthor}
         canPublish={hasPermission(principal, clubId, "hr:training:publish")}
@@ -631,21 +660,68 @@ export default async function ManagerReviewPage({
   );
 }
 
-// EP-TRAIN-4Y-AA §4 — resolve the checkpoint timeline markers.
+// EP-TRAIN-4Y-BC §1 — enforce the live-marker invariant.
 //
-// Preferred source: persisted `TrainingCheckpoint` rows (the editor's
-// own authoritative list). When a course has zero such rows — which
-// is the shape of the 4Y-Z pilot course `cmw8n6z8f0008z4nxck6uvms9`
-// because the plan produced CP drafts but no TrainingCheckpoint rows
-// were ever materialised — fall back to the plan's
-// `proposedCheckpointGroups[].atSec` values. These are the exact
-// timestamps the worker aimed its CP generation at, so rendering them
-// is NOT invention; they came from the plan the founder authorised.
+// A live checkpoint marker requires BOTH a persisted TrainingCheckpoint
+// event AND at least one active TrainingQuestion bound to it. Planned
+// checkpoint positions (from the plan's proposedCheckpointGroups) are
+// a SEPARATE collection the UI renders visually distinct — they never
+// carry an interactive question marker.
 //
-// Returns the Client shape expected by `ManagerReviewClient`.
+// This closes the "30-marker from an obsolete plan" (BB) and the
+// "1 marker with zero questions" (BC) defects: the UI can no longer
+// show a live marker for a checkpoint that has no question.
+function resolveLiveCheckpointMarkers(
+  checkpoints: Array<{
+    id: string; label: string | null; atSecond: number;
+    activeQuestionCount: number;
+  }>,
+): Array<{ id: string; title: string; atSecond: number }> {
+  return checkpoints
+    .filter((c) => c.activeQuestionCount > 0)
+    .map((c) => ({
+      id: c.id,
+      title: c.label ?? `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(Math.floor(c.atSecond % 60)).padStart(2, "0")}`,
+      atSecond: c.atSecond,
+    }))
+    .sort((a, b) => a.atSecond - b.atSecond);
+}
+
+// EP-TRAIN-4Y-BC §1 — surface planned checkpoint positions separately.
+// The UI renders these as dashed / "planned" markers so the manager
+// sees where AI generation intended to place checkpoints even before
+// any question has been produced.
+function resolvePlannedCheckpointMarkers(
+  assessmentPlanJson: string | null,
+): Array<{ id: string; title: string; atSecond: number }> {
+  if (!assessmentPlanJson) return [];
+  try {
+    const plan = JSON.parse(assessmentPlanJson) as {
+      proposedCheckpointGroups?: Array<{ id?: unknown; atSec?: unknown }>;
+    };
+    const rows: Array<{ id: string; title: string; atSecond: number }> = [];
+    for (const g of plan.proposedCheckpointGroups ?? []) {
+      if (typeof g?.id !== "string") continue;
+      if (typeof g?.atSec !== "number" || !Number.isFinite(g.atSec)) continue;
+      rows.push({
+        id: `planned:${g.id}`,
+        title: `Planned checkpoint at ${Math.floor(g.atSec / 60)}:${String(Math.floor(g.atSec % 60)).padStart(2, "0")}`,
+        atSecond: g.atSec,
+      });
+    }
+    return rows.sort((a, b) => a.atSecond - b.atSecond);
+  } catch {
+    return [];
+  }
+}
+
+// Legacy helper retained for callers that still want the historical
+// combined output. Live markers only — never falls back to plan.
+// New callers should use `resolveLiveCheckpointMarkers` +
+// `resolvePlannedCheckpointMarkers` directly.
 function resolveCheckpointMarkers(
   checkpoints: Array<{ id: string; label: string | null; atSecond: number }>,
-  assessmentPlanJson: string | null,
+  _assessmentPlanJson: string | null,
 ): Array<{ id: string; title: string; atSecond: number }> {
   if (checkpoints.length > 0) {
     return checkpoints.map((c) => ({
@@ -659,9 +735,9 @@ function resolveCheckpointMarkers(
     }));
   }
   // Fallback: plan.proposedCheckpointGroups[].atSec
-  if (!assessmentPlanJson) return [];
+  if (!_assessmentPlanJson) return [];
   try {
-    const plan = JSON.parse(assessmentPlanJson) as {
+    const plan = JSON.parse(_assessmentPlanJson) as {
       proposedCheckpointGroups?: Array<{
         id?: unknown;
         atSec?: unknown;

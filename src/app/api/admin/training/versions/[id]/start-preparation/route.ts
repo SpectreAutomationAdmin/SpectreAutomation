@@ -37,6 +37,7 @@ import {
 import { enqueue } from "@/lib/queue";
 import { audit } from "@/lib/audit";
 import { AppError, UnauthenticatedError } from "@/lib/errors";
+import { recordProcessingAuthorization } from "@/lib/hr/training/generation/processing-authorization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +67,18 @@ export async function POST(
   }
 
   try {
+    // EP-TRAIN-4Y-BC §6 — Stamp a durable authorization BEFORE the
+    // first-time enqueue. The AuditLog row is append-only, carries
+    // userId + createdAt, and lets auto-prepare's generation branch
+    // confirm a fresh user-driven authorization exists for the
+    // downstream GENERATE_FULL operation (transcription success then
+    // auto-chains into generation under this same umbrella).
+    await recordProcessingAuthorization(principal, {
+      clubId,
+      courseVersionId: versionId,
+      operation: "GENERATE_FULL",
+    });
+
     const result = await requestTranscription(principal, clubId, {
       courseVersionId: versionId,
     });
