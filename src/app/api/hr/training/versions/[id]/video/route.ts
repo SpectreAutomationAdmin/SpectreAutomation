@@ -31,6 +31,12 @@ import { streamTrainingVideo } from "@/lib/hr/training/video-stream";
 import { resolveApplicableCourses } from "@/lib/hr/training/applicability";
 import { prisma } from "@/lib/prisma";
 import { isAppError, ValidationError } from "@/lib/errors";
+import { logger } from "@/lib/observability/logger";
+import {
+  isMockInferenceAllowed,
+  recordProcessingAuthorization,
+} from "@/lib/hr/training/generation/processing-authorization";
+import { advancePreparation } from "@/lib/hr/training/preparation-orchestrator";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,6 +147,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const durationRaw = fd.get("durationSec");
   const durationSec = typeof durationRaw === "string" && durationRaw.length > 0 ? Number(durationRaw) : null;
 
+  // Mock inference is an orchestration-test facility. Refuse BEFORE
+  // storing anything when it is requested where it is not enabled, so a
+  // test can never fall through to billable inference.
+  const mockRequested = req.headers.get("x-spectre-training-inference") === "mock";
+  if (mockRequested && !isMockInferenceAllowed()) {
+    return NextResponse.json(
+      { error: "Mock inference is not enabled in this environment." },
+      { status: 409 },
+    );
+  }
+
   try {
     const buf = Buffer.from(await entry.arrayBuffer());
     const result = await uploadTrainingVideo(principal, params.id, {
@@ -149,8 +166,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       displayName: entry.name || null,
       durationSec,
     });
+
+    // The authenticated upload IS the manager's authorization for the
+    // normal preparation pipeline (transcribe → objectives → questions),
+    // still subject to every cost cap. Start it server-side now; a
+    // failure here never fails the upload — the preparation page shows
+    // the stalled stage and offers Continue preparation.
+    let preparation: { action: string; message: string } | null = null;
+    try {
+      await recordProcessingAuthorization(principal, {
+        clubId,
+        courseVersionId: params.id,
+        operation: "GENERATE_FULL",
+        source: "UPLOAD",
+        inferenceMode: mockRequested ? "MOCK" : "LIVE",
+      });
+      const advanced = await advancePreparation(principal, {
+        clubId,
+        courseVersionId: params.id,
+        trigger: "UPLOAD",
+      });
+      preparation = { action: advanced.action, message: advanced.message };
+    } catch (err) {
+      logger.error("training.video.upload.preparation_start_failed", {
+        clubId,
+        courseVersionId: params.id,
+        error: (err as Error)?.message ?? String(err),
+      });
+    }
+
     return NextResponse.json(
-      { ok: true, sizeBytes: result.sizeBytes, sha256: result.sha256 },
+      { ok: true, sizeBytes: result.sizeBytes, sha256: result.sha256, preparation },
       { status: 201 },
     );
   } catch (err) {

@@ -365,6 +365,18 @@ export async function handleTranscribeJob(
         modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.transcribe,
       ),
     });
+    // The transcript is durable. Chain into question generation so the
+    // manager does not have to click anything. Never throws.
+    const { advancePreparationAfterTranscription } = await import("../preparation-orchestrator");
+    const advanced = await advancePreparationAfterTranscription({
+      clubId: claim.clubId,
+      courseVersionId: claim.courseVersionId,
+    });
+    logger.info("training.transcription.worker.chained_generation", {
+      jobId: claim.jobId,
+      courseVersionId: claim.courseVersionId,
+      action: advanced.action,
+    });
     return { status: "COMPLETED" };
   } catch (err) {
     try {

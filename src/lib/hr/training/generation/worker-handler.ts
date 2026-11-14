@@ -74,6 +74,11 @@ import {
   type QuestionCandidate,
 } from "./dedup";
 import { canonicalise, sha256Hex } from "../ai-review/content-hash";
+import { buildMockProposals } from "./mock-inference";
+import {
+  isMockInferenceAllowed,
+  resolveInferenceModeForVersion,
+} from "./processing-authorization";
 // EP-TRAIN-4Y-AA §7 — employee-facing text sanitiser. Applied inside
 // the per-group loop below so internal pipeline terminology never
 // lands in the DB.
@@ -266,7 +271,29 @@ export async function handleGenerateJob(
     plan.proposedCheckpointGroups.length === 0 &&
     Array.isArray(plan.proposedFinalAssessmentChunks) &&
     plan.proposedFinalAssessmentChunks.length > 0;
-  const metadataResult = isFinalAssessmentRecoveryShape
+  // EP-TRAIN-4Y-BE — mock inference for orchestration acceptance tests.
+  // Sticky per version and fail-closed: a version whose authorization
+  // asked for MOCK never reaches Modal, even if the environment gate is
+  // missing (the run fails instead of falling through to billable GPU).
+  const inferenceMode = await resolveInferenceModeForVersion(
+    { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
+    { prisma: db },
+  );
+  const useMockInference = inferenceMode === "MOCK";
+  if (useMockInference && !isMockInferenceAllowed(deps.env ?? process.env)) {
+    await safeFail(
+      db,
+      claim,
+      "CREDENTIAL_ABSENT",
+      "Mock inference was requested for this version but is not enabled in this environment.",
+      false,
+      0,
+    );
+    return { status: "FAILED" };
+  }
+  const mockUsedSegmentIndices = new Set<number>();
+
+  const metadataResult = isFinalAssessmentRecoveryShape || useMockInference
     ? { inferenceMs: 0, modalCalled: false }
     : await maybeGenerateCourseMetadata({
         db,
@@ -660,22 +687,37 @@ export async function handleGenerateJob(
         transcriptForGroup = fullTranscriptText;
       }
 
-      const modalResponse = await callModalGenerate(
-        {
-          requestId: groupRequestId,
-          pilotAuthorization: pilotAuth,
-          modelVariant: "qwen-2.5-7b-instruct-awq",
-          systemPrompt: systemPromptForGroup,
-          transcript: transcriptForGroup,
-          constraints: {
-            proposalKind: g.kind === "CHECKPOINT" ? "QUESTION_CHECKPOINT_BOUND" : "QUESTION_FINAL_ASSESSMENT",
-            maxQuestions: g.target,
-            allowedQuestionTypes: ["SINGLE_CHOICE", "TRUE_FALSE"],
-            jsonSchema: {},
-          },
-        },
-        { fetchImpl: deps.fetchImpl, env: deps.env },
-      );
+      const modalResponse: {
+        readonly proposals: readonly ModalGenerateProposal[];
+        readonly elapsedMs: { readonly coldBoot: number; readonly generate: number };
+        readonly tokenCounts: { readonly prompt: number; readonly output: number };
+      } = useMockInference
+        ? {
+            proposals: buildMockProposals({
+              target: g.target,
+              windowSegmentIds,
+              segments: eligibleSegments,
+              usedSegmentIndices: mockUsedSegmentIndices,
+            }),
+            elapsedMs: { coldBoot: 0, generate: 0 },
+            tokenCounts: { prompt: 0, output: 0 },
+          }
+        : await callModalGenerate(
+            {
+              requestId: groupRequestId,
+              pilotAuthorization: pilotAuth,
+              modelVariant: "qwen-2.5-7b-instruct-awq",
+              systemPrompt: systemPromptForGroup,
+              transcript: transcriptForGroup,
+              constraints: {
+                proposalKind: g.kind === "CHECKPOINT" ? "QUESTION_CHECKPOINT_BOUND" : "QUESTION_FINAL_ASSESSMENT",
+                maxQuestions: g.target,
+                allowedQuestionTypes: ["SINGLE_CHOICE", "TRUE_FALSE"],
+                jsonSchema: {},
+              },
+            },
+            { fetchImpl: deps.fetchImpl, env: deps.env },
+          );
       totalInferenceMs += modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.generate;
       totalPromptTokens += modalResponse.tokenCounts.prompt;
       totalOutputTokens += modalResponse.tokenCounts.output;

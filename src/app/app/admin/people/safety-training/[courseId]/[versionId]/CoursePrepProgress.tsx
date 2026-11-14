@@ -89,6 +89,23 @@ interface Props {
   readonly versionId: string;
 }
 
+interface SpendEstimate {
+  readonly typical: string;
+  readonly maximum: string;
+  readonly courseCap: string;
+}
+
+interface SpendConfirmation {
+  readonly message: string;
+  readonly estimate: SpendEstimate;
+}
+
+interface ContinueResponse {
+  readonly action?: string;
+  readonly message?: string;
+  readonly estimate?: SpendEstimate;
+}
+
 type FetchStatus =
   | { kind: "loading" }
   | { kind: "ok"; data: PreparationProgress }
@@ -123,6 +140,8 @@ export default function CoursePrepProgress({ versionId }: Props) {
   const [status, setStatus] = useState<FetchStatus>({ kind: "loading" });
   const [starting, setStarting] = useState<boolean>(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<SpendConfirmation | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
   const refresh = useCallback(async () => {
@@ -155,7 +174,10 @@ export default function CoursePrepProgress({ versionId }: Props) {
       }
       const data = (await resp.json()) as PreparationProgress;
       setStatus({ kind: "ok", data });
-      if (data.overall.currentStageId === "ready") {
+      if (
+        data.overall.currentStageId === "ready" ||
+        data.overall.outcome === "READY_FOR_REVIEW"
+      ) {
         // Final stage done → refresh the server component below so the
         // editor renders.
         router.refresh();
@@ -188,50 +210,72 @@ export default function CoursePrepProgress({ versionId }: Props) {
     return () => clearInterval(id);
   }, []);
 
-  const handleStart = useCallback(async () => {
-    setStarting(true);
-    setStartError(null);
-    try {
-      // EP-TRAIN-4Y-BC §6 — explicit two-step: FIRST stamp a durable
-      // GENERATE_RECOVERY authorization (an AuditLog row scoped to
-      // this version + 2h TTL), THEN delegate. Legacy browser polling
-      // cannot complete this step and therefore cannot fire GPU.
-      const authResp = await fetch(
-        `/api/admin/training/versions/${versionId}/authorize-recovery`,
-        { method: "POST", cache: "no-store" },
-      );
-      if (!authResp.ok) {
-        setStartError(`Could not authorize preparation (HTTP ${authResp.status}).`);
-        return;
-      }
-      // If a PARTIALLY_GENERATED shortfall is in effect, prefer the
-      // targeted recovery endpoint (sizes exactly to the missing
-      // counts). Otherwise fall back to auto-prepare for first-time
-      // generation; auto-prepare's generation branch now honours the
-      // GENERATE_FULL authorization that /start-preparation writes.
-      const needsShortfallRecovery =
-        status.kind === "ok" && status.data.overall.outcome === "PARTIALLY_GENERATED";
-      const resp = await fetch(
-        needsShortfallRecovery
-          ? `/api/admin/training/versions/${versionId}/recover-shortfall`
-          : `/api/admin/training/versions/${versionId}/auto-prepare`,
-        { method: "POST", cache: "no-store" },
-      );
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        setStartError(
-          body?.message ??
-            `Could not start preparation (HTTP ${resp.status}).`,
+  // One server endpoint decides what "continue" means for the stalled
+  // stage and always answers with a sentence the manager can read:
+  // resumed, already running, needs a cost confirmation, or refused
+  // with the reason. Every outcome is rendered — no silent result.
+  const handleStart = useCallback(
+    async (confirmSpend: boolean) => {
+      setStarting(true);
+      setStartError(null);
+      setNotice(null);
+      try {
+        const resp = await fetch(
+          `/api/admin/training/versions/${versionId}/continue-preparation`,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ confirmSpend }),
+          },
         );
-      } else {
+        const body = (await resp.json().catch(() => ({}))) as ContinueResponse;
+        if (!resp.ok) {
+          setConfirmation(null);
+          setStartError(
+            body.message ?? `Preparation could not continue (HTTP ${resp.status}).`,
+          );
+          return;
+        }
+        if (body.action === "CONFIRMATION_REQUIRED" && body.estimate) {
+          setConfirmation({ message: body.message ?? "", estimate: body.estimate });
+          return;
+        }
+        setConfirmation(null);
+        if (body.action === "RECOVERY_AUTHORIZED") {
+          const rec = await fetch(
+            `/api/admin/training/versions/${versionId}/recover-shortfall`,
+            { method: "POST", cache: "no-store" },
+          );
+          const recBody = (await rec.json().catch(() => ({}))) as {
+            message?: string;
+            rejectionCode?: string;
+            outcome?: string;
+          };
+          if (!rec.ok) {
+            setStartError(
+              recBody.message ??
+                `The missing questions could not be requested${recBody.rejectionCode ? ` (${recBody.rejectionCode})` : ""}.`,
+            );
+            return;
+          }
+          setNotice(
+            recBody.outcome === "ALREADY_SATISFIED"
+              ? "Every planned question already exists. Nothing more to write."
+              : "Writing the missing questions now. This page will update as they are saved.",
+          );
+        } else {
+          setNotice(body.message ?? "Preparation is continuing.");
+        }
         await refresh();
+      } catch {
+        setStartError("Network error. Nothing was started — please try again.");
+      } finally {
+        setStarting(false);
       }
-    } catch {
-      setStartError("Network error. Please try again.");
-    } finally {
-      setStarting(false);
-    }
-  }, [versionId, refresh, status]);
+    },
+    [versionId, refresh],
+  );
 
   if (status.kind === "loading") {
     return (
@@ -361,11 +405,11 @@ export default function CoursePrepProgress({ versionId }: Props) {
             <button
               type="button"
               className="btn-primary btn-sm"
-              onClick={handleStart}
-              disabled={starting}
+              onClick={() => handleStart(false)}
+              disabled={starting || confirmation !== null}
               data-testid="training-prep-recover-shortfall"
             >
-              {starting ? "Starting…" : "Continue preparation"}
+              {starting ? "Checking…" : "Continue preparation"}
             </button>
             <span className="ml-3 text-xs text-amber-800">
               The partial draft is already viewable in Safety &amp; Training → Active Courses → Review.
@@ -380,39 +424,91 @@ export default function CoursePrepProgress({ versionId }: Props) {
           objectives gap (no generation run yet). The 4Y-AZ auto-prepare
           orchestration normally covers both automatically; this button
           is the explicit fallback. */}
-      {currentStage?.status === "BLOCKED" &&
+      {data.overall.outcome !== "PARTIALLY_GENERATED" &&
+        currentStage &&
+        (currentStage.status === "BLOCKED" || currentStage.status === "FAILED") &&
         currentStage.canRecover &&
-        (currentStage.id === "transcribe" || currentStage.id === "objectives") && (
+        currentStage.id !== "upload" &&
+        currentStage.id !== "ingest" && (
         <div
           className="mt-5 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4"
           data-testid="training-prep-recovery"
         >
           <div className="text-sm text-amber-900">
             <strong className="font-semibold">
-              {currentStage.id === "transcribe"
-                ? "Preparation hasn’t started yet."
-                : "Analysis hasn’t started yet."}
+              {currentStage.status === "FAILED"
+                ? `${currentStage.label} stopped.`
+                : `${currentStage.label} has not started.`}
             </strong>
             {" "}
-            {currentStage.blockedReason ??
-              (currentStage.id === "transcribe"
-                ? "Click the button to begin transcription."
-                : "Click the button to begin learning-objective analysis.")}
+            {currentStage.failureReason ??
+              currentStage.blockedReason ??
+              "Preparation can resume from the last completed stage."}
+            {" "}
+            Continue preparation resumes from here — the upload and any finished
+            stages are kept.
           </div>
           <button
             type="button"
-            className="btn-primary btn-sm"
-            onClick={handleStart}
-            disabled={starting}
+            className="btn-primary btn-sm flex-none"
+            onClick={() => handleStart(false)}
+            disabled={starting || confirmation !== null}
             data-testid="training-prep-start-button"
           >
-            {starting ? "Starting…" : "Continue preparation"}
+            {starting ? "Checking…" : "Continue preparation"}
           </button>
         </div>
       )}
+      {confirmation && (
+        <div
+          className="mt-3 rounded-md border border-club-green/30 bg-white p-4 text-sm text-stone-800"
+          role="alertdialog"
+          aria-label="Confirm AI processing cost"
+          data-testid="training-prep-confirm"
+        >
+          <p className="font-semibold text-club-ink">Confirm AI processing</p>
+          <p className="mt-1" data-testid="training-prep-confirm-message">
+            {confirmation.message}
+          </p>
+          <p className="mt-2 tabular-nums" data-testid="training-prep-confirm-estimate">
+            Estimated cost: about <strong>{confirmation.estimate.typical}</strong>, and never
+            more than <strong>{confirmation.estimate.maximum}</strong>. Spending for this
+            course is capped at {confirmation.estimate.courseCap}.
+          </p>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary btn-sm"
+              onClick={() => handleStart(true)}
+              disabled={starting}
+              data-testid="training-prep-confirm-accept"
+            >
+              {starting ? "Starting…" : "Confirm and continue"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setConfirmation(null)}
+              disabled={starting}
+              data-testid="training-prep-confirm-cancel"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {notice && (
+        <p
+          className="mt-3 rounded-md border border-club-green/30 bg-club-green/5 px-3 py-2 text-sm text-club-ink"
+          role="status"
+          data-testid="training-prep-notice"
+        >
+          {notice}
+        </p>
+      )}
       {startError && (
         <p
-          className="mt-2 text-sm text-red-700"
+          className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
           role="alert"
           data-testid="training-prep-start-error"
         >

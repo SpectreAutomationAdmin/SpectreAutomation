@@ -55,6 +55,11 @@ export async function recordProcessingAuthorization(
     readonly clubId: string;
     readonly courseVersionId: string;
     readonly operation: AuthorizationOperation;
+    /** Which manager action produced this authorization. */
+    readonly source?: "UPLOAD" | "MANAGER_CONTINUE" | "START_PREPARATION" | "AUTHORIZE_RECOVERY";
+    /** MOCK is only ever written by the upload route when the
+     *  environment explicitly allows mock inference (staging). */
+    readonly inferenceMode?: InferenceMode;
   },
 ): Promise<void> {
   await audit(principal, {
@@ -65,8 +70,50 @@ export async function recordProcessingAuthorization(
     after: {
       operation: args.operation,
       authorizedAt: new Date().toISOString(),
+      source: args.source ?? null,
+      inferenceMode: args.inferenceMode ?? "LIVE",
     },
   });
+}
+
+export type InferenceMode = "LIVE" | "MOCK";
+
+/** Environment gate for mock inference. Absent in production, so a
+ *  MOCK authorization can neither be written nor honoured there. */
+export const MOCK_INFERENCE_ENV_FLAG = "TRAINING_MOCK_INFERENCE_ALLOWED";
+
+export function isMockInferenceAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[MOCK_INFERENCE_ENV_FLAG] === "true";
+}
+
+/** Inference mode a generation run must use: MOCK iff ANY authorization
+ *  ever recorded for the version asked for MOCK. Sticky on purpose — a
+ *  version created for an orchestration test can never fall through to
+ *  billable inference because a later click wrote a LIVE record. */
+export async function resolveInferenceModeForVersion(
+  args: { readonly clubId: string; readonly courseVersionId: string },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<InferenceMode> {
+  const db = opts.prisma ?? defaultPrisma;
+  const rows = await db.auditLog.findMany({
+    where: {
+      clubId: args.clubId,
+      action: "hr.training.generation.authorize",
+      entityType: "TrainingCourseVersion",
+      entityId: args.courseVersionId,
+    },
+    select: { afterJson: true },
+  });
+  for (const row of rows) {
+    if (!row.afterJson) continue;
+    try {
+      const after = JSON.parse(row.afterJson) as { inferenceMode?: unknown };
+      if (after.inferenceMode === "MOCK") return "MOCK";
+    } catch {
+      // Malformed record: ignore, other records still decide.
+    }
+  }
+  return "LIVE";
 }
 
 /** Return true iff a fresh authorization exists for the (clubId,
