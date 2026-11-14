@@ -1,168 +1,144 @@
 "use client";
 
-// EP-TRAIN-4Y-S §4 — plain-language AI-preparation progress for the
-// manager. Polls the existing `transcription-status` +
-// `generation-status` + auto-prepare endpoints and renders a 7-stage
-// checklist so the manager can see where they are without needing to
-// understand internal pipeline terminology.
+// EP-TRAIN-4Y-AY §5 — Mandatory seven-stage preparation progress bars.
 //
-// Durability: the progress is derived entirely from server-side state
-// (DB rows), so the manager can refresh / leave / return without
-// losing the display. `auto-prepare` is idempotent — no duplicate
-// inference runs are started regardless of how many times the UI
-// re-fires it.
+// Replaces the prior 4Y-S checklist (status-only) with a per-stage
+// progress-bar surface. Every stage renders a visible bar:
+//   - COMPLETED  → filled, green, with final percent
+//   - RUNNING    → animated indeterminate when no measurable fraction,
+//                  determinate bar when numerator/denominator exist
+//   - QUEUED     → striped amber bar, "Waiting for worker"
+//   - BLOCKED    → red bar with a blocked reason + recovery action
+//   - FAILED     → red bar with failure reason + retry action
+//   - WAITING    → thin outline bar, "Waiting on upstream"
 //
-// No false percentages: GPU time has no real client-visible progress,
-// so we don't fabricate one. We show the current stage + the stages
-// that have completed; everything upstream of the current stage is
-// marked done.
+// All data is server-derived from /preparation-status. The component
+// never fabricates percents (§4 of the directive).
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-
-interface Props {
-  readonly versionId: string;
-  readonly hasVideo: boolean;
-}
 
 type StageId =
   | "upload"
   | "ingest"
   | "transcribe"
-  | "generate-objectives"
-  | "generate-checkpoints"
-  | "generate-assessment"
+  | "objectives"
+  | "checkpoints"
+  | "assessment"
   | "ready";
+
+type StageStatus =
+  | "WAITING"
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "BLOCKED";
+
+interface StageProgressFraction {
+  readonly numerator: number;
+  readonly denominator: number;
+  readonly percent: number;
+  readonly unit: string;
+}
 
 interface Stage {
   readonly id: StageId;
   readonly label: string;
+  readonly status: StageStatus;
+  readonly progress: StageProgressFraction | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly lastActivityAt: string | null;
+  readonly elapsedMs: number | null;
+  readonly failureReason: string | null;
+  readonly blockedReason: string | null;
+  readonly canRecover: boolean;
+  readonly measurementMethod: string;
 }
 
-const STAGES: readonly Stage[] = [
-  { id: "upload", label: "Uploading video" },
-  { id: "ingest", label: "Preparing video" },
-  { id: "transcribe", label: "Transcribing speech" },
-  { id: "generate-objectives", label: "Identifying learning objectives" },
-  { id: "generate-checkpoints", label: "Generating knowledge checkpoints" },
-  { id: "generate-assessment", label: "Preparing final assessment" },
-  { id: "ready", label: "Course ready for review" },
-];
+interface PreparationProgress {
+  readonly versionId: string;
+  readonly overall: {
+    readonly currentStageId: StageId;
+    readonly currentStageStartedAt: string | null;
+    readonly currentStageElapsedMs: number | null;
+    readonly lastActivityAt: string | null;
+    readonly completedStageCount: number;
+    readonly totalStageCount: 7;
+  };
+  readonly stages: readonly Stage[];
+}
+
+interface Props {
+  readonly versionId: string;
+}
 
 type FetchStatus =
   | { kind: "loading" }
-  | { kind: "ok"; current: StageId; done: StageId[]; errorMessage?: string }
+  | { kind: "ok"; data: PreparationProgress }
   | { kind: "error"; message: string };
 
 const POLL_MS = 5000;
 
-export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
+function formatElapsed(ms: number | null): string {
+  if (ms == null) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s - m * 60;
+  if (m < 60) return `${m}m ${rs}s`;
+  const h = Math.floor(m / 60);
+  const rm = m - h * 60;
+  return `${h}h ${rm}m`;
+}
+
+function formatLastActivity(iso: string | null, now: Date): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const delta = Math.max(0, now.getTime() - then);
+  if (delta < 10 * 1000) return "just now";
+  if (delta < 60 * 1000) return `${Math.round(delta / 1000)}s ago`;
+  return `${Math.round(delta / 60000)}m ago`;
+}
+
+export default function CoursePrepProgress({ versionId }: Props) {
   const router = useRouter();
   const [status, setStatus] = useState<FetchStatus>({ kind: "loading" });
+  const [starting, setStarting] = useState<boolean>(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
 
   const refresh = useCallback(async () => {
     try {
-      // Kick the auto-prepare (idempotent) so transcribe + generate
-      // are enqueued if they haven't been yet.
-      const prep = await fetch(
-        `/api/admin/training/versions/${versionId}/auto-prepare`,
-        { method: "POST", cache: "no-store" },
+      const resp = await fetch(
+        `/api/admin/training/versions/${versionId}/preparation-status`,
+        { cache: "no-store" },
       );
-      if (!prep.ok) {
-        setStatus({ kind: "error", message: "Could not start preparation." });
-        return;
-      }
-      const prepBody = await prep.json();
-
-      // Pull the authoritative per-stage states.
-      const [tResp, gResp] = await Promise.all([
-        fetch(
-          `/api/admin/training/versions/${versionId}/transcription-status`,
-          { cache: "no-store" },
-        ),
-        fetch(
-          `/api/admin/training/versions/${versionId}/generation-status`,
-          { cache: "no-store" },
-        ),
-      ]);
-      const t = tResp.ok ? await tResp.json() : { state: "ERROR" };
-      const g = gResp.ok ? await gResp.json() : { state: "ERROR" };
-
-      const done: StageId[] = [];
-      let current: StageId = "upload";
-
-      if (!hasVideo || prepBody?.videoSha256 == null) {
-        setStatus({ kind: "ok", current: "upload", done: [] });
-        return;
-      }
-      done.push("upload");
-
-      // Transcript: NOT_STARTED / QUEUED / RUNNING / WAITING_ON_INGEST / COMPLETED
-      if (t.state === "NOT_STARTED" || t.state === "QUEUED") {
-        current = "ingest";
-      } else if (t.state === "RUNNING") {
-        current = "transcribe";
-      } else if (t.state === "WAITING_ON_INGEST") {
-        done.push("ingest");
-        done.push("transcribe");
-        current = "generate-objectives";
-      } else if (t.state === "COMPLETED") {
-        done.push("ingest");
-        done.push("transcribe");
-        // EP-TRAIN-4Y-U §8 — fire grounded metadata generation as
-        // soon as the transcript is COMPLETED, independent of
-        // whether question generation has started or finished. The
-        // deterministic metadata path only needs the transcript, so
-        // title + description should populate even if generation
-        // hasn't been queued yet. Idempotent on the server (returns
-        // COURSE_ALREADY_FINALISED once the course has been edited).
-        // The 4Y-T version only fired this after generation
-        // COMPLETED — that left provisional courses with an empty
-        // transcript-ready state showing "Untitled training course"
-        // indefinitely when the generation queue was stuck.
-        void fetch(
-          `/api/admin/training/versions/${versionId}/generate-metadata`,
-          { method: "POST", cache: "no-store" },
-        ).catch(() => {
-          /* non-fatal; the review surface can retrigger */
+      if (!resp.ok) {
+        setStatus({
+          kind: "error",
+          message:
+            resp.status === 404
+              ? "This course version was not found."
+              : "Could not read preparation status.",
         });
-        // Generation: NOT_STARTED / QUEUED / RUNNING / COMPLETED / FAILED
-        if (g.state === "NOT_STARTED" || g.state === "QUEUED") {
-          current = "generate-objectives";
-        } else if (g.state === "RUNNING") {
-          current = "generate-checkpoints";
-        } else if (g.state === "COMPLETED") {
-          done.push("generate-objectives");
-          done.push("generate-checkpoints");
-          done.push("generate-assessment");
-          current = "ready";
-          done.push("ready");
-        } else {
-          current = "generate-objectives";
-        }
+        return;
       }
-
-      const errorMessage =
-        t.state === "FAILED"
-          ? "Transcription failed. Please retry or contact support."
-          : g.state === "FAILED"
-            ? "Question generation failed. Please retry or contact support."
-            : undefined;
-
-      setStatus({ kind: "ok", current, done, errorMessage });
-
-      // When fully ready, let the editor re-render to pick up the
-      // drafts + checkpoints that have now landed.
-      if (current === "ready") router.refresh();
-    } catch (_err) {
+      const data = (await resp.json()) as PreparationProgress;
+      setStatus({ kind: "ok", data });
+      if (data.overall.currentStageId === "ready") {
+        // Final stage done → refresh the server component below so the
+        // editor renders.
+        router.refresh();
+      }
+    } catch {
       setStatus({ kind: "error", message: "Network error. Retrying…" });
     }
-  }, [versionId, hasVideo, router]);
+  }, [versionId, router]);
 
   useEffect(() => {
-    // Initial fetch + periodic poll until the course is ready. The
-    // interval keeps running even when stages are complete so the
-    // manager sees `ready` immediately when the worker finishes.
     let cancelled = false;
     let t: NodeJS.Timeout | null = null;
     async function loop() {
@@ -178,13 +154,44 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
     };
   }, [refresh]);
 
+  // Local ticker so the "running" elapsed time updates every second
+  // between polls, without requiring a re-fetch.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const handleStart = useCallback(async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const resp = await fetch(
+        `/api/admin/training/versions/${versionId}/start-preparation`,
+        { method: "POST", cache: "no-store" },
+      );
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        setStartError(
+          body?.message ??
+            `Could not start preparation (HTTP ${resp.status}).`,
+        );
+      } else {
+        await refresh();
+      }
+    } catch {
+      setStartError("Network error. Please try again.");
+    } finally {
+      setStarting(false);
+    }
+  }, [versionId, refresh]);
+
   if (status.kind === "loading") {
     return (
       <div
         className="card card-body text-sm text-stone-500"
         data-testid="training-prep-progress-loading"
       >
-        Checking preparation status…
+        Reading preparation status…
       </div>
     );
   }
@@ -199,62 +206,267 @@ export default function CoursePrepProgress({ versionId, hasVideo }: Props) {
     );
   }
 
-  // status.kind === "ok"
-  const doneSet = new Set<StageId>(status.done);
-  // EP-TRAIN-4Y-V §5 — question generation now auto-triggers on
-  // transcript COMPLETED (see /api/admin/training/versions/[id]/
-  // auto-prepare). The manager no longer needs a "Begin AI question
-  // generation" button; the AiSuggestionsPanel in the editor retains
-  // an override if a reviewer ever needs to re-run with a different
-  // plan. The ManualGenerationTrigger component was removed with
-  // 4Y-V §5 — see git history.
+  const { data } = status;
+  const now = new Date(nowTick);
+  const overallPct = Math.round(
+    (data.overall.completedStageCount / data.overall.totalStageCount) * 100,
+  );
+  // Current-stage elapsed is live-ticked between polls when the stage
+  // is RUNNING or QUEUED (the server's elapsedMs is a snapshot).
+  const currentStage = data.stages.find(
+    (s) => s.id === data.overall.currentStageId,
+  );
+  const liveElapsedMs =
+    currentStage &&
+    (currentStage.status === "RUNNING" || currentStage.status === "QUEUED") &&
+    currentStage.startedAt
+      ? Math.max(0, now.getTime() - new Date(currentStage.startedAt).getTime())
+      : data.overall.currentStageElapsedMs;
+
   return (
     <section
       className="card card-body"
       data-testid="training-prep-progress"
       aria-live="polite"
     >
-      <h2 className="section-title text-lg">Preparing course</h2>
-      <p className="mt-1 text-sm text-stone-500">
-        Spectre is getting your course ready. You can leave this page and
-        come back &mdash; progress is saved.
-      </p>
-      <ol className="mt-4 space-y-2">
-        {STAGES.map((s) => {
-          const isDone = doneSet.has(s.id);
-          const isCurrent = s.id === status.current && !isDone;
-          return (
-            <li
-              key={s.id}
-              className="flex items-center gap-3 text-sm"
-              data-testid={`training-prep-stage-${s.id}`}
-              data-state={isDone ? "done" : isCurrent ? "in-progress" : "pending"}
-            >
-              <span
-                className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-xs ${
-                  isDone
-                    ? "bg-club-green text-white"
-                    : isCurrent
-                      ? "bg-amber-500 text-white"
-                      : "bg-stone-200 text-stone-500"
-                }`}
-                aria-hidden
-              >
-                {isDone ? "✓" : isCurrent ? "…" : ""}
-              </span>
-              <span className={isDone ? "text-stone-800" : isCurrent ? "text-stone-900 font-medium" : "text-stone-400"}>
-                {s.label}
-              </span>
-            </li>
-          );
-        })}
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="section-title text-lg">Preparing course</h2>
+          <p className="mt-1 text-sm text-stone-500">
+            Spectre is getting your course ready. You can leave this page and
+            come back — progress is saved on the server.
+          </p>
+        </div>
+        <div className="text-right">
+          <div
+            className="text-xs uppercase tracking-wide text-stone-500"
+            data-testid="training-prep-overall-label"
+          >
+            Overall
+          </div>
+          <div
+            className="text-2xl font-semibold text-club-ink tabular-nums"
+            data-testid="training-prep-overall-percent"
+          >
+            {overallPct}%
+          </div>
+          <div className="text-xs text-stone-500 tabular-nums">
+            {data.overall.completedStageCount} of {data.overall.totalStageCount} stages
+          </div>
+        </div>
+      </header>
+
+      {/* Overall progress bar */}
+      <div
+        className="mt-4 h-2 w-full overflow-hidden rounded-full bg-stone-200"
+        data-testid="training-prep-overall-bar"
+      >
+        <div
+          className="h-full rounded-full bg-club-green transition-all duration-500"
+          style={{ width: `${overallPct}%` }}
+          data-testid="training-prep-overall-bar-fill"
+          data-percent={overallPct}
+        />
+      </div>
+
+      {/* Per-stage bars */}
+      <ol className="mt-5 space-y-4">
+        {data.stages.map((s) => (
+          <StageRow key={s.id} stage={s} now={now} liveElapsedMs={s.id === data.overall.currentStageId ? liveElapsedMs : s.elapsedMs} />
+        ))}
       </ol>
-      {status.errorMessage && (
-        <p className="mt-3 text-sm text-red-700" role="alert">
-          {status.errorMessage}
+
+      {/* Controlled-recovery action — rendered when the current stage
+          is BLOCKED and the server says canRecover. Today this is the
+          "transcribe" stage when no job has been enqueued yet. */}
+      {currentStage?.status === "BLOCKED" && currentStage.canRecover && currentStage.id === "transcribe" && (
+        <div
+          className="mt-5 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4"
+          data-testid="training-prep-recovery"
+        >
+          <div className="text-sm text-amber-900">
+            <strong className="font-semibold">Preparation hasn’t started yet.</strong>
+            {" "}
+            {currentStage.blockedReason ?? "Click the button to begin transcription."}
+          </div>
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            onClick={handleStart}
+            disabled={starting}
+            data-testid="training-prep-start-button"
+          >
+            {starting ? "Starting…" : "Start preparation"}
+          </button>
+        </div>
+      )}
+      {startError && (
+        <p
+          className="mt-2 text-sm text-red-700"
+          role="alert"
+          data-testid="training-prep-start-error"
+        >
+          {startError}
         </p>
       )}
     </section>
   );
 }
 
+function StageRow({
+  stage,
+  now,
+  liveElapsedMs,
+}: {
+  readonly stage: Stage;
+  readonly now: Date;
+  readonly liveElapsedMs: number | null;
+}) {
+  const statusLabel = STATUS_LABEL[stage.status];
+  const barFillPct = stage.progress?.percent ?? (stage.status === "COMPLETED" ? 100 : 0);
+  const barClass = BAR_CLASSES[stage.status];
+  const isIndeterminate =
+    stage.status === "RUNNING" && !stage.progress;
+  return (
+    <li
+      className="text-sm"
+      data-testid={`training-prep-stage-${stage.id}`}
+      data-state={stage.status}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex h-4 w-4 flex-none items-center justify-center rounded-full text-[10px] ${
+                STATUS_BADGE[stage.status]
+              }`}
+              aria-hidden
+            >
+              {STATUS_ICON[stage.status]}
+            </span>
+            <span className="font-medium text-stone-900 truncate">
+              {stage.label}
+            </span>
+          </div>
+          {stage.failureReason && (
+            <p
+              className="mt-1 text-xs text-red-700"
+              data-testid={`training-prep-stage-${stage.id}-failure`}
+            >
+              {stage.failureReason}
+            </p>
+          )}
+          {stage.blockedReason && stage.id !== "transcribe" && (
+            <p
+              className="mt-1 text-xs text-amber-800"
+              data-testid={`training-prep-stage-${stage.id}-blocked`}
+            >
+              {stage.blockedReason}
+            </p>
+          )}
+        </div>
+        <div className="flex-none text-right">
+          <span
+            className={`text-xs uppercase tracking-wide ${STATUS_TEXT[stage.status]}`}
+            data-testid={`training-prep-stage-${stage.id}-status`}
+          >
+            {statusLabel}
+          </span>
+          {stage.progress && (
+            <div
+              className="text-xs text-stone-600 tabular-nums"
+              data-testid={`training-prep-stage-${stage.id}-fraction`}
+            >
+              {stage.progress.numerator} / {stage.progress.denominator} {stage.progress.unit}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div
+        className="mt-2 h-2 w-full overflow-hidden rounded-full bg-stone-200"
+        data-testid={`training-prep-stage-${stage.id}-bar`}
+      >
+        {isIndeterminate ? (
+          <div
+            className="h-full w-1/3 animate-pulse rounded-full bg-amber-500"
+            data-testid={`training-prep-stage-${stage.id}-bar-indeterminate`}
+          />
+        ) : (
+          <div
+            className={`h-full rounded-full ${barClass} transition-all duration-500`}
+            style={{ width: `${barFillPct}%` }}
+            data-testid={`training-prep-stage-${stage.id}-bar-fill`}
+            data-percent={barFillPct}
+          />
+        )}
+      </div>
+
+      <div className="mt-1 flex items-center justify-between text-xs text-stone-500 tabular-nums">
+        <span data-testid={`training-prep-stage-${stage.id}-elapsed`}>
+          {stage.status === "COMPLETED"
+            ? stage.elapsedMs != null
+              ? `Done in ${formatElapsed(stage.elapsedMs)}`
+              : "Done"
+            : stage.status === "RUNNING" || stage.status === "QUEUED"
+              ? `Elapsed ${formatElapsed(liveElapsedMs)}`
+              : stage.status === "FAILED" || stage.status === "BLOCKED"
+                ? stage.startedAt
+                  ? `Stopped after ${formatElapsed(stage.elapsedMs)}`
+                  : "Not started"
+                : "Waiting on earlier stage"}
+        </span>
+        <span data-testid={`training-prep-stage-${stage.id}-heartbeat`}>
+          {stage.lastActivityAt
+            ? `Last activity ${formatLastActivity(stage.lastActivityAt, now)}`
+            : ""}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+const STATUS_LABEL: Record<StageStatus, string> = {
+  WAITING: "Waiting",
+  QUEUED: "Queued",
+  RUNNING: "Running",
+  COMPLETED: "Done",
+  FAILED: "Failed",
+  BLOCKED: "Blocked",
+};
+
+const STATUS_BADGE: Record<StageStatus, string> = {
+  WAITING: "bg-stone-200 text-stone-500",
+  QUEUED: "bg-amber-100 text-amber-800",
+  RUNNING: "bg-amber-500 text-white",
+  COMPLETED: "bg-club-green text-white",
+  FAILED: "bg-red-600 text-white",
+  BLOCKED: "bg-red-500 text-white",
+};
+
+const STATUS_TEXT: Record<StageStatus, string> = {
+  WAITING: "text-stone-500",
+  QUEUED: "text-amber-700",
+  RUNNING: "text-amber-700",
+  COMPLETED: "text-club-green",
+  FAILED: "text-red-700",
+  BLOCKED: "text-red-700",
+};
+
+const STATUS_ICON: Record<StageStatus, string> = {
+  WAITING: "",
+  QUEUED: "…",
+  RUNNING: "…",
+  COMPLETED: "✓",
+  FAILED: "!",
+  BLOCKED: "!",
+};
+
+const BAR_CLASSES: Record<StageStatus, string> = {
+  WAITING: "bg-stone-300",
+  QUEUED: "bg-amber-400",
+  RUNNING: "bg-amber-500",
+  COMPLETED: "bg-club-green",
+  FAILED: "bg-red-500",
+  BLOCKED: "bg-red-400",
+};

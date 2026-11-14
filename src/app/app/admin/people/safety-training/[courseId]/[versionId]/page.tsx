@@ -369,7 +369,7 @@ export default async function VersionEditorPage({
           so leaving + returning preserves state. */}
       {version.videoSha256 && (
         <div className="mt-6">
-          <CoursePrepProgress versionId={version.id} hasVideo={!!version.videoSha256} />
+          <CoursePrepProgress versionId={version.id} />
         </div>
       )}
 

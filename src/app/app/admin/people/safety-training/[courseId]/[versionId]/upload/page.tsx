@@ -107,7 +107,7 @@ export default async function CourseUploadEntry({
         className={videoPresent ? "" : "mt-6"}
         data-testid="training-upload-entry-prep-placeholder"
       >
-        <CoursePrepProgress versionId={version.id} hasVideo={videoPresent} />
+        <CoursePrepProgress versionId={version.id} />
       </div>
 
       <p className="mt-4 text-xs text-stone-500">
