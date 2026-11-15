@@ -29,6 +29,12 @@
 
 import type { PrismaClient } from "@prisma/client";
 import {
+  hasPreparationCompleted,
+  readPipelineAuthorization,
+  readPreparationHalt,
+  type PipelineAuthorization,
+} from "@/lib/hr/training/generation/processing-authorization";
+import {
   parseShortfallGroupMap,
   destinationKindForGroup,
 } from "@/lib/hr/training/generation/destination-resolver";
@@ -156,6 +162,69 @@ const MEASUREMENT_METHOD: Record<StageId, string> = {
   assessment: "TrainingQuestionAiDraft rows with destination FINAL_ASSESSMENT vs plan's proposedFinalAssessment target",
   ready: "all six upstream stages COMPLETED",
 };
+
+const CUSTOMER_COPY = {
+  retrying: "This step did not finish on the first attempt. Spectre is retrying automatically — no action is needed.",
+  slow: "This step is taking longer than usual. Spectre is continuing automatically — no action is needed.",
+  notStarted: "This step has not started yet.",
+  stopped: "This step did not finish.",
+  halted:
+    "Spectre couldn’t finish preparing this course automatically. Our team has been notified and will follow up — no action is needed from you.",
+  haltedTooLong:
+    "This video is longer than Spectre can prepare automatically. Our team has been notified and will follow up.",
+  haltedPartial:
+    "Spectre prepared most of this course but could not complete every question automatically. Our team has been notified. You can already review the questions that are ready.",
+} as const;
+
+/** Everything a manager can read on the preparation screen passes
+ *  through here. Internal failure text (provider names, cost figures,
+ *  error codes) stays in the database and the logs; the manager sees
+ *  plain language and is never asked to act — preparation is automatic. */
+function presentForCustomer(
+  stages: Stage[],
+  ctx: { readonly automated: boolean; readonly haltCode: string | null; readonly completed: boolean },
+): Stage[] {
+  let haltPlaced = false;
+  return stages.map((stage) => {
+    // Once preparation has finished, later edits or discards by the
+    // manager are review work, not unfinished preparation.
+    if (ctx.completed && stage.status !== "COMPLETED") {
+      return { ...stage, status: "COMPLETED" as const, failureReason: null, blockedReason: null, canRecover: false };
+    }
+    if (ctx.haltCode && !haltPlaced && stage.id !== "ready" && stage.status !== "COMPLETED") {
+      haltPlaced = true;
+      return {
+        ...stage,
+        status: "FAILED" as const,
+        failureReason:
+          ctx.haltCode === "BUDGET_INFEASIBLE"
+            ? CUSTOMER_COPY.haltedTooLong
+            : ctx.haltCode === "PARTIAL_AFTER_REPAIR"
+              ? CUSTOMER_COPY.haltedPartial
+              : CUSTOMER_COPY.halted,
+        blockedReason: null,
+        canRecover: false,
+      };
+    }
+    if (stage.status === "FAILED") {
+      return {
+        ...stage,
+        failureReason: ctx.automated ? CUSTOMER_COPY.retrying : CUSTOMER_COPY.stopped,
+        blockedReason: null,
+        canRecover: false,
+      };
+    }
+    if (stage.status === "BLOCKED") {
+      return {
+        ...stage,
+        failureReason: null,
+        blockedReason: ctx.automated ? CUSTOMER_COPY.slow : CUSTOMER_COPY.notStarted,
+        canRecover: false,
+      };
+    }
+    return { ...stage, failureReason: null, blockedReason: null, canRecover: false };
+  });
+}
 
 function pct(n: number, d: number): number {
   if (d <= 0) return 0;
@@ -376,13 +445,11 @@ export async function computePreparationProgress(
   // final/fa-* → FINAL_ASSESSMENT). REQUIRES_HUMAN_REVIEW is the
   // canonical "validated and ready for the manager" state;
   // APPROVED_DRAFT and PROMOTED also count as produced.
+  // Counted across EVERY run of the version: a repair pass adds to what
+  // earlier passes produced, it does not replace it.
   const drafts = run
     ? await prisma.trainingQuestionAiDraft.findMany({
-        where: {
-          clubId: input.clubId,
-          courseVersionId: version.id,
-          generationRunId: run.id,
-        },
+        where: { clubId: input.clubId, courseVersionId: version.id },
         select: { state: true, contentHash: true },
       })
     : [];
@@ -393,7 +460,48 @@ export async function computePreparationProgress(
     "EDITED_VALIDATION_STALE",
     "VALIDATION_PENDING",
   ]);
-  const groupMap = parseShortfallGroupMap(run?.shortfallReasonJson ?? null);
+  const groupMap = new Map<string, string>();
+  if (run) {
+    const mapRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+      where: { clubId: input.clubId, courseVersionId: version.id, shortfallReasonJson: { not: null } },
+      select: { shortfallReasonJson: true },
+      orderBy: { requestedAt: "asc" },
+    });
+    for (const r of mapRuns) {
+      for (const [hash, group] of parseShortfallGroupMap(r.shortfallReasonJson).entries()) {
+        if (!groupMap.has(hash)) groupMap.set(hash, group);
+      }
+    }
+    // The plan to measure against is the fullest one that completed or
+    // is in flight (a repair pass plans only what was missing).
+    const planRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+      where: {
+        clubId: input.clubId,
+        courseVersionId: version.id,
+        executionStatus: { in: ["COMPLETED", "REQUESTED", "QUEUED", "RUNNING"] },
+      },
+      select: { assessmentPlanJson: true },
+    });
+    for (const r of planRuns) {
+      try {
+        const parsed = JSON.parse(r.assessmentPlanJson ?? "{}") as {
+          proposedCheckpointGroups?: Array<{ targetQuestionCount?: unknown }>;
+          proposedFinalAssessment?: { targetQuestionCount?: unknown };
+        };
+        let cpSum = 0;
+        for (const g of parsed.proposedCheckpointGroups ?? []) {
+          if (typeof g?.targetQuestionCount === "number") cpSum += g.targetQuestionCount;
+        }
+        const faTarget = parsed.proposedFinalAssessment?.targetQuestionCount;
+        if (cpSum > (planCheckpointGroupTarget ?? 0)) planCheckpointGroupTarget = cpSum;
+        if (typeof faTarget === "number" && faTarget > (planFinalAssessmentTarget ?? 0)) {
+          planFinalAssessmentTarget = faTarget;
+        }
+      } catch {
+        // Unreadable plan: ignore it for sizing.
+      }
+    }
+  }
   let cpCount = 0;
   let faCount = 0;
   for (const d of drafts) {
@@ -469,9 +577,42 @@ export async function computePreparationProgress(
     measurementMethod: MEASUREMENT_METHOD.ready,
   };
 
-  const stages: Stage[] = [
-    upload, ingest, transcribe, objectives, checkpoints, assessment, ready,
-  ];
+  let pipelineAuth: PipelineAuthorization | null = null;
+  let pipelineHalt: Awaited<ReturnType<typeof readPreparationHalt>> = null;
+  let pipelineCompleted = false;
+  if (uploadCompleted) {
+    try {
+      pipelineAuth = await readPipelineAuthorization(
+        { clubId: input.clubId, courseVersionId: version.id, now },
+        { prisma },
+      );
+      pipelineHalt = pipelineAuth
+        ? await readPreparationHalt(
+            { clubId: input.clubId, courseVersionId: version.id, since: pipelineAuth.authorizedAt },
+            { prisma },
+          )
+        : null;
+      pipelineCompleted = pipelineAuth
+        ? await hasPreparationCompleted(
+            { clubId: input.clubId, courseVersionId: version.id, since: pipelineAuth.authorizedAt },
+            { prisma },
+          )
+        : false;
+    } catch {
+      // Status must still render if the audit trail cannot be read.
+      pipelineAuth = null;
+      pipelineHalt = null;
+      pipelineCompleted = false;
+    }
+  }
+  const stages: Stage[] = presentForCustomer(
+    [upload, ingest, transcribe, objectives, checkpoints, assessment, ready],
+    {
+      automated: pipelineAuth !== null,
+      haltCode: pipelineCompleted ? null : pipelineHalt?.code ?? null,
+      completed: pipelineCompleted,
+    },
+  );
 
   // Identify current stage = first non-COMPLETED.
   const current = stages.find((s) => s.status !== "COMPLETED") ?? ready;
@@ -482,7 +623,7 @@ export async function computePreparationProgress(
     .pop() ?? null;
   const completedCount = stages.filter((s) => s.status === "COMPLETED").length;
   const weightedPercent = computeWeightedOverallPercent(stages);
-  const { outcome, generationShortfall } = classifyOutcome({
+  const classified = classifyOutcome({
     stages,
     checkpointProduced: cpCount,
     checkpointPlanned: planCheckpointGroupTarget ?? 0,
@@ -490,6 +631,15 @@ export async function computePreparationProgress(
     finalPlanned: planFinalAssessmentTarget ?? 0,
     runStatus: run?.executionStatus ?? null,
   });
+  const generationShortfall = classified.generationShortfall;
+  const outcome: PreparationOutcome =
+    pipelineCompleted
+      ? "READY_FOR_REVIEW"
+      : classified.outcome === "READY_FOR_REVIEW" || !pipelineHalt
+      ? classified.outcome
+      : pipelineHalt.code === "PARTIAL_AFTER_REPAIR"
+        ? "PARTIALLY_GENERATED"
+        : "FAILED";
 
   return {
     versionId: version.id,

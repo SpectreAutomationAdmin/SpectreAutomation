@@ -416,7 +416,14 @@ export default function TimelineEditor({
                     "px-3 py-2 " + (cp.questionCount === 0 ? "text-amber-700" : "text-stone-700")
                   }>
                     {cp.questionCount}
-                    {cp.questionCount === 0 && <span className="ml-1 text-[10px] uppercase tracking-wider">needs 1+</span>}
+                    {cp.questionCount === 0 && (
+                      <span
+                        className="ml-1 text-[10px] uppercase tracking-wider"
+                        title="Employees are not stopped at a checkpoint until it has a question."
+                      >
+                        skipped until it has one
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <button

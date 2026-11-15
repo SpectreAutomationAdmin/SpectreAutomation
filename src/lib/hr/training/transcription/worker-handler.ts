@@ -31,6 +31,11 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
 import { resolveInferenceModeForVersion } from "../generation/processing-authorization";
+import {
+  getPilotBudgetMicros,
+  loadCourseProcessingCostMicros,
+  transcriptionWorstCaseMicros,
+} from "../generation/pilot-budget-guard";
 import type { Principal } from "@/lib/rbac";
 import {
   claimNextTranscriptionJob,
@@ -151,6 +156,27 @@ export async function handleTranscribeJob(
       failureCode: "INTEGRITY_FAILURE",
       failureMessage:
         "This version is authorized for mock inference only; real transcription was refused.",
+      retryable: false,
+    });
+    return { status: "FAILED" };
+  }
+
+  // Per-course cost ceiling: everything already spent or reserved for
+  // this course plus this transcription at its worst case must fit.
+  const courseSpentMicros = await loadCourseProcessingCostMicros({
+    clubId: claim.clubId,
+    courseVersionId: claim.courseVersionId,
+    excludeTranscriptionJobId: claim.jobId,
+  });
+  if (
+    courseSpentMicros + transcriptionWorstCaseMicros(version.videoDurationSec) >
+    getPilotBudgetMicros(claim.courseVersionId)
+  ) {
+    await recordJobFailed({
+      jobId: claim.jobId,
+      leaseToken: claim.leaseToken,
+      failureCode: "COST_CAP_EXCEEDED",
+      failureMessage: "Per-course processing ceiling would be exceeded by this transcription.",
       retryable: false,
     });
     return { status: "FAILED" };
@@ -384,18 +410,6 @@ export async function handleTranscribeJob(
       estimatedCostUsdMicros: estimateTranscribeCostMicros(
         modalResponse.elapsedMs.coldBoot + modalResponse.elapsedMs.transcribe,
       ),
-    });
-    // The transcript is durable. Chain into question generation so the
-    // manager does not have to click anything. Never throws.
-    const { advancePreparationAfterTranscription } = await import("../preparation-orchestrator");
-    const advanced = await advancePreparationAfterTranscription({
-      clubId: claim.clubId,
-      courseVersionId: claim.courseVersionId,
-    });
-    logger.info("training.transcription.worker.chained_generation", {
-      jobId: claim.jobId,
-      courseVersionId: claim.courseVersionId,
-      action: advanced.action,
     });
     return { status: "COMPLETED" };
   } catch (err) {

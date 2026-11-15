@@ -400,6 +400,37 @@ export interface BuildPlanInput {
  * NEVER includes excluded segments. Never returns a plan with
  * fewer eligible segments than would support the target count.
  */
+/** Final-assessment chunks: contiguous slices of the objectives, at
+ *  most 3 questions each, so coverage spans the whole course. Returns
+ *  undefined when one call is enough (3 questions or fewer) or there
+ *  are too few objectives to slice. */
+export function buildFinalAssessmentChunks(
+  learningObjectives: readonly AssessmentPlanLearningObjective[],
+  finalTarget: number,
+): AssessmentPlanFinalAssessmentChunk[] | undefined {
+  if (finalTarget <= 3) return undefined;
+  const chunkCount = Math.ceil(finalTarget / 3);
+  const usableObjectives = learningObjectives.filter((lo) => lo.segmentIds.length > 0);
+  if (usableObjectives.length < chunkCount) return undefined;
+  const chunks: AssessmentPlanFinalAssessmentChunk[] = [];
+  let remaining = finalTarget;
+  for (let c = 0; c < chunkCount; c++) {
+    const from = Math.floor((c * usableObjectives.length) / chunkCount);
+    const to = Math.floor(((c + 1) * usableObjectives.length) / chunkCount);
+    const slice = usableObjectives.slice(from, to);
+    const chunkTarget = Math.min(3, Math.ceil(remaining / (chunkCount - c)));
+    remaining -= chunkTarget;
+    chunks.push({
+      id: `fa-${c + 1}`,
+      targetQuestionCount: chunkTarget,
+      coverageLearningObjectiveIds: slice.map((lo) => lo.id),
+      focusTopicLabel: `Part ${c + 1} of ${chunkCount}`,
+      eligibleSegmentIds: slice.flatMap((lo) => lo.segmentIds),
+    });
+  }
+  return chunks;
+}
+
 export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPlanV1 {
   // EP-TRAIN-4Y-V (2026-11-09) — explicit split overrides for pilots.
   // When BOTH checkpointCount and finalCount are provided, they drive
@@ -551,31 +582,10 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     coverageLearningObjectiveIds: learningObjectives.map((lo) => lo.id),
   };
 
-  // Final-assessment chunks: contiguous slices of the objectives, at
-  // most 3 questions each, so coverage spans the whole course.
-  let proposedFinalAssessmentChunks: AssessmentPlanFinalAssessmentChunk[] | undefined;
-  if (input.chunkFinalAssessment === true && finalTarget > 3) {
-    const chunkCount = Math.ceil(finalTarget / 3);
-    const usableObjectives = learningObjectives.filter((lo) => lo.segmentIds.length > 0);
-    if (usableObjectives.length >= chunkCount) {
-      proposedFinalAssessmentChunks = [];
-      let remaining = finalTarget;
-      for (let c = 0; c < chunkCount; c++) {
-        const from = Math.floor((c * usableObjectives.length) / chunkCount);
-        const to = Math.floor(((c + 1) * usableObjectives.length) / chunkCount);
-        const slice = usableObjectives.slice(from, to);
-        const chunkTarget = Math.min(3, Math.ceil(remaining / (chunkCount - c)));
-        remaining -= chunkTarget;
-        proposedFinalAssessmentChunks.push({
-          id: `fa-${c + 1}`,
-          targetQuestionCount: chunkTarget,
-          coverageLearningObjectiveIds: slice.map((lo) => lo.id),
-          focusTopicLabel: `Part ${c + 1} of ${chunkCount}`,
-          eligibleSegmentIds: slice.flatMap((lo) => lo.segmentIds),
-        });
-      }
-    }
-  }
+  const proposedFinalAssessmentChunks =
+    input.chunkFinalAssessment === true
+      ? buildFinalAssessmentChunks(learningObjectives, finalTarget)
+      : undefined;
 
   const plan: AssessmentPlanV1 = {
     schemaVersion: ASSESSMENT_PLAN_SCHEMA_VERSION,

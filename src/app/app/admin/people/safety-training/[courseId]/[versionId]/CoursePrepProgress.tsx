@@ -1,22 +1,15 @@
 "use client";
 
-// EP-TRAIN-4Y-AY §5 — Mandatory seven-stage preparation progress bars.
-//
-// Replaces the prior 4Y-S checklist (status-only) with a per-stage
-// progress-bar surface. Every stage renders a visible bar:
-//   - COMPLETED  → filled, green, with final percent
-//   - RUNNING    → animated indeterminate when no measurable fraction,
-//                  determinate bar when numerator/denominator exist
-//   - QUEUED     → striped amber bar, "Waiting for worker"
-//   - BLOCKED    → red bar with a blocked reason + recovery action
-//   - FAILED     → red bar with failure reason + retry action
-//   - WAITING    → thin outline bar, "Waiting on upstream"
-//
-// All data is server-derived from /preparation-status. The component
-// never fabricates percents (§4 of the directive).
+// Seven-stage course-preparation progress. READ-ONLY: this screen only
+// observes server state. Preparation is started by the upload and
+// driven entirely by the backend (including retries and recovery), so
+// there is nothing here for a manager to start, confirm or resume.
+// All data is server-derived from /preparation-status; the component
+// never fabricates percents, and when the course is ready it takes an
+// active viewer straight to the review screen.
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 type StageId =
   | "upload"
@@ -89,23 +82,6 @@ interface Props {
   readonly versionId: string;
 }
 
-interface SpendEstimate {
-  readonly typical: string;
-  readonly maximum: string;
-  readonly courseCap: string;
-}
-
-interface SpendConfirmation {
-  readonly message: string;
-  readonly estimate: SpendEstimate;
-}
-
-interface ContinueResponse {
-  readonly action?: string;
-  readonly message?: string;
-  readonly estimate?: SpendEstimate;
-}
-
 type FetchStatus =
   | { kind: "loading" }
   | { kind: "ok"; data: PreparationProgress }
@@ -125,12 +101,6 @@ function formatElapsed(ms: number | null): string {
   return `${h}h ${rm}m`;
 }
 
-/** Reasons come from the server with or without a full stop. */
-function asSentence(text: string): string {
-  const t = text.trim();
-  return /[.!?]$/.test(t) ? t : t + ".";
-}
-
 function formatLastActivity(iso: string | null, now: Date): string {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -143,27 +113,13 @@ function formatLastActivity(iso: string | null, now: Date): string {
 
 export default function CoursePrepProgress({ versionId }: Props) {
   const router = useRouter();
+  const pathname = usePathname() ?? "";
   const [status, setStatus] = useState<FetchStatus>({ kind: "loading" });
-  const [starting, setStarting] = useState<boolean>(false);
-  const [startError, setStartError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [confirmation, setConfirmation] = useState<SpendConfirmation | null>(null);
   const [nowTick, setNowTick] = useState<number>(Date.now());
 
   const refresh = useCallback(async () => {
     try {
-      // EP-TRAIN-4Y-BA §3 — The 4Y-AZ orchestration-from-polling
-      // approach has been reverted: polling MUST NOT trigger GPU-
-      // generating side effects. The 4Y-AZ auto-prepare poll created
-      // a runaway loop against the current course (one new FAILED
-      // run every 5 seconds because FAILED wasn't in the "already
-      // active" filter). The directive is explicit: "A GET request
-      // or page render must never initiate new GPU expenditure."
-      //
-      // Server-side orchestration now lives in the transcription
-      // worker's post-success handler (chains straight into
-      // generation when an authorization record exists for the
-      // version). The page is read-only.
+      // Read-only poll. A GET can never start or resume processing.
       const resp = await fetch(
         `/api/admin/training/versions/${versionId}/preparation-status`,
         { cache: "no-store" },
@@ -180,18 +136,16 @@ export default function CoursePrepProgress({ versionId }: Props) {
       }
       const data = (await resp.json()) as PreparationProgress;
       setStatus({ kind: "ok", data });
-      if (
-        data.overall.currentStageId === "ready" ||
-        data.overall.outcome === "READY_FOR_REVIEW"
-      ) {
-        // Final stage done → refresh the server component below so the
-        // editor renders.
-        router.refresh();
+      if (data.overall.outcome === "READY_FOR_REVIEW") {
+        // Ready: take an active viewer straight to the review screen.
+        const match = pathname.match(/^(.*\/safety-training\/[^/]+\/[^/]+)(?:\/upload)?\/?$/);
+        if (match) router.replace(match[1] + "/review");
+        else router.refresh();
       }
     } catch {
       setStatus({ kind: "error", message: "Network error. Retrying…" });
     }
-  }, [versionId, router]);
+  }, [versionId, router, pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,75 +169,6 @@ export default function CoursePrepProgress({ versionId }: Props) {
     const id = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-
-  // One server endpoint decides what "continue" means for the stalled
-  // stage and always answers with a sentence the manager can read:
-  // resumed, already running, needs a cost confirmation, or refused
-  // with the reason. Every outcome is rendered — no silent result.
-  const handleStart = useCallback(
-    async (confirmSpend: boolean) => {
-      setStarting(true);
-      setStartError(null);
-      setNotice(null);
-      try {
-        const resp = await fetch(
-          `/api/admin/training/versions/${versionId}/continue-preparation`,
-          {
-            method: "POST",
-            cache: "no-store",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ confirmSpend }),
-          },
-        );
-        const body = (await resp.json().catch(() => ({}))) as ContinueResponse;
-        if (!resp.ok) {
-          setConfirmation(null);
-          setStartError(
-            body.message ?? `Preparation could not continue (HTTP ${resp.status}).`,
-          );
-          return;
-        }
-        if (body.action === "CONFIRMATION_REQUIRED" && body.estimate) {
-          setConfirmation({ message: body.message ?? "", estimate: body.estimate });
-          return;
-        }
-        setConfirmation(null);
-        if (body.action === "RECOVERY_AUTHORIZED") {
-          const rec = await fetch(
-            `/api/admin/training/versions/${versionId}/recover-shortfall`,
-            { method: "POST", cache: "no-store" },
-          );
-          const recBody = (await rec.json().catch(() => ({}))) as {
-            message?: string;
-            rejectionCode?: string;
-            outcome?: string;
-          };
-          if (!rec.ok) {
-            setStartError(
-              recBody.message ??
-                `The missing questions could not be requested${recBody.rejectionCode ? ` (${recBody.rejectionCode})` : ""}.`,
-            );
-            return;
-          }
-          setNotice(
-            recBody.outcome === "ALREADY_SATISFIED"
-              ? "Every planned question already exists. Nothing more to write."
-              : recBody.outcome === "ALREADY_RUNNING"
-                ? "Questions are already being written for this course. Nothing else is needed."
-                : "Writing the missing questions now. This page will update as they are saved.",
-          );
-        } else {
-          setNotice(body.message ?? "Preparation is continuing.");
-        }
-        await refresh();
-      } catch {
-        setStartError("Network error. Nothing was started — please try again.");
-      } finally {
-        setStarting(false);
-      }
-    },
-    [versionId, refresh],
-  );
 
   if (status.kind === "loading") {
     return (
@@ -320,16 +205,6 @@ export default function CoursePrepProgress({ versionId }: Props) {
   // is RUNNING or QUEUED (the server's elapsedMs is a snapshot).
   const currentStage = data.stages.find(
     (s) => s.id === data.overall.currentStageId,
-  );
-  // The stage the Continue button acts on: the first recoverable
-  // stalled stage, even when an earlier stage is still reported as
-  // running (so a slow thumbnail can never hide the button).
-  const actionableStage = data.stages.find(
-    (s) =>
-      (s.status === "BLOCKED" || s.status === "FAILED") &&
-      s.canRecover &&
-      s.id !== "upload" &&
-      s.id !== "ingest",
   );
   const liveElapsedMs =
     currentStage &&
@@ -417,119 +292,11 @@ export default function CoursePrepProgress({ versionId }: Props) {
           <span className="tabular-nums">
             {data.overall.generationShortfall.finalProduced} of {data.overall.generationShortfall.finalPlanned}
           </span>{" "}
-          final-assessment questions. You can open the review workspace to inspect
-          the partial draft, or continue preparation to request a recovery run.
-          <div className="mt-3">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => handleStart(false)}
-              disabled={starting || confirmation !== null}
-              data-testid="training-prep-recover-shortfall"
-            >
-              {starting ? "Checking…" : "Continue preparation"}
-            </button>
-            <span className="ml-3 text-xs text-amber-800">
-              The partial draft is already viewable in Safety &amp; Training → Active Courses → Review.
-            </span>
-          </div>
+          final-assessment questions so far. The questions that are ready can already be
+          reviewed in Safety &amp; Training → Active Courses → Review.
         </div>
       )}
 
-      {/* Controlled-recovery action — rendered whenever the current
-          stage is BLOCKED and the server classifies it canRecover.
-          Covers the transcribe gap (no transcription job yet) and the
-          objectives gap (no generation run yet). The 4Y-AZ auto-prepare
-          orchestration normally covers both automatically; this button
-          is the explicit fallback. */}
-      {data.overall.outcome !== "PARTIALLY_GENERATED" && actionableStage && (
-        <div
-          className="mt-5 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4"
-          data-testid="training-prep-recovery"
-        >
-          <div className="text-sm text-amber-900">
-            <strong className="font-semibold">
-              {actionableStage.status === "FAILED"
-                ? `${actionableStage.label} stopped.`
-                : `${actionableStage.label} has not started.`}
-            </strong>
-            {" "}
-            {asSentence(
-              actionableStage.failureReason ??
-                actionableStage.blockedReason ??
-                "Preparation can resume from the last completed stage",
-            )}
-            {" "}
-            Continue preparation resumes from here — the upload and any finished
-            stages are kept.
-          </div>
-          <button
-            type="button"
-            className="btn btn-primary flex-none"
-            onClick={() => handleStart(false)}
-            disabled={starting || confirmation !== null}
-            data-testid="training-prep-start-button"
-          >
-            {starting ? "Checking…" : "Continue preparation"}
-          </button>
-        </div>
-      )}
-      {confirmation && (
-        <div
-          className="mt-3 rounded-md border border-club-green/30 bg-white p-4 text-sm text-stone-800"
-          role="alertdialog"
-          aria-label="Confirm AI processing cost"
-          data-testid="training-prep-confirm"
-        >
-          <p className="font-semibold text-club-ink">Confirm AI processing</p>
-          <p className="mt-1" data-testid="training-prep-confirm-message">
-            {confirmation.message}
-          </p>
-          <p className="mt-2 tabular-nums" data-testid="training-prep-confirm-estimate">
-            Estimated cost: about <strong>{confirmation.estimate.typical}</strong>, and never
-            more than <strong>{confirmation.estimate.maximum}</strong>. Spending for this
-            course is capped at {confirmation.estimate.courseCap}.
-          </p>
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => handleStart(true)}
-              disabled={starting}
-              data-testid="training-prep-confirm-accept"
-            >
-              {starting ? "Starting…" : "Confirm and continue"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setConfirmation(null)}
-              disabled={starting}
-              data-testid="training-prep-confirm-cancel"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {notice && (
-        <p
-          className="mt-3 rounded-md border border-club-green/30 bg-club-green/5 px-3 py-2 text-sm text-club-ink"
-          role="status"
-          data-testid="training-prep-notice"
-        >
-          {notice}
-        </p>
-      )}
-      {startError && (
-        <p
-          className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-          role="alert"
-          data-testid="training-prep-start-error"
-        >
-          {startError}
-        </p>
-      )}
     </section>
   );
 }
@@ -577,7 +344,7 @@ function StageRow({
               {stage.failureReason}
             </p>
           )}
-          {stage.blockedReason && stage.id !== "transcribe" && (
+          {stage.blockedReason && (
             <p
               className="mt-1 text-xs text-amber-800"
               data-testid={`training-prep-stage-${stage.id}-blocked`}

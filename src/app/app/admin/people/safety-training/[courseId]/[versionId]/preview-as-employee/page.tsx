@@ -74,23 +74,27 @@ export default async function PreviewAsEmployeePage({
   // `isCorrect` is INTENTIONALLY STRIPPED here — the client never sees
   // the correct answer; server-side grading is still simulated by
   // previewSubmitAttemptAction below.
-  const checkpoints = version.checkpoints.map((c) => ({
-    id: c.id,
-    atSecond: c.atSecond,
-    label: c.label,
-    requiredToProceed: c.requiredToProceed,
-    maxRetries: c.maxRetries,
-    questions: c.questions.map((q) => ({
-      id: q.id,
-      prompt: q.prompt,
-      questionType: q.questionType as "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE",
-      options: q.options.map((o) => ({
-        id: o.id,
-        text: o.text,
-        displayOrder: o.displayOrder,
+  // Same rule as the employee runtime: a checkpoint with no active
+  // question is skipped, so the preview never pauses on an empty one.
+  const checkpoints = version.checkpoints
+    .filter((c) => c.questions.length > 0)
+    .map((c) => ({
+      id: c.id,
+      atSecond: c.atSecond,
+      label: c.label,
+      requiredToProceed: c.requiredToProceed,
+      maxRetries: c.maxRetries,
+      questions: c.questions.map((q) => ({
+        id: q.id,
+        prompt: q.prompt,
+        questionType: q.questionType as "SINGLE_CHOICE" | "MULTI_ANSWER" | "TRUE_FALSE",
+        options: q.options.map((o) => ({
+          id: o.id,
+          text: o.text,
+          displayOrder: o.displayOrder,
+        })),
       })),
-    })),
-  }));
+    }));
 
   const finalQuestions = version.questions
     .filter((q) => q.checkpointId === null && q.active)

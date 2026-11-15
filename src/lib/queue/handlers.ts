@@ -516,6 +516,20 @@ registerHandler<{ jobId: string }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload
     jobId: payload.jobId,
     status: result.status,
   });
+  // EP-TRAIN-4Y-BE — each stage triggers the next. Whether this job
+  // finished or failed, the orchestrator decides what follows
+  // (questions, a bounded retry, or a halt). It never throws.
+  if (result.status !== "SKIPPED") {
+    const { prisma } = await import("../prisma");
+    const job = await prisma.trainingTranscriptionJob.findUnique({
+      where: { id: payload.jobId },
+      select: { clubId: true, courseVersionId: true },
+    });
+    if (job) {
+      const { advancePreparation } = await import("../hr/training/preparation-orchestrator");
+      await advancePreparation({ ...job, trigger: "TRANSCRIPTION_COMPLETED" });
+    }
+  }
   return { jobId: payload.jobId, status: result.status };
 });
 
@@ -531,5 +545,37 @@ registerHandler<{ generationRunId: string }>("TRAINING_GENERATE_QUESTIONS", asyn
     generationRunId: payload.generationRunId,
     status: result.status,
   });
+  // EP-TRAIN-4Y-BE — after every run, the orchestrator saves the
+  // checkpoint events for the questions that now exist and decides
+  // what follows: a repair pass for anything missing, a bounded retry,
+  // completion, or a halt. It never throws.
+  if (result.status !== "SKIPPED") {
+    const { prisma } = await import("../prisma");
+    const run = await prisma.trainingQuestionAiGenerationRun.findUnique({
+      where: { id: payload.generationRunId },
+      select: { clubId: true, courseVersionId: true, requestedByUserId: true },
+    });
+    if (run) {
+      try {
+        const { ensureCheckpointEventsForVersion } = await import("../hr/training/generation/checkpoint-events");
+        await ensureCheckpointEventsForVersion({
+          clubId: run.clubId,
+          courseVersionId: run.courseVersionId,
+          actorUserId: run.requestedByUserId,
+        });
+      } catch (err) {
+        logger.error("queue.handler.training_generate_questions.checkpoint_events_failed", {
+          generationRunId: payload.generationRunId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      const { advancePreparation } = await import("../hr/training/preparation-orchestrator");
+      await advancePreparation({
+        clubId: run.clubId,
+        courseVersionId: run.courseVersionId,
+        trigger: "GENERATION_FINISHED",
+      });
+    }
+  }
   return { generationRunId: payload.generationRunId, status: result.status };
 });

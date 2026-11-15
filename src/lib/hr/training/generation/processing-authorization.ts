@@ -1,30 +1,16 @@
-// EP-TRAIN-4Y-BC §6 — Durable, explicit per-version AI-generation
-// processing authorization. Replaces the BB 5-minute "recent FAILED
-// cooldown" with a stronger invariant:
+// Durable per-version authorization for automatic course preparation.
 //
-//   > No GPU-side-effect endpoint may enqueue a generation run for
-//   > `(clubId, courseVersionId, operation)` unless an AuditLog row
-//   > with action="hr.training.generation.authorize" exists for that
-//   > tuple, created in the last `AUTHORIZATION_TTL_MS` by a principal
-//   > with hr:training:write.
+// A successful video upload writes one AuditLog row
+// (action "hr.training.generation.authorize", source UPLOAD). That row
+// is what lets the orchestrator run the pipeline for that version —
+// transcription, question generation, bounded retries and repairs —
+// for PIPELINE_WINDOW_MS. A Spectre operator can write the same kind
+// of row (source ADMIN_RECOVERY) to resume a course that was uploaded
+// before automatic preparation existed.
 //
-// Why AuditLog: Spectre already has it, it is append-only in
-// production (no UPDATE/DELETE grants on the application role), and it
-// carries `userId` + `createdAt` + `metaJson` — enough to express a
-// replay-protected authorization scoped to (versionId, operation).
-//
-// The record is written by:
-//   - `/start-preparation` (explicit Start click, covers both
-//     transcription and downstream generation under one umbrella).
-//   - A new explicit `/authorize-recovery` endpoint when the manager
-//     clicks "Continue preparation" to recover a shortfall.
-//   - (Future) the upload-completion handler, so the natural
-//     upload → auto-transcribe → auto-generate flow works without a
-//     separate button for first-time preparation.
-//
-// Legacy browser polls do NOT go through the explicit endpoints and
-// therefore cannot produce an authorization. The auto-prepare generation
-// branch refuses when no fresh auth is found.
+// Why AuditLog: it is append-only in production and carries userId +
+// createdAt, which is exactly what a replay-proof authorization needs.
+// Nothing a browser can poll or re-send writes one.
 
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
@@ -55,11 +41,13 @@ export async function recordProcessingAuthorization(
     readonly clubId: string;
     readonly courseVersionId: string;
     readonly operation: AuthorizationOperation;
-    /** Which manager action produced this authorization. */
-    readonly source?: "UPLOAD" | "MANAGER_CONTINUE" | "START_PREPARATION" | "AUTHORIZE_RECOVERY";
+    /** What produced this authorization. */
+    readonly source?: "UPLOAD" | "ADMIN_RECOVERY";
     /** MOCK is only ever written by the upload route when the
      *  environment explicitly allows mock inference (staging). */
     readonly inferenceMode?: InferenceMode;
+    readonly mockDelayMs?: number;
+    readonly mockFault?: MockInferenceOptions["fault"];
   },
 ): Promise<void> {
   await audit(principal, {
@@ -72,11 +60,186 @@ export async function recordProcessingAuthorization(
       authorizedAt: new Date().toISOString(),
       source: args.source ?? null,
       inferenceMode: args.inferenceMode ?? "LIVE",
+      ...(args.inferenceMode === "MOCK"
+        ? { mockDelayMs: args.mockDelayMs ?? 0, mockFault: args.mockFault ?? "NONE" }
+        : {}),
     },
   });
 }
 
 export type InferenceMode = "LIVE" | "MOCK";
+
+/** How long an upload (or an administrative recovery) keeps driving the
+ *  automatic pipeline, retries and repairs included. A normal course
+ *  finishes in minutes; a day leaves room for recovery after an outage
+ *  without letting an old draft start processing by surprise. */
+export const PIPELINE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export type PipelineAuthorizationSource = "UPLOAD" | "ADMIN_RECOVERY";
+
+/** Test-only behaviours of mock inference (staging). */
+export interface MockInferenceOptions {
+  /** Artificial delay per mocked model call, to exercise refresh and
+   *  leave-and-return while work is in flight. */
+  readonly delayMs: number;
+  /** DROP_FIRST_CHECKPOINT: the first run returns nothing for its first
+   *  checkpoint, to exercise automatic repair. */
+  readonly fault: "NONE" | "DROP_FIRST_CHECKPOINT";
+}
+
+export interface PipelineAuthorization {
+  readonly auditId: string;
+  readonly authorizedAt: Date;
+  readonly authorizedByUserId: string | null;
+  readonly source: PipelineAuthorizationSource;
+  readonly inferenceMode: InferenceMode;
+  readonly mock: MockInferenceOptions;
+}
+
+function parsePipelineAuthorization(row: {
+  id: string;
+  afterJson: string | null;
+  createdAt: Date;
+  userId: string | null;
+}): PipelineAuthorization | null {
+  if (!row.afterJson) return null;
+  try {
+    const after = JSON.parse(row.afterJson) as Record<string, unknown>;
+    if (after.operation !== "GENERATE_FULL") return null;
+    if (after.source !== "UPLOAD" && after.source !== "ADMIN_RECOVERY") return null;
+    const delay = typeof after.mockDelayMs === "number" ? after.mockDelayMs : 0;
+    return {
+      auditId: row.id,
+      authorizedAt: row.createdAt,
+      authorizedByUserId: row.userId,
+      source: after.source,
+      inferenceMode: after.inferenceMode === "MOCK" ? "MOCK" : "LIVE",
+      mock: {
+        delayMs: Math.max(0, Math.min(10_000, Math.floor(delay))),
+        fault: after.mockFault === "DROP_FIRST_CHECKPOINT" ? "DROP_FIRST_CHECKPOINT" : "NONE",
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The authorization that currently drives automatic preparation for a
+ *  version: the newest upload / administrative-recovery record inside
+ *  the pipeline window. Null means nothing may run automatically. */
+export async function readPipelineAuthorization(
+  args: { readonly clubId: string; readonly courseVersionId: string; readonly now?: Date },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<PipelineAuthorization | null> {
+  const db = opts.prisma ?? defaultPrisma;
+  const cutoff = new Date((args.now ?? new Date()).getTime() - PIPELINE_WINDOW_MS);
+  const rows = await db.auditLog.findMany({
+    where: {
+      clubId: args.clubId,
+      action: "hr.training.generation.authorize",
+      entityType: "TrainingCourseVersion",
+      entityId: args.courseVersionId,
+      createdAt: { gte: cutoff },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, afterJson: true, createdAt: true, userId: true },
+  });
+  for (const row of rows) {
+    const parsed = parsePipelineAuthorization(row);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+/** Versions with a pipeline authorization inside the window — the
+ *  watchdog's work list. */
+export async function listPipelineCandidates(
+  opts: { prisma?: PrismaClient; now?: Date } = {},
+): Promise<Array<{ clubId: string; courseVersionId: string }>> {
+  const db = opts.prisma ?? defaultPrisma;
+  const cutoff = new Date((opts.now ?? new Date()).getTime() - PIPELINE_WINDOW_MS);
+  const rows = await db.auditLog.findMany({
+    where: {
+      action: "hr.training.generation.authorize",
+      entityType: "TrainingCourseVersion",
+      createdAt: { gte: cutoff },
+    },
+    select: { clubId: true, entityId: true, afterJson: true },
+  });
+  const seen = new Map<string, { clubId: string; courseVersionId: string }>();
+  for (const row of rows) {
+    if (!row.clubId || !row.entityId || !row.afterJson) continue;
+    if (!/"source":"(UPLOAD|ADMIN_RECOVERY)"/.test(row.afterJson)) continue;
+    seen.set(`${row.clubId}:${row.entityId}`, { clubId: row.clubId, courseVersionId: row.entityId });
+  }
+  return [...seen.values()];
+}
+
+export const PREPARATION_COMPLETED_ACTION = "hr.training.preparation.completed";
+
+/** True once automatic preparation finished for the current upload.
+ *  From then on the course belongs to the manager: editing or
+ *  discarding a question must never make Spectre generate again. */
+export async function hasPreparationCompleted(
+  args: { readonly clubId: string; readonly courseVersionId: string; readonly since: Date },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<boolean> {
+  const db = opts.prisma ?? defaultPrisma;
+  const row = await db.auditLog.findFirst({
+    where: {
+      clubId: args.clubId,
+      action: PREPARATION_COMPLETED_ACTION,
+      entityType: "TrainingCourseVersion",
+      entityId: args.courseVersionId,
+      createdAt: { gte: args.since },
+    },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+export const PREPARATION_HALT_ACTION = "hr.training.preparation.halted";
+
+/** Internal reason automatic preparation stopped. Never shown to a
+ *  manager; the customer-facing text is derived from the family. */
+export type PreparationHaltCode =
+  | "BUDGET_INFEASIBLE"
+  | "BUDGET_EXHAUSTED"
+  | "TRANSCRIPTION_ATTEMPTS_EXHAUSTED"
+  | "GENERATION_ATTEMPTS_EXHAUSTED"
+  | "PARTIAL_AFTER_REPAIR"
+  | "TRANSCRIPTION_REJECTED"
+  | "GENERATION_REJECTED"
+  | "NON_RETRYABLE_FAILURE"
+  | "AUTHORIZER_LOST_ACCESS"
+  | "MOCK_REQUIRES_EXISTING_TRANSCRIPT";
+
+/** Latest halt recorded at or after `since` (the driving authorization). */
+export async function readPreparationHalt(
+  args: { readonly clubId: string; readonly courseVersionId: string; readonly since: Date },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<{ readonly code: PreparationHaltCode; readonly at: Date } | null> {
+  const db = opts.prisma ?? defaultPrisma;
+  const row = await db.auditLog.findFirst({
+    where: {
+      clubId: args.clubId,
+      action: PREPARATION_HALT_ACTION,
+      entityType: "TrainingCourseVersion",
+      entityId: args.courseVersionId,
+      createdAt: { gte: args.since },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { afterJson: true, createdAt: true },
+  });
+  if (!row?.afterJson) return null;
+  try {
+    const after = JSON.parse(row.afterJson) as { code?: unknown };
+    if (typeof after.code !== "string") return null;
+    return { code: after.code as PreparationHaltCode, at: row.createdAt };
+  } catch {
+    return null;
+  }
+}
 
 /** Environment gate for mock inference. Absent in production, so a
  *  MOCK authorization can neither be written nor honoured there. */

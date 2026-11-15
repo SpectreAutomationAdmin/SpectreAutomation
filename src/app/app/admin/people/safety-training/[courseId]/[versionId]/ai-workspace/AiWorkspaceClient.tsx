@@ -622,9 +622,10 @@ function TranscriptionPanel({
 
       {state === "WAITING_ON_INGEST" && (
         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Modal reported completion but the transcript build has not been
-          persisted yet. The workspace will not promote this to a
-          completed state until ingestion has written the build row.
+          The video has been transcribed and the transcript is still being
+          saved. This finishes on its own in a moment, and this page will
+          show the transcript as ready once it has. Nothing is needed from
+          you.
         </div>
       )}
 

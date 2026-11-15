@@ -19,6 +19,7 @@ import { tickSubscriptionMaintenance } from "../src/lib/mailbox/subscription-sch
 import { tickActiveReverify } from "../src/lib/mailbox/active-reverify-scheduler";
 import { tickSignupSweep } from "../src/lib/signup/sweeper";
 import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
+import { tickTrainingPreparationWatchdog } from "../src/lib/hr/training/preparation-watchdog";
 
 const queues = process.argv.slice(2);
 const workerId = `worker-${process.pid}-${Date.now().toString(36)}`;
@@ -73,6 +74,10 @@ async function main() {
       // built-in enqueue dedupe collapses concurrent workers to one
       // job per (clubId, payPeriodId).
       await tickTimesheetApprovalWiSweep();
+      // EP-TRAIN-4Y-BE — resume any automatic course preparation that
+      // stalled (worker restart, lost queue entry). Default every 30 s;
+      // bounded by the orchestrator's attempt and cost limits.
+      await tickTrainingPreparationWatchdog();
     } catch (err) {
       logger.error("worker.loop_error", { error: err instanceof Error ? err.message : String(err) });
     }

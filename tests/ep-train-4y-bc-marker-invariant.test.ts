@@ -3,11 +3,13 @@
  * planned-marker separation and durable-authorization contract.
  *
  * The live marker invariant: a persisted TrainingCheckpoint event
- * ONLY qualifies as a live marker when it has at least one bound
- * active TrainingQuestion. Planned positions (from the plan's
- * proposedCheckpointGroups[].atSec) are a SEPARATE collection the
- * UI renders visually distinct — they never carry an interactive
- * question marker.
+ * ONLY qualifies as a live marker when it has something to review:
+ * at least one bound active TrainingQuestion, or (EP-TRAIN-4Y-BE) at
+ * least one produced draft bound to it. Planned positions (from the
+ * plan's proposedCheckpointGroups[].atSec) are a SEPARATE collection
+ * the UI renders visually distinct — they never carry an interactive
+ * question marker — and a position that already has a persisted
+ * checkpoint is no longer planned.
  *
  * Authorization: no GPU-side-effect endpoint may enqueue without a
  * fresh (≤ AUTHORIZATION_TTL_MS) AuditLog row with
@@ -29,10 +31,11 @@ function resolveLiveCheckpointMarkers(
   checkpoints: Array<{
     id: string; label: string | null; atSecond: number;
     activeQuestionCount: number;
+    boundProducedDraftCount: number;
   }>,
 ) {
   return checkpoints
-    .filter((c) => c.activeQuestionCount > 0)
+    .filter((c) => c.activeQuestionCount > 0 || c.boundProducedDraftCount > 0)
     .map((c) => ({
       id: c.id,
       title: c.label ?? `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(Math.floor(c.atSecond % 60)).padStart(2, "0")}`,
@@ -41,7 +44,10 @@ function resolveLiveCheckpointMarkers(
     .sort((a, b) => a.atSecond - b.atSecond);
 }
 
-function resolvePlannedCheckpointMarkers(assessmentPlanJson: string | null) {
+function resolvePlannedCheckpointMarkers(
+  assessmentPlanJson: string | null,
+  persistedCheckpointSeconds: ReadonlySet<number>,
+) {
   if (!assessmentPlanJson) return [];
   try {
     const plan = JSON.parse(assessmentPlanJson) as {
@@ -51,6 +57,7 @@ function resolvePlannedCheckpointMarkers(assessmentPlanJson: string | null) {
     for (const g of plan.proposedCheckpointGroups ?? []) {
       if (typeof g?.id !== "string") continue;
       if (typeof g?.atSec !== "number" || !Number.isFinite(g.atSec)) continue;
+      if (persistedCheckpointSeconds.has(Math.round(g.atSec))) continue;
       rows.push({
         id: `planned:${g.id}`,
         title: `Planned checkpoint at ${Math.floor(g.atSec / 60)}:${String(Math.floor(g.atSec % 60)).padStart(2, "0")}`,
@@ -71,17 +78,17 @@ describe("EP-TRAIN-4Y-BC §1 — live-marker invariant", () => {
 
   it("one planned CP with zero active questions → zero live markers (the current course's defect)", () => {
     const live = resolveLiveCheckpointMarkers([
-      { id: "cp-1", label: "Planned", atSecond: 120, activeQuestionCount: 0 },
+      { id: "cp-1", label: "Planned", atSecond: 120, activeQuestionCount: 0, boundProducedDraftCount: 0 },
     ]);
     expect(live).toHaveLength(0);
   });
 
   it("four saved checkpoints with questions → four live markers, sorted by atSecond", () => {
     const live = resolveLiveCheckpointMarkers([
-      { id: "cp-3", label: null, atSecond: 300, activeQuestionCount: 1 },
-      { id: "cp-1", label: null, atSecond: 100, activeQuestionCount: 2 },
-      { id: "cp-4", label: null, atSecond: 500, activeQuestionCount: 1 },
-      { id: "cp-2", label: "Mid", atSecond: 200, activeQuestionCount: 1 },
+      { id: "cp-3", label: null, atSecond: 300, activeQuestionCount: 1, boundProducedDraftCount: 0 },
+      { id: "cp-1", label: null, atSecond: 100, activeQuestionCount: 2, boundProducedDraftCount: 0 },
+      { id: "cp-4", label: null, atSecond: 500, activeQuestionCount: 1, boundProducedDraftCount: 0 },
+      { id: "cp-2", label: "Mid", atSecond: 200, activeQuestionCount: 1, boundProducedDraftCount: 0 },
     ]);
     expect(live).toHaveLength(4);
     expect(live.map((m) => m.atSecond)).toEqual([100, 200, 300, 500]);
@@ -92,19 +99,35 @@ describe("EP-TRAIN-4Y-BC §1 — live-marker invariant", () => {
 
   it("mixed set (some with questions, some without) → only question-bearing ones go live", () => {
     const live = resolveLiveCheckpointMarkers([
-      { id: "cp-1", label: null, atSecond: 100, activeQuestionCount: 0 },
-      { id: "cp-2", label: null, atSecond: 200, activeQuestionCount: 1 },
-      { id: "cp-3", label: null, atSecond: 300, activeQuestionCount: 0 },
-      { id: "cp-4", label: null, atSecond: 400, activeQuestionCount: 3 },
+      { id: "cp-1", label: null, atSecond: 100, activeQuestionCount: 0, boundProducedDraftCount: 0 },
+      { id: "cp-2", label: null, atSecond: 200, activeQuestionCount: 1, boundProducedDraftCount: 0 },
+      { id: "cp-3", label: null, atSecond: 300, activeQuestionCount: 0, boundProducedDraftCount: 0 },
+      { id: "cp-4", label: null, atSecond: 400, activeQuestionCount: 3, boundProducedDraftCount: 0 },
     ]);
     expect(live.map((m) => m.id)).toEqual(["cp-2", "cp-4"]);
+  });
+
+  it("a checkpoint whose only question is a produced draft awaiting review is live", () => {
+    const live = resolveLiveCheckpointMarkers([
+      { id: "cp-1", label: null, atSecond: 112, activeQuestionCount: 0, boundProducedDraftCount: 1 },
+      { id: "cp-2", label: null, atSecond: 240, activeQuestionCount: 0, boundProducedDraftCount: 1 },
+    ]);
+    expect(live.map((m) => m.id)).toEqual(["cp-1", "cp-2"]);
+  });
+
+  it("a checkpoint whose draft was discarded and that has no question is not a phantom marker", () => {
+    const live = resolveLiveCheckpointMarkers([
+      { id: "cp-1", label: null, atSecond: 112, activeQuestionCount: 0, boundProducedDraftCount: 0 },
+      { id: "cp-2", label: null, atSecond: 240, activeQuestionCount: 0, boundProducedDraftCount: 1 },
+    ]);
+    expect(live.map((m) => m.id)).toEqual(["cp-2"]);
   });
 });
 
 describe("EP-TRAIN-4Y-BC §1 — planned-marker separation", () => {
   it("returns [] when no plan JSON", () => {
-    expect(resolvePlannedCheckpointMarkers(null)).toEqual([]);
-    expect(resolvePlannedCheckpointMarkers("")).toEqual([]);
+    expect(resolvePlannedCheckpointMarkers(null, new Set())).toEqual([]);
+    expect(resolvePlannedCheckpointMarkers("", new Set())).toEqual([]);
   });
 
   it("reads proposedCheckpointGroups[].atSec with planned: prefix on id", () => {
@@ -114,7 +137,7 @@ describe("EP-TRAIN-4Y-BC §1 — planned-marker separation", () => {
         { id: "cg-1", atSec: 120 },
       ],
     });
-    const planned = resolvePlannedCheckpointMarkers(plan);
+    const planned = resolvePlannedCheckpointMarkers(plan, new Set());
     expect(planned.map((m) => m.id)).toEqual(["planned:cg-1", "planned:cg-2"]);
     expect(planned.map((m) => m.title)).toEqual([
       "Planned checkpoint at 2:00",
@@ -123,8 +146,19 @@ describe("EP-TRAIN-4Y-BC §1 — planned-marker separation", () => {
   });
 
   it("malformed plan → empty (no throw)", () => {
-    expect(resolvePlannedCheckpointMarkers("}{")).toEqual([]);
-    expect(resolvePlannedCheckpointMarkers("null")).toEqual([]);
+    expect(resolvePlannedCheckpointMarkers("}{", new Set())).toEqual([]);
+    expect(resolvePlannedCheckpointMarkers("null", new Set())).toEqual([]);
+  });
+
+  it("a planned position that already has a persisted checkpoint is left out", () => {
+    const plan = JSON.stringify({
+      proposedCheckpointGroups: [
+        { id: "cg-1", atSec: 111.66 },
+        { id: "cg-2", atSec: 240.2 },
+      ],
+    });
+    const planned = resolvePlannedCheckpointMarkers(plan, new Set([112]));
+    expect(planned.map((m) => m.id)).toEqual(["planned:cg-2"]);
   });
 });
 

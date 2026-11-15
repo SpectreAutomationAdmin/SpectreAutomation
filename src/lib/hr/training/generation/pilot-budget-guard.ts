@@ -192,15 +192,108 @@ export async function loadPriorPilotCostMicros(
   args: { clubId: string; courseVersionId: string; excludeRunId: string },
   opts: { prisma?: PrismaClient } = {},
 ): Promise<number> {
+  return loadCourseProcessingCostMicros(
+    { clubId: args.clubId, courseVersionId: args.courseVersionId, excludeRunId: args.excludeRunId },
+    opts,
+  );
+}
+
+const LIVE_STATES = ["REQUESTED", "QUEUED", "RUNNING"];
+
+/** Billable model calls a plan makes: course metadata + one per
+ *  checkpoint event + one per final-assessment chunk (or one call when
+ *  the final assessment is not chunked). */
+export function plannedCallCount(plan: {
+  readonly checkpointEvents: number;
+  readonly finalQuestions: number;
+  readonly finalChunks?: number;
+  readonly includesMetadata?: boolean;
+}): number {
+  const finalCalls =
+    plan.finalQuestions <= 0 ? 0 : plan.finalChunks && plan.finalChunks > 0 ? plan.finalChunks : 1;
+  return (plan.includesMetadata === false ? 0 : 1) + plan.checkpointEvents + finalCalls;
+}
+
+/** Worst-case cost of one generation run with `calls` model calls. */
+export function generationWorstCaseMicros(calls: number): number {
+  return msToCostMicros(Math.max(0, calls) * PER_CALL_WORST_CASE_MS + COLD_BOOT_WORST_CASE_MS);
+}
+
+/** Worst-case cost of transcribing a video of the given length. The
+ *  observed rate is about 0.13 s of compute per second of video; half
+ *  real time with a 3-minute floor is a deliberately loose bound. */
+export function transcriptionWorstCaseMicros(videoDurationSec: number | null | undefined): number {
+  const duration = Math.max(0, videoDurationSec ?? 0);
+  return msToCostMicros(
+    Math.max(PER_CALL_WORST_CASE_MS, duration * 500) + COLD_BOOT_WORST_CASE_MS,
+  );
+}
+
+function reservationForLiveRun(assessmentPlanJson: string | null, inferenceMs: number | null): number {
+  let calls = 2;
+  try {
+    const plan = JSON.parse(assessmentPlanJson ?? "{}") as {
+      proposedCheckpointGroups?: unknown[];
+      proposedFinalAssessment?: { targetQuestionCount?: number };
+      proposedFinalAssessmentChunks?: unknown[];
+    };
+    calls = plannedCallCount({
+      checkpointEvents: Array.isArray(plan.proposedCheckpointGroups) ? plan.proposedCheckpointGroups.length : 0,
+      finalQuestions: plan.proposedFinalAssessment?.targetQuestionCount ?? 0,
+      finalChunks: Array.isArray(plan.proposedFinalAssessmentChunks) ? plan.proposedFinalAssessmentChunks.length : 0,
+    });
+  } catch {
+    // Unreadable plan: keep the minimum reservation.
+  }
+  return Math.max(generationWorstCaseMicros(calls), msToCostMicros(inferenceMs ?? 0));
+}
+
+/** Everything already attributable to a course version: finished
+ *  generation runs, finished transcription jobs, AND a worst-case
+ *  reservation for every other run or job that is still live. A live
+ *  sibling therefore counts at its maximum, so overlapping work can
+ *  never slip under the ceiling. */
+export async function loadCourseProcessingCostMicros(
+  args: {
+    readonly clubId: string;
+    readonly courseVersionId: string;
+    readonly excludeRunId?: string;
+    readonly excludeTranscriptionJobId?: string;
+  },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<number> {
   const db = opts.prisma ?? defaultPrisma;
-  const r = await db.trainingQuestionAiGenerationRun.aggregate({
+  const runs = await db.trainingQuestionAiGenerationRun.findMany({
     where: {
       clubId: args.clubId,
       courseVersionId: args.courseVersionId,
-      id: { not: args.excludeRunId },
+      ...(args.excludeRunId ? { id: { not: args.excludeRunId } } : {}),
     },
-    _sum: { inferenceMs: true },
+    select: { executionStatus: true, inferenceMs: true, assessmentPlanJson: true },
   });
-  const ms = r._sum.inferenceMs ?? 0;
-  return msToCostMicros(ms);
+  let total = 0;
+  for (const r of runs) {
+    total += LIVE_STATES.includes(r.executionStatus)
+      ? reservationForLiveRun(r.assessmentPlanJson, r.inferenceMs)
+      : msToCostMicros(r.inferenceMs ?? 0);
+  }
+  const jobs = await db.trainingTranscriptionJob.findMany({
+    where: {
+      clubId: args.clubId,
+      courseVersionId: args.courseVersionId,
+      ...(args.excludeTranscriptionJobId ? { id: { not: args.excludeTranscriptionJobId } } : {}),
+    },
+    select: {
+      state: true,
+      estimatedCostUsdMicros: true,
+      elapsedMsTotal: true,
+      courseVersion: { select: { videoDurationSec: true } },
+    },
+  });
+  for (const j of jobs) {
+    total += LIVE_STATES.includes(j.state)
+      ? transcriptionWorstCaseMicros(j.courseVersion.videoDurationSec)
+      : j.estimatedCostUsdMicros ?? msToCostMicros(j.elapsedMsTotal ?? 0);
+  }
+  return total;
 }

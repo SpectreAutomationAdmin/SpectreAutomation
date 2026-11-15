@@ -54,6 +54,9 @@ interface Draft {
   originalContentHash?: string;
   contentHash?: string;
   recordVersion?: number;
+  // Persisted checkpoint this draft belongs to. Null for final-
+  // assessment drafts and for a checkpoint draft with no checkpoint yet.
+  checkpointId?: string | null;
 }
 
 interface PublishConfig {
@@ -112,6 +115,10 @@ interface Props {
   videoUrl: string | null;
   drafts: Draft[];
   checkpoints: Checkpoint[];
+  /** Every saved checkpoint, including one that has no marker because
+   *  nothing is on it yet. Used where a manager-authored question picks
+   *  its checkpoint. */
+  allCheckpoints?: Checkpoint[];
   /** EP-TRAIN-4Y-BC §1 — planned checkpoint positions (from the plan
    *  that produced the drafts). Rendered visually distinct from live
    *  markers; never carries an interactive question. Empty when the
@@ -125,6 +132,34 @@ interface Props {
   retainedRejectedProposals?: RetainedRejectedProposalForReview[];
   manualQuestions?: ManualQuestionForClient[];
   isDraft?: boolean;
+}
+
+// One entry of a tab's question list: an AI draft or a manager-authored
+// question. Both kinds are reviewed in the same pane.
+type ReviewItem =
+  | { kind: "draft"; draft: Draft; checkpointId: string | null; atSecond: number | null }
+  | {
+      kind: "manual";
+      question: ManualQuestionForClient;
+      checkpointId: string | null;
+      atSecond: number | null;
+    };
+
+const NO_CHECKPOINT_MESSAGE =
+  "This question could not be placed on the video timeline, so it cannot be added to the course as a checkpoint question. " +
+  "To cover this moment, use “+ Add question” to write your own.";
+const CHECKPOINT_NOT_SAVED_MESSAGE =
+  "The checkpoint for this question could not be saved. Check your connection and try again.";
+
+function promotionDestinationFor(
+  draft: Draft,
+): { kind: "CHECKPOINT"; checkpointId: string } | { kind: "FINAL_ASSESSMENT" } | null {
+  if (draft.destination !== "CHECKPOINT") return { kind: "FINAL_ASSESSMENT" };
+  return draft.checkpointId ? { kind: "CHECKPOINT", checkpointId: draft.checkpointId } : null;
+}
+
+function isSetAside(item: ReviewItem): boolean {
+  return item.kind === "draft" ? item.draft.state === "REJECTED" : !item.question.active;
 }
 
 function uuidV4(): string {
@@ -177,9 +212,9 @@ export default function ManagerReviewClient(props: Props) {
 
   // ── Destination-filtered drafts (unchanged from AA) ─────────────
   const [mode, setMode] = useState<"checkpoints" | "final">(() => {
-    const hasCps = props.drafts.some(
-      (d) => d.destination === "CHECKPOINT" || d.destination === "UNKNOWN",
-    );
+    const hasCps =
+      props.drafts.some((d) => d.destination === "CHECKPOINT" || d.destination === "UNKNOWN") ||
+      (props.manualQuestions ?? []).some((q) => q.destination === "CHECKPOINT");
     return hasCps ? "checkpoints" : "final";
   });
   const checkpointDrafts = useMemo(
@@ -190,7 +225,6 @@ export default function ManagerReviewClient(props: Props) {
     () => props.drafts.filter((d) => d.destination === "FINAL_ASSESSMENT" || d.destination === "UNKNOWN"),
     [props.drafts],
   );
-  const activeDrafts = mode === "checkpoints" ? checkpointDrafts : finalDrafts;
 
   // EP-TRAIN-4Y-AX §2 — manager-authored questions, partitioned by tab.
   const manualQuestions = useMemo<ManualQuestionForClient[]>(
@@ -205,8 +239,58 @@ export default function ManagerReviewClient(props: Props) {
     () => manualQuestions.filter((q) => q.destination === "FINAL_ASSESSMENT"),
     [manualQuestions],
   );
-  const totalCheckpoint = checkpointDrafts.length + manualCheckpoint.length;
-  const totalFinal = finalDrafts.length + manualFinal.length;
+
+  // Each tab's question list holds AI drafts and manager-authored
+  // questions together, so the pane always has something to show while
+  // the tab has questions. Checkpoint questions run in timeline order
+  // (unplaced ones last), so the list follows the markers left to right.
+  const checkpointItems = useMemo<ReviewItem[]>(() => {
+    const secondByCheckpointId = new Map(props.checkpoints.map((c) => [c.id, c.atSecond] as const));
+    const items: ReviewItem[] = [
+      ...checkpointDrafts.map((d): ReviewItem => {
+        const checkpointId = d.checkpointId ?? null;
+        const markerSecond = checkpointId ? secondByCheckpointId.get(checkpointId) : undefined;
+        return {
+          kind: "draft",
+          draft: d,
+          checkpointId,
+          atSecond: markerSecond ?? (typeof d.atSec === "number" ? d.atSec : null),
+        };
+      }),
+      ...manualCheckpoint.map((q): ReviewItem => ({
+        kind: "manual",
+        question: q,
+        checkpointId: q.checkpointId,
+        atSecond: q.checkpointAtSecond,
+      })),
+    ];
+    return items.sort((a, b) => {
+      if (a.atSecond !== null && b.atSecond !== null) return a.atSecond - b.atSecond;
+      if (a.atSecond !== null) return -1;
+      if (b.atSecond !== null) return 1;
+      return 0;
+    });
+  }, [checkpointDrafts, manualCheckpoint, props.checkpoints]);
+  const finalItems = useMemo<ReviewItem[]>(
+    () => [
+      ...finalDrafts.map((d): ReviewItem => ({
+        kind: "draft",
+        draft: d,
+        checkpointId: null,
+        atSecond: null,
+      })),
+      ...manualFinal.map((q): ReviewItem => ({
+        kind: "manual",
+        question: q,
+        checkpointId: null,
+        atSecond: null,
+      })),
+    ],
+    [finalDrafts, manualFinal],
+  );
+  const activeItems = mode === "checkpoints" ? checkpointItems : finalItems;
+  const totalCheckpoint = checkpointItems.length;
+  const totalFinal = finalItems.length;
   const canAddQuestion = !!props.isDraft && props.canAuthor;
 
   const [cpIndex, setCpIndex] = useState(0);
@@ -217,11 +301,16 @@ export default function ManagerReviewClient(props: Props) {
   useEffect(() => {
     if (faIndex >= totalFinal) setFaIndex(Math.max(0, totalFinal - 1));
   }, [totalFinal, faIndex]);
-  const currentIndex = mode === "checkpoints" ? cpIndex : faIndex;
-  const setCurrentIndex = (updater: (prev: number) => number) => {
-    if (mode === "checkpoints") setCpIndex(updater);
-    else setFaIndex(updater);
-  };
+  // Bounded on every render: a list that just shrank must never leave
+  // the pane pointing past its end.
+  const totalInMode = activeItems.length;
+  const currentIndex = Math.min(
+    mode === "checkpoints" ? cpIndex : faIndex,
+    Math.max(0, totalInMode - 1),
+  );
+  const currentItem = activeItems[currentIndex] ?? null;
+  const current = currentItem?.kind === "draft" ? currentItem.draft : null;
+  const currentManual = currentItem?.kind === "manual" ? currentItem.question : null;
 
   // ── Header edit state (unchanged from AA) ───────────────────────
   const [editingTitle, setEditingTitle] = useState(false);
@@ -253,8 +342,7 @@ export default function ManagerReviewClient(props: Props) {
   // captured at edit-start so textareas can round-trip unchanged.
   const isDirty = useCallback((): boolean => {
     if (!editing) return false;
-    const original = (mode === "checkpoints" ? checkpointDrafts : finalDrafts)
-      [currentIndex];
+    const original = current;
     if (!original || original.id !== editing.draftId) return false;
     if (editing.questionText !== original.questionText) return true;
     if (editing.options.length !== original.options.length) return true;
@@ -263,7 +351,7 @@ export default function ManagerReviewClient(props: Props) {
       if (editing.options[i].isCorrect !== original.options[i].isCorrect) return true;
     }
     return false;
-  }, [editing, mode, checkpointDrafts, finalDrafts, currentIndex]);
+  }, [editing, current]);
   const guardUnsaved = useCallback((intent: string): boolean => {
     if (!editing || !isDirty()) return true;
     return window.confirm(`You have unsaved edits to this question. ${intent} without saving?`);
@@ -276,19 +364,28 @@ export default function ManagerReviewClient(props: Props) {
   );
   const [currentCheckpointId, setCurrentCheckpointId] = useState<string | null>(null);
 
-  const current = activeDrafts[currentIndex] ?? null;
-  const totalInMode = activeDrafts.length;
-
-  // Sync marker highlight ↔ selected checkpoint question (unchanged).
   const sortedCheckpoints = useMemo(
     () => [...props.checkpoints].sort((a, b) => a.atSecond - b.atSecond),
     [props.checkpoints],
   );
+  const persistedCheckpoints = useMemo(
+    () => [...(props.allCheckpoints ?? props.checkpoints)].sort((a, b) => a.atSecond - b.atSecond),
+    [props.allCheckpoints, props.checkpoints],
+  );
+  // Marker highlight follows the checkpoint the selected question
+  // belongs to, not its position in the list.
+  const selectedCheckpointId =
+    mode === "checkpoints" ? currentItem?.checkpointId ?? null : null;
   useEffect(() => {
-    if (mode !== "checkpoints") { setCurrentCheckpointId(null); return; }
-    const cp = sortedCheckpoints[currentIndex];
-    setCurrentCheckpointId(cp?.id ?? null);
-  }, [mode, currentIndex, sortedCheckpoints]);
+    setCurrentCheckpointId(selectedCheckpointId);
+  }, [selectedCheckpointId]);
+
+  const seekVideoTo = useCallback((atSecond: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = atSecond;
+    v.pause();
+  }, []);
 
   // ── Header save handlers (unchanged from AA) ────────────────────
   const saveCourseField = useCallback(
@@ -358,6 +455,14 @@ export default function ManagerReviewClient(props: Props) {
   const [addCheckpointLabel, setAddCheckpointLabel] = useState("");
   const [addCheckpointRequiredToProceed, setAddCheckpointRequiredToProceed] = useState(true);
   const [addCheckpointMaxRetries, setAddCheckpointMaxRetries] = useState<number | "">(3);
+  // A second checkpoint at the same second is refused when saving, so a
+  // "new" checkpoint typed at a moment that already has one joins it.
+  // Rounded the same way the checkpoint is saved.
+  const existingAtNewSecond = useMemo(() => {
+    if (addCheckpointAtSec === "" || !Number.isFinite(Number(addCheckpointAtSec))) return null;
+    const second = Math.round(Number(addCheckpointAtSec));
+    return persistedCheckpoints.find((c) => c.atSecond === second) ?? null;
+  }, [addCheckpointAtSec, persistedCheckpoints]);
 
   const resetAddForm = useCallback(() => {
     setAddPrompt("");
@@ -448,12 +553,16 @@ export default function ManagerReviewClient(props: Props) {
         if (addCheckpointAtSec === "" || !Number.isFinite(Number(addCheckpointAtSec)) || Number(addCheckpointAtSec) < 0) {
           setAddError("Checkpoint timestamp (seconds) is required."); return;
         }
-        body.newCheckpoint = {
-          atSecond: Number(addCheckpointAtSec),
-          label: addCheckpointLabel.trim() || null,
-          requiredToProceed: addCheckpointRequiredToProceed,
-          maxRetries: addCheckpointMaxRetries === "" ? 3 : Number(addCheckpointMaxRetries),
-        };
+        if (existingAtNewSecond) {
+          body.checkpointId = existingAtNewSecond.id;
+        } else {
+          body.newCheckpoint = {
+            atSecond: Number(addCheckpointAtSec),
+            label: addCheckpointLabel.trim() || null,
+            requiredToProceed: addCheckpointRequiredToProceed,
+            maxRetries: addCheckpointMaxRetries === "" ? 3 : Number(addCheckpointMaxRetries),
+          };
+        }
       }
     }
 
@@ -485,7 +594,7 @@ export default function ManagerReviewClient(props: Props) {
     } finally {
       setAddBusy(false);
     }
-  }, [addBusy, addPrompt, addOptions, addQType, mode, addCheckpointBindMode, addCheckpointExistingId, addCheckpointAtSec, addCheckpointLabel, addCheckpointRequiredToProceed, addCheckpointMaxRetries, props.versionId, resetAddForm, router]);
+  }, [addBusy, addPrompt, addOptions, addQType, mode, addCheckpointBindMode, addCheckpointExistingId, addCheckpointAtSec, existingAtNewSecond, addCheckpointLabel, addCheckpointRequiredToProceed, addCheckpointMaxRetries, props.versionId, resetAddForm, router]);
 
   const deleteManualQuestion = useCallback(async (questionId: string) => {
     if (!window.confirm("Delete this manager-authored question? This can't be undone.")) return;
@@ -518,6 +627,32 @@ export default function ManagerReviewClient(props: Props) {
     }>;
   }, []);
 
+  // Saves the checkpoint a checkpoint question belongs to when it is
+  // missing: a course prepared before checkpoints were saved
+  // automatically, or one whose checkpoint was removed afterwards.
+  const restoreCheckpointFor = useCallback(
+    async (draft: Draft): Promise<{ checkpointId: string | null; message: string }> => {
+      if (typeof draft.atSec !== "number") return { checkpointId: null, message: NO_CHECKPOINT_MESSAGE };
+      try {
+        const resp = await fetch(
+          `/api/admin/ai-training/versions/${props.versionId}/checkpoint-events`,
+          { method: "POST" },
+        );
+        const body = (await resp.json().catch(() => ({}))) as {
+          message?: string;
+          checkpoints?: Array<{ id: string; atSecond: number }>;
+        };
+        if (!resp.ok) return { checkpointId: null, message: body.message ?? CHECKPOINT_NOT_SAVED_MESSAGE };
+        const second = Math.round(draft.atSec);
+        const match = (body.checkpoints ?? []).find((c) => c.atSecond === second);
+        return { checkpointId: match?.id ?? null, message: NO_CHECKPOINT_MESSAGE };
+      } catch {
+        return { checkpointId: null, message: CHECKPOINT_NOT_SAVED_MESSAGE };
+      }
+    },
+    [props.versionId],
+  );
+
   const handleAccept = useCallback(async () => {
     if (!current || pendingBusy) return;
     if (!guardUnsaved("Accept this draft and leave the editor")) return;
@@ -525,6 +660,17 @@ export default function ManagerReviewClient(props: Props) {
     setLastError(null);
     try {
       const stateBody = await refreshDraftState(current.id);
+      let destination = promotionDestinationFor(current);
+      let noDestinationMessage = NO_CHECKPOINT_MESSAGE;
+      const actionable =
+        stateBody.state === "REQUIRES_HUMAN_REVIEW" || stateBody.state === "APPROVED_DRAFT";
+      if (!destination && props.canAuthor && actionable) {
+        const restored = await restoreCheckpointFor(current);
+        if (restored.checkpointId) {
+          destination = { kind: "CHECKPOINT", checkpointId: restored.checkpointId };
+        }
+        noDestinationMessage = restored.message;
+      }
       if (props.canApprove && stateBody.state === "REQUIRES_HUMAN_REVIEW") {
         const resp = await fetch(
           `/api/admin/ai-training/drafts/${current.id}/approve`,
@@ -548,15 +694,17 @@ export default function ManagerReviewClient(props: Props) {
           throw new Error(b?.message ?? `Approve failed (${resp.status}).`);
         }
       } else if (props.canAuthor && stateBody.state === "APPROVED_DRAFT") {
+        // A checkpoint question is only added to the course at a
+        // checkpoint that exists; without one, say so instead of
+        // sending a request that is certain to be refused.
+        if (!destination) throw new Error(noDestinationMessage);
         const resp = await fetch(
           `/api/admin/ai-training/drafts/${current.id}/promote`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              destination: {
-                kind: current.destination === "CHECKPOINT" ? "CHECKPOINT" : "FINAL_ASSESSMENT",
-              },
+              destination,
               expectedDraftContentHash: stateBody.contentHash,
               expectedValidationId: stateBody.latestValidationId,
             }),
@@ -578,7 +726,7 @@ export default function ManagerReviewClient(props: Props) {
     } finally {
       setPendingBusy(false);
     }
-  }, [current, pendingBusy, props.canApprove, props.canAuthor, router, guardUnsaved, refreshDraftState]);
+  }, [current, pendingBusy, props.canApprove, props.canAuthor, router, guardUnsaved, refreshDraftState, restoreCheckpointFor]);
 
   const handleDiscard = useCallback(async () => {
     if (!current || pendingBusy) return;
@@ -697,19 +845,50 @@ export default function ManagerReviewClient(props: Props) {
   const handleMarkerClick = useCallback(
     (cpId: string, atSecond: number) => {
       if (!guardUnsaved("Jump to a different checkpoint")) return;
-      if (videoRef.current) {
-        videoRef.current.currentTime = atSecond;
-        videoRef.current.pause();
-      }
-      const idx = sortedCheckpoints.findIndex((c) => c.id === cpId);
-      if (idx >= 0 && idx < totalCheckpoint) {
+      seekVideoTo(atSecond);
+      // First question at this checkpoint, draft or manager-authored;
+      // one that was discarded is only chosen when nothing else is there.
+      let idx = checkpointItems.findIndex((it) => it.checkpointId === cpId && !isSetAside(it));
+      if (idx < 0) idx = checkpointItems.findIndex((it) => it.checkpointId === cpId);
+      if (idx >= 0) {
         if (mode !== "checkpoints") setMode("checkpoints");
+        setEditing(null);
+        setLastError(null);
         setCpIndex(idx);
       }
       setCurrentCheckpointId(cpId);
     },
-    [mode, sortedCheckpoints, totalCheckpoint, guardUnsaved],
+    [mode, checkpointItems, guardUnsaved, seekVideoTo],
   );
+
+  // Prev / Next. A checkpoint question also brings the video to its
+  // moment, the same way clicking its marker does.
+  const goToIndex = (next: number) => {
+    const bounded = Math.max(0, Math.min(totalInMode - 1, next));
+    setEditing(null);
+    setLastError(null);
+    if (mode !== "checkpoints") {
+      setFaIndex(bounded);
+      return;
+    }
+    setCpIndex(bounded);
+    const target = checkpointItems[bounded];
+    if (!target) return;
+    setCurrentCheckpointId(target.checkpointId);
+    if (target.atSecond !== null) seekVideoTo(target.atSecond);
+  };
+
+  // Planned positions (those with no checkpoint yet) that no draft sits
+  // at either: the questions still to come.
+  const plannedStillToCome = useMemo(() => {
+    const draftSeconds = new Set<number>();
+    for (const d of checkpointDrafts) {
+      if (typeof d.atSec === "number") draftSeconds.add(Math.round(d.atSec));
+    }
+    return (props.plannedCheckpoints ?? []).filter(
+      (p) => !draftSeconds.has(Math.round(p.atSecond)),
+    ).length;
+  }, [checkpointDrafts, props.plannedCheckpoints]);
 
   // Numbered marker labels — "1", "2", … in atSec order.
   const markerLabels = useMemo(() => {
@@ -751,6 +930,35 @@ export default function ManagerReviewClient(props: Props) {
           : "bg-stone-100 text-stone-700";
 
   const durationForMarkers = videoDuration ?? props.videoDurationSec ?? 0;
+
+  const pager = (
+    <div className="ml-auto flex items-center gap-2">
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={currentIndex === 0 || pendingBusy}
+        onClick={() => {
+          if (!guardUnsaved("Jump to the previous question")) return;
+          goToIndex(currentIndex - 1);
+        }}
+        data-testid="manager-review-prev"
+      >
+        ← Prev
+      </button>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={currentIndex >= totalInMode - 1 || pendingBusy}
+        onClick={() => {
+          if (!guardUnsaved("Jump to the next question")) return;
+          goToIndex(currentIndex + 1);
+        }}
+        data-testid="manager-review-next"
+      >
+        Next →
+      </button>
+    </div>
+  );
 
   return (
     <>
@@ -971,14 +1179,15 @@ export default function ManagerReviewClient(props: Props) {
                 if (!guardUnsaved("Switch tabs")) return;
                 setMode("checkpoints");
                 setEditing(null);
+                setLastError(null);
               }}
               data-testid="manager-review-mode-checkpoints"
               aria-pressed={mode === "checkpoints"}
             >
               Checkpoints · {totalCheckpoint}
-              {(props.plannedCheckpoints ?? []).length > 0 && totalCheckpoint < (props.plannedCheckpoints ?? []).length && (
+              {plannedStillToCome > 0 && (
                 <span className="ml-1 text-xs text-stone-500">
-                  / {(props.plannedCheckpoints ?? []).length} planned
+                  · {plannedStillToCome} {totalCheckpoint > 0 ? "more planned" : "planned"}
                 </span>
               )}
             </button>
@@ -989,6 +1198,7 @@ export default function ManagerReviewClient(props: Props) {
                 if (!guardUnsaved("Switch tabs")) return;
                 setMode("final");
                 setEditing(null);
+                setLastError(null);
               }}
               data-testid="manager-review-mode-final"
               aria-pressed={mode === "final"}
@@ -1027,7 +1237,7 @@ export default function ManagerReviewClient(props: Props) {
               {(props.plannedCheckpoints ?? []).length === 1
                 ? "One is planned for this course."
                 : `${(props.plannedCheckpoints ?? []).length} are planned for this course.`}{" "}
-              Return to the preparation screen to authorize a recovery run.
+              They appear here automatically as course preparation finishes. Nothing is needed from you.
             </div>
           )}
 
@@ -1159,7 +1369,7 @@ export default function ManagerReviewClient(props: Props) {
                         name="manager-review-add-cp-bind"
                         checked={addCheckpointBindMode === "existing"}
                         onChange={() => setAddCheckpointBindMode("existing")}
-                        disabled={addBusy || sortedCheckpoints.length === 0}
+                        disabled={addBusy || persistedCheckpoints.length === 0}
                       />
                       Existing checkpoint
                     </label>
@@ -1200,7 +1410,7 @@ export default function ManagerReviewClient(props: Props) {
                           onChange={(e) => setAddCheckpointLabel(e.target.value)}
                           placeholder="e.g. Checkpoint 3 — Safety"
                           data-testid="manager-review-add-cp-label"
-                          disabled={addBusy}
+                          disabled={addBusy || !!existingAtNewSecond}
                         />
                       </label>
                       <label className="inline-flex items-center gap-2 text-sm">
@@ -1209,7 +1419,7 @@ export default function ManagerReviewClient(props: Props) {
                           checked={addCheckpointRequiredToProceed}
                           onChange={(e) => setAddCheckpointRequiredToProceed(e.target.checked)}
                           data-testid="manager-review-add-cp-required"
-                          disabled={addBusy}
+                          disabled={addBusy || !!existingAtNewSecond}
                         />
                         Required to proceed
                       </label>
@@ -1223,9 +1433,18 @@ export default function ManagerReviewClient(props: Props) {
                           value={addCheckpointMaxRetries}
                           onChange={(e) => setAddCheckpointMaxRetries(e.target.value === "" ? "" : Number(e.target.value))}
                           data-testid="manager-review-add-cp-maxretries"
-                          disabled={addBusy}
+                          disabled={addBusy || !!existingAtNewSecond}
                         />
                       </label>
+                      {existingAtNewSecond && (
+                        <p
+                          className="md:col-span-2 text-xs text-stone-600"
+                          data-testid="manager-review-add-cp-joins-existing"
+                        >
+                          A checkpoint already exists at this moment, so your question will be added to it.
+                          Its label and settings stay as they are.
+                        </p>
+                      )}
                     </div>
                   )}
                   {addCheckpointBindMode === "existing" && (
@@ -1239,9 +1458,11 @@ export default function ManagerReviewClient(props: Props) {
                         disabled={addBusy}
                       >
                         <option value="">— Select a checkpoint —</option>
-                        {sortedCheckpoints.map((c, i) => (
+                        {persistedCheckpoints.map((c) => (
                           <option key={c.id} value={c.id}>
-                            {`${i + 1}. ${c.title} (${c.atSecond}s)`}
+                            {markerLabels[c.id]
+                              ? `${markerLabels[c.id]}. ${c.title} (${c.atSecond}s)`
+                              : `${c.title} (${c.atSecond}s) · no question yet`}
                           </option>
                         ))}
                       </select>
@@ -1486,29 +1707,9 @@ export default function ManagerReviewClient(props: Props) {
                   <h3 className="mt-3 text-base font-medium text-stone-900" data-testid="manager-review-question-text">
                     {current.questionText}
                   </h3>
-                  <ul className="mt-4 space-y-2">
-                    {current.options.map((o, i) => (
-                      <li
-                        key={i}
-                        className={`rounded-md border px-3 py-2 text-sm ${
-                          o.isCorrect
-                            ? "border-green-300 bg-green-50 text-green-900"
-                            : "border-stone-200 bg-white text-stone-800"
-                        }`}
-                        data-testid={`manager-review-option-${i}`}
-                      >
-                        <span className="font-mono text-xs text-stone-500 mr-2">
-                          {String.fromCharCode(65 + i)}.
-                        </span>
-                        {o.optionText}
-                        {o.isCorrect && (
-                          <span className="ml-2 text-xs font-semibold text-green-700">
-                            ✓ Correct answer
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <QuestionOptionList
+                    options={current.options.map((o) => ({ text: o.optionText, isCorrect: o.isCorrect }))}
+                  />
 
                   {lastError && (
                     <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
@@ -1554,42 +1755,34 @@ export default function ManagerReviewClient(props: Props) {
                     >
                       Discard
                     </button>
-                    <div className="ml-auto flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        disabled={currentIndex === 0 || pendingBusy}
-                        onClick={() => {
-                          if (!guardUnsaved("Jump to the previous question")) return;
-                          setEditing(null);
-                          setCurrentIndex((i) => Math.max(0, i - 1));
-                        }}
-                        data-testid="manager-review-prev"
-                      >
-                        ← Prev
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        disabled={currentIndex >= totalInMode - 1 || pendingBusy}
-                        onClick={() => {
-                          if (!guardUnsaved("Jump to the next question")) return;
-                          setEditing(null);
-                          setCurrentIndex((i) => Math.min(totalInMode - 1, i + 1));
-                        }}
-                        data-testid="manager-review-next"
-                      >
-                        Next →
-                      </button>
-                    </div>
+                    {pager}
                   </div>
                 </>
               )
+            ) : currentManual ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-stone-500 font-mono">
+                    Question {currentIndex + 1} of {totalInMode}
+                  </span>
+                  <span
+                    className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-stone-100 text-stone-700"
+                    data-testid="manager-review-status"
+                  >
+                    Manager-authored
+                  </span>
+                </div>
+                <h3 className="mt-3 text-base font-medium text-stone-900" data-testid="manager-review-question-text">
+                  {currentManual.prompt}
+                </h3>
+                <QuestionOptionList options={currentManual.options} />
+                <div className="mt-6 flex flex-wrap items-center gap-2">{pager}</div>
+              </>
             ) : mode === "final" && totalFinal === 0 ? (
               <div className="space-y-3 text-sm text-stone-700" data-testid="manager-review-final-empty">
-                <p className="font-medium text-stone-900">No final-assessment questions were generated yet.</p>
+                <p className="font-medium text-stone-900">No final-assessment questions are ready yet.</p>
                 <p className="text-stone-500">
-                  The AI generation for this course produced the checkpoint questions but no final-assessment questions. A targeted recovery can regenerate them — awaiting founder authorization.
+                  They appear here automatically as course preparation finishes. Nothing is needed from you.
                 </p>
               </div>
             ) : (
@@ -1611,6 +1804,34 @@ export default function ManagerReviewClient(props: Props) {
         </div>
       </div>
     </>
+  );
+}
+
+function QuestionOptionList(p: { options: ReadonlyArray<{ text: string; isCorrect: boolean }> }) {
+  return (
+    <ul className="mt-4 space-y-2">
+      {p.options.map((o, i) => (
+        <li
+          key={i}
+          className={`rounded-md border px-3 py-2 text-sm ${
+            o.isCorrect
+              ? "border-green-300 bg-green-50 text-green-900"
+              : "border-stone-200 bg-white text-stone-800"
+          }`}
+          data-testid={`manager-review-option-${i}`}
+        >
+          <span className="font-mono text-xs text-stone-500 mr-2">
+            {String.fromCharCode(65 + i)}.
+          </span>
+          {o.text}
+          {o.isCorrect && (
+            <span className="ml-2 text-xs font-semibold text-green-700">
+              ✓ Correct answer
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -29,6 +29,11 @@ const ATTEMPT_ENTITY = "TrainingAttempt";
 const PROGRESS_ENTITY = "TrainingProgress";
 const COMPLETION_ENTITY = "TrainingCompletion";
 
+// A checkpoint with no active question has nothing to ask. The employee
+// runtime treats it as absent: it never pauses the video, never gates
+// the final assessment, and cannot be attempted.
+const CHECKPOINT_HAS_ACTIVE_QUESTION = { questions: { some: { active: true } } };
+
 // ---------------------------------------------------------------------------
 // Video progress — monotonic-only
 // ---------------------------------------------------------------------------
@@ -77,7 +82,7 @@ export async function recordVideoProgress(
       videoStorageKey: true,
       course: { select: { clubId: true } },
       checkpoints: {
-        where: { requiredToProceed: true },
+        where: { requiredToProceed: true, ...CHECKPOINT_HAS_ACTIVE_QUESTION },
         select: { id: true, atSecond: true },
         orderBy: { atSecond: "asc" },
       },
@@ -227,6 +232,7 @@ export async function getPlayerState(
       id: true,
       videoDurationSec: true,
       checkpoints: {
+        where: CHECKPOINT_HAS_ACTIVE_QUESTION,
         orderBy: { atSecond: "asc" },
         select: { id: true, atSecond: true, label: true, requiredToProceed: true, maxRetries: true },
       },
@@ -408,7 +414,7 @@ export async function startAttempt(
     }
     // EP-TRAIN-3 Slice 3 (2026-10-29) -- final-assessment gating.
     const required = await prisma.trainingCheckpoint.findMany({
-      where: { courseVersionId: version.id, requiredToProceed: true },
+      where: { courseVersionId: version.id, requiredToProceed: true, ...CHECKPOINT_HAS_ACTIVE_QUESTION },
       select: { id: true, label: true, atSecond: true },
     });
     if (required.length > 0) {
@@ -518,7 +524,7 @@ export async function startCheckpointAttempt(
 ): Promise<StartCheckpointAttemptResult> {
   const version = await loadApplicablePublishedVersion(actor, input.courseVersionId);
   const checkpoint = await prisma.trainingCheckpoint.findFirst({
-    where: { id: input.checkpointId, courseVersionId: version.id },
+    where: { id: input.checkpointId, courseVersionId: version.id, ...CHECKPOINT_HAS_ACTIVE_QUESTION },
     select: { id: true, atSecond: true, requiredToProceed: true, maxRetries: true, label: true },
   });
   if (!checkpoint) throw new NotFoundError("TrainingCheckpoint", input.checkpointId);

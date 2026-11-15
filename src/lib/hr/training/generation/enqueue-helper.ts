@@ -187,10 +187,22 @@ export async function buildPlanAndRequestGeneration(
         });
   }
 
+  return requestGenerationForPlan(principal, {
+    clubId: input.clubId,
+    courseVersionId: input.courseVersionId,
+    plan,
+  });
+}
+
+/** Request + queue a generation run for an already-built plan. */
+export async function requestGenerationForPlan(
+  principal: Principal,
+  input: { readonly clubId: string; readonly courseVersionId: string; readonly plan: AssessmentPlanV1 },
+): Promise<BuildAndEnqueueResult> {
   try {
     const result = await requestGeneration(principal, input.clubId, {
       courseVersionId: input.courseVersionId,
-      plan,
+      plan: input.plan,
     });
     if (!result.idempotent) {
       await markGenerationQueued(input.clubId, result.generationRunId);

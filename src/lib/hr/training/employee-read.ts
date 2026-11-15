@@ -114,14 +114,18 @@ export async function getEmployeeCourseView(
       questionsByCheckpoint.set(q.checkpointId, list);
     }
   }
-  const checkpoints: EmployeeCheckpointView[] = v.checkpoints.map((cp) => ({
-    id: cp.id,
-    atSecond: cp.atSecond,
-    label: cp.label,
-    requiredToProceed: cp.requiredToProceed,
-    maxRetries: cp.maxRetries,
-    questions: questionsByCheckpoint.get(cp.id) ?? [],
-  }));
+  // A checkpoint with no active question is left out: the player would
+  // otherwise pause the employee with nothing to answer.
+  const checkpoints: EmployeeCheckpointView[] = v.checkpoints
+    .map((cp) => ({
+      id: cp.id,
+      atSecond: cp.atSecond,
+      label: cp.label,
+      requiredToProceed: cp.requiredToProceed,
+      maxRetries: cp.maxRetries,
+      questions: questionsByCheckpoint.get(cp.id) ?? [],
+    }))
+    .filter((cp) => cp.questions.length > 0);
   return {
     courseId: v.course.id,
     code: v.course.code,

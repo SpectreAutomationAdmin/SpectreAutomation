@@ -143,8 +143,10 @@ describe("EP-TRAIN-4Y-AY — computePreparationProgress", () => {
     );
     const t = findStage(r!.stages, "transcribe");
     expect(t.status).toBe("BLOCKED");
-    expect(t.canRecover).toBe(true);
-    expect(t.blockedReason).toContain("Waiting to start");
+    // EP-TRAIN-4Y-BE: preparation is automatic — no manager recovery,
+    // and manager-visible text is plain language only.
+    expect(t.canRecover).toBe(false);
+    expect(t.blockedReason).toBe("This step has not started yet.");
     // Overall stage identifies this as the current stage so the UI
     // surfaces the recovery action.
     expect(r!.overall.currentStageId).toBe("transcribe");
@@ -182,8 +184,10 @@ describe("EP-TRAIN-4Y-AY — computePreparationProgress", () => {
     );
     const t = findStage(r!.stages, "transcribe");
     expect(t.status).toBe("BLOCKED");
-    expect(t.canRecover).toBe(true);
-    expect(t.blockedReason).toContain("queue appears stuck");
+    // EP-TRAIN-4Y-BE: preparation is automatic — no manager recovery,
+    // and manager-visible text is plain language only.
+    expect(t.canRecover).toBe(false);
+    expect(t.blockedReason).toBe("This step has not started yet.");
   });
 
   it("§6 lease-expired → BLOCKED when RUNNING past leaseExpiresAt + grace", async () => {
@@ -219,8 +223,10 @@ describe("EP-TRAIN-4Y-AY — computePreparationProgress", () => {
     );
     const t = findStage(r!.stages, "transcribe");
     expect(t.status).toBe("BLOCKED");
-    expect(t.canRecover).toBe(true);
-    expect(t.blockedReason).toContain("worker lost its lease");
+    // EP-TRAIN-4Y-BE: preparation is automatic — no manager recovery,
+    // and manager-visible text is plain language only.
+    expect(t.canRecover).toBe(false);
+    expect(t.blockedReason).toBe("This step has not started yet.");
   });
 
   it("§3 transcribe is RUNNING (indeterminate progress) while worker is heartbeating", async () => {

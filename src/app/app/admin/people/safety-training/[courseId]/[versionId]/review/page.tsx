@@ -25,7 +25,9 @@ import { hasPermission } from "@/lib/rbac";
 import { listCheckpointsForVersion } from "@/lib/hr/training/checkpoints";
 import { checkPublishReadiness } from "@/lib/hr/training/courses";
 import {
+  PRODUCED_DRAFT_STATES,
   annotateDraftsWithComposedDestination,
+  composeDraftPlacementsFromRuns,
   composeGroupMapsFromRuns,
 } from "@/lib/hr/training/generation/destination-resolver";
 import { listRetainedForManagerReview } from "@/lib/hr/training/generation/retained-proposals-reader";
@@ -70,7 +72,8 @@ export default async function ManagerReviewPage({
   // EP-TRAIN-4Y-BC §1 — per-checkpoint active question count for the
   // live-marker invariant. A persisted TrainingCheckpoint only
   // qualifies as a "live" marker when at least one bound
-  // TrainingQuestion is active=true.
+  // TrainingQuestion is active=true, or at least one produced draft is
+  // bound to it (counted further down, once drafts are resolved).
   const activeQuestionCountsByCheckpointId = checkpoints.length === 0
     ? new Map<string, number>()
     : await (async () => {
@@ -89,12 +92,14 @@ export default async function ManagerReviewPage({
         }
         return m;
       })();
-  const checkpointsWithActiveCount = checkpoints.map((c) => ({
-    id: c.id,
-    label: c.label,
-    atSecond: c.atSecond,
-    activeQuestionCount: activeQuestionCountsByCheckpointId.get(c.id) ?? 0,
-  }));
+  // A checkpoint draft is bound to the persisted checkpoint sitting at
+  // its planned second. `checkpoints` is ordered, so the earliest row
+  // wins if two ever share a second.
+  const persistedCheckpointIds = new Set(checkpoints.map((c) => c.id));
+  const checkpointIdBySecond = new Map<number, string>();
+  for (const c of checkpoints) {
+    if (!checkpointIdBySecond.has(c.atSecond)) checkpointIdBySecond.set(c.atSecond, c.id);
+  }
   const readiness = await checkPublishReadiness(version.id);
 
   // Audience summary for the pre-publish review card.
@@ -287,6 +292,10 @@ export default async function ManagerReviewPage({
   const composedGroupMap = composeGroupMapsFromRuns(
     runsForResolver.map((r) => r.shortfallReasonJson),
   );
+  // Group ids repeat across runs, so each draft's timestamp is read
+  // from the plan of the run that produced it — the same resolution
+  // that places its checkpoint on the timeline.
+  const draftPlacements = composeDraftPlacementsFromRuns(runsForResolver);
 
   // Pull AI drafts for this version. Tenant scope enforced via
   // (clubId, courseVersionId); the state filter avoids archived /
@@ -307,6 +316,9 @@ export default async function ManagerReviewPage({
     // client's "Question N of M" numbering matches chronological order.
     atSec: number | null;
     originalContentHash: string;
+    // Persisted checkpoint this draft belongs to; null for final-
+    // assessment drafts and for checkpoint drafts with no checkpoint yet.
+    checkpointId: string | null;
   };
   let drafts: ClientDraft[] = [];
   if (canRead) {
@@ -336,7 +348,7 @@ export default async function ManagerReviewPage({
         draftJson: true,
         contentHash: true,
         supersedesDraftId: true,
-        promotion: { select: { questionId: true, destination: true } },
+        promotion: { select: { questionId: true, destination: true, checkpointId: true } },
       },
       take: 100,
     });
@@ -412,7 +424,14 @@ export default async function ManagerReviewPage({
       composedGroupMap,
     });
     const destByIdRaw = new Map(
-      annotated.map((a) => [a.draft.id, { kind: a.destination, groupKey: a.planGroupKey }] as const),
+      annotated.map((a) => [
+        a.draft.id,
+        {
+          kind: a.destination,
+          groupKey: a.planGroupKey,
+          atSec: draftPlacements.get(a.draft.contentHash)?.atSec ?? null,
+        },
+      ] as const),
     );
     const ancestorPromoById = new Map(
       ancestors.map((a) => [a.id, a.promotion?.destination ?? null] as const),
@@ -422,7 +441,11 @@ export default async function ManagerReviewPage({
     );
     const destById = new Map<
       string,
-      { kind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN"; groupKey: string | null }
+      {
+        kind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN";
+        groupKey: string | null;
+        atSec: number | null;
+      }
     >();
     // EP-TRAIN-4Y-AE2 §3 — the ORIGINAL ancestor's contentHash is the
     // stable logical identity of a checkpoint across every edit +
@@ -435,18 +458,20 @@ export default async function ManagerReviewPage({
     for (const row of rows) {
       const own = destByIdRaw.get(row.id);
       if (own && own.kind !== "UNKNOWN") {
-        destById.set(row.id, { kind: own.kind, groupKey: own.groupKey });
+        destById.set(row.id, { kind: own.kind, groupKey: own.groupKey, atSec: own.atSec });
       } else {
         // Walk up to 5 levels of supersedesDraftId to inherit — matches
         // the BFS fan-out depth above.
         let cursor: string | null = row.supersedesDraftId ?? null;
         let resolvedKind: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" = "UNKNOWN";
         let resolvedGroup: string | null = null;
+        let resolvedAtSec: number | null = null;
         for (let depth = 0; depth < 5 && cursor; depth++) {
           const anc = destByIdRaw.get(cursor);
           if (anc && anc.kind !== "UNKNOWN") {
             resolvedKind = anc.kind;
             resolvedGroup = anc.groupKey;
+            resolvedAtSec = anc.atSec;
             break;
           }
           const promo = ancestorPromoById.get(cursor);
@@ -456,7 +481,7 @@ export default async function ManagerReviewPage({
           }
           cursor = ancestorParentById.get(cursor) ?? null;
         }
-        destById.set(row.id, { kind: resolvedKind, groupKey: resolvedGroup });
+        destById.set(row.id, { kind: resolvedKind, groupKey: resolvedGroup, atSec: resolvedAtSec });
       }
       // Walk to the topmost ancestor to capture its contentHash as the
       // logical identity. Same depth cap as the kind walk above.
@@ -500,6 +525,20 @@ export default async function ManagerReviewPage({
       const resolved = destById.get(d.id);
       const destination: "CHECKPOINT" | "FINAL_ASSESSMENT" | "UNKNOWN" =
         promoDest ?? resolved?.kind ?? "UNKNOWN";
+      const atSec =
+        resolved?.atSec ??
+        (resolved?.groupKey ? groupAtSec.get(resolved.groupKey) ?? null : null);
+      // An accepted draft keeps the checkpoint it was accepted into;
+      // any other checkpoint draft binds to the checkpoint at its second.
+      const acceptedCheckpointId =
+        d.promotion?.checkpointId && persistedCheckpointIds.has(d.promotion.checkpointId)
+          ? d.promotion.checkpointId
+          : null;
+      const checkpointId =
+        destination !== "CHECKPOINT"
+          ? null
+          : acceptedCheckpointId ??
+            (atSec !== null ? checkpointIdBySecond.get(Math.round(atSec)) ?? null : null);
       return {
         id: d.id,
         state: d.state,
@@ -519,8 +558,9 @@ export default async function ManagerReviewPage({
         destination,
         planGroupKey: resolved?.groupKey ?? null,
         // EP-TRAIN-4Y-AE2 §3 — chronological ordering carriers.
-        atSec: resolved?.groupKey ? groupAtSec.get(resolved.groupKey) ?? null : null,
+        atSec,
         originalContentHash: originalHashById.get(d.id) ?? d.contentHash,
+        checkpointId,
       };
     });
 
@@ -545,6 +585,33 @@ export default async function ManagerReviewPage({
       return a.originalContentHash.localeCompare(b.originalContentHash);
     });
   }
+
+  const boundProducedDraftCounts = new Map<string, number>();
+  for (const d of drafts) {
+    if (d.destination !== "CHECKPOINT" || !d.checkpointId) continue;
+    if (!PRODUCED_DRAFT_STATES.has(d.state)) continue;
+    boundProducedDraftCounts.set(
+      d.checkpointId,
+      (boundProducedDraftCounts.get(d.checkpointId) ?? 0) + 1,
+    );
+  }
+  const checkpointsWithCounts = checkpoints.map((c) => ({
+    id: c.id,
+    label: c.label,
+    atSecond: c.atSecond,
+    activeQuestionCount: activeQuestionCountsByCheckpointId.get(c.id) ?? 0,
+    boundProducedDraftCount: boundProducedDraftCounts.get(c.id) ?? 0,
+  }));
+  const persistedCheckpointSeconds = new Set(checkpoints.map((c) => c.atSecond));
+  // Every saved checkpoint, including one with nothing on it (its AI
+  // question was discarded). It has no marker, but a manager-authored
+  // question at that moment must join it: a second checkpoint at the
+  // same second is refused.
+  const allCheckpoints = checkpoints.map((c) => ({
+    id: c.id,
+    title: c.label ?? `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(Math.floor(c.atSecond % 60)).padStart(2, "0")}`,
+    atSecond: c.atSecond,
+  }));
 
   // EP-TRAIN-4Y-AS §5 — retained rejected-proposal candidates that
   // need a manager editorial correction. Scoped by clubId; already-
@@ -645,8 +712,12 @@ export default async function ManagerReviewPage({
             : null
         }
         drafts={drafts}
-        checkpoints={resolveLiveCheckpointMarkers(checkpointsWithActiveCount)}
-        plannedCheckpoints={resolvePlannedCheckpointMarkers(latestRun?.assessmentPlanJson ?? null)}
+        checkpoints={resolveLiveCheckpointMarkers(checkpointsWithCounts)}
+        allCheckpoints={allCheckpoints}
+        plannedCheckpoints={resolvePlannedCheckpointMarkers(
+          latestRun?.assessmentPlanJson ?? null,
+          persistedCheckpointSeconds,
+        )}
         canApprove={canApprove}
         canAuthor={canAuthor}
         canPublish={hasPermission(principal, clubId, "hr:training:publish")}
@@ -662,8 +733,9 @@ export default async function ManagerReviewPage({
 
 // EP-TRAIN-4Y-BC §1 — enforce the live-marker invariant.
 //
-// A live checkpoint marker requires BOTH a persisted TrainingCheckpoint
-// event AND at least one active TrainingQuestion bound to it. Planned
+// A live checkpoint marker requires a persisted TrainingCheckpoint
+// event AND something to review at it: at least one active
+// TrainingQuestion, or at least one produced draft bound to it. Planned
 // checkpoint positions (from the plan's proposedCheckpointGroups) are
 // a SEPARATE collection the UI renders visually distinct — they never
 // carry an interactive question marker.
@@ -675,10 +747,11 @@ function resolveLiveCheckpointMarkers(
   checkpoints: Array<{
     id: string; label: string | null; atSecond: number;
     activeQuestionCount: number;
+    boundProducedDraftCount: number;
   }>,
 ): Array<{ id: string; title: string; atSecond: number }> {
   return checkpoints
-    .filter((c) => c.activeQuestionCount > 0)
+    .filter((c) => c.activeQuestionCount > 0 || c.boundProducedDraftCount > 0)
     .map((c) => ({
       id: c.id,
       title: c.label ?? `Checkpoint at ${Math.floor(c.atSecond / 60)}:${String(Math.floor(c.atSecond % 60)).padStart(2, "0")}`,
@@ -690,9 +763,11 @@ function resolveLiveCheckpointMarkers(
 // EP-TRAIN-4Y-BC §1 — surface planned checkpoint positions separately.
 // The UI renders these as dashed / "planned" markers so the manager
 // sees where AI generation intended to place checkpoints even before
-// any question has been produced.
+// any question has been produced. A position that already has a
+// persisted checkpoint is no longer "planned" and is left out.
 function resolvePlannedCheckpointMarkers(
   assessmentPlanJson: string | null,
+  persistedCheckpointSeconds: ReadonlySet<number>,
 ): Array<{ id: string; title: string; atSecond: number }> {
   if (!assessmentPlanJson) return [];
   try {
@@ -703,6 +778,7 @@ function resolvePlannedCheckpointMarkers(
     for (const g of plan.proposedCheckpointGroups ?? []) {
       if (typeof g?.id !== "string") continue;
       if (typeof g?.atSec !== "number" || !Number.isFinite(g.atSec)) continue;
+      if (persistedCheckpointSeconds.has(Math.round(g.atSec))) continue;
       rows.push({
         id: `planned:${g.id}`,
         title: `Planned checkpoint at ${Math.floor(g.atSec / 60)}:${String(Math.floor(g.atSec % 60)).padStart(2, "0")}`,

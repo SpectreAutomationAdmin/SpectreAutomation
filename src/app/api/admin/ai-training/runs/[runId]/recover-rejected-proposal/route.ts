@@ -22,12 +22,17 @@
 //   422 — sanitiser / structural / correct-answer-integrity rejected
 
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import {
   recoverRejectedProposal,
   RejectedProposalRecoveryError,
 } from "@/lib/hr/training/generation/rejected-proposal-recovery";
+import { ensureCheckpointEventsForVersion } from "@/lib/hr/training/generation/checkpoint-events";
+import { destinationKindForGroup } from "@/lib/hr/training/generation/destination-resolver";
+import { withPostingGuard } from "@/lib/posting-guard";
+import { logger } from "@/lib/observability/logger";
 import { AppError } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -105,6 +110,39 @@ export async function POST(
         editedExplanation,
       },
     });
+    // A corrected checkpoint question arrives outside a generation job,
+    // so nothing else saves the checkpoint it needs to be accepted. The
+    // correction itself stands if this step fails: accepting the
+    // question retries it.
+    if (destinationKindForGroup(body.groupId) === "CHECKPOINT") {
+      try {
+        const run = await prisma.trainingQuestionAiGenerationRun.findFirst({
+          where: { id: runId, clubId },
+          select: { courseVersionId: true },
+        });
+        if (run) {
+          await withPostingGuard(
+            principal,
+            clubId,
+            "hr.training.checkpoint.auto_create",
+            async () => undefined,
+            { entityType: "TrainingCourseVersion", entityId: run.courseVersionId },
+          );
+          await ensureCheckpointEventsForVersion({
+            clubId,
+            courseVersionId: run.courseVersionId,
+            actorUserId: principal.id,
+          });
+        }
+      } catch (err) {
+        logger.error("training.rejected_proposal_recovery.checkpoint_events_failed", {
+          clubId,
+          runId,
+          groupId: body.groupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     return NextResponse.json(result);
   } catch (err) {
     if (err instanceof RejectedProposalRecoveryError) {

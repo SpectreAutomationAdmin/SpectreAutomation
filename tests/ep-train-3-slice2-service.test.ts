@@ -324,7 +324,9 @@ describe("EP-TRAIN-3 Slice 2 :: publish readiness extensions", () => {
     expect(r.reasons).toEqual([]);
   });
 
-  it("fails when a checkpoint has zero active questions", async () => {
+  // EP-TRAIN-4Y-BE: a checkpoint with no active question is skipped by
+  // the employee runtime, so it no longer holds back publishing.
+  it("does not block on a checkpoint that has zero active questions", async () => {
     const { principal, versionId } = await seedWithQuestionAndVideo();
     await createCheckpoint(principal, versionId, { atSecond: 60 });
     await createQuestion(principal, versionId, {
@@ -332,8 +334,8 @@ describe("EP-TRAIN-3 Slice 2 :: publish readiness extensions", () => {
       options: [{ text: "A", isCorrect: true }, { text: "B", isCorrect: false }],
     });
     const r = await checkPublishReadiness(versionId);
-    expect(r.ready).toBe(false);
-    expect(r.reasons.join(" ")).toMatch(/needs at least one active question/);
+    expect(r.reasons).toEqual([]);
+    expect(r.ready).toBe(true);
   });
 
   it("fails when final-assessment questions are missing but requiresKnowledgeTest=true", async () => {

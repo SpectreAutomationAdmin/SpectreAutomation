@@ -48,6 +48,16 @@ export default async function PublishReviewPage({
   const canPublish = hasPermission(principal, clubId, "hr:training:publish");
   const readiness = await checkPublishReadiness(version.id);
   const checkpoints = await listCheckpointsForVersion(version.id);
+  // Employees are only stopped at a checkpoint that has a question in
+  // the course; one without is skipped, so it is not counted as content.
+  const answerableCheckpointCount = await prisma.trainingCheckpoint.count({
+    where: {
+      courseVersionId: version.id,
+      courseVersion: { course: { clubId } },
+      questions: { some: { active: true } },
+    },
+  });
+  const skippedCheckpointCount = Math.max(0, checkpoints.length - answerableCheckpointCount);
   const finalAssessmentCount = await prisma.trainingQuestion.count({
     where: { courseVersionId: version.id, checkpointId: null },
   });
@@ -113,7 +123,16 @@ export default async function PublishReviewPage({
             )}
           </dd>
           <dt className="text-stone-500">Checkpoints</dt>
-          <dd data-testid="pr-checkpoints">{checkpoints.length}</dd>
+          <dd data-testid="pr-checkpoints">
+            {answerableCheckpointCount}
+            {skippedCheckpointCount > 0 && (
+              <span className="block text-amber-700" data-testid="pr-checkpoints-skipped">
+                {skippedCheckpointCount === 1
+                  ? "1 more checkpoint has no question added to the course yet. Employees will not be stopped at it."
+                  : `${skippedCheckpointCount} more checkpoints have no question added to the course yet. Employees will not be stopped at them.`}
+              </span>
+            )}
+          </dd>
           <dt className="text-stone-500">Final-assessment questions</dt>
           <dd data-testid="pr-final-count">{finalAssessmentCount}</dd>
           <dt className="text-stone-500">Approval status</dt>

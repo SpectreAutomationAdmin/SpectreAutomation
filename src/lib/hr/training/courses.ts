@@ -349,24 +349,27 @@ export async function checkPublishReadiness(versionId: string): Promise<PublishR
   }
 
   // Checkpoints -- additional invariants on top of question-type rules.
-  if (version.checkpoints.length > 0) {
+  // A checkpoint with no active question is skipped by the employee
+  // runtime (attempts.ts, employee-read.ts), so it does not hold back
+  // publishing: checkpoints are created automatically for AI-drafted
+  // questions, and discarding one must not leave an unseen blocker.
+  const answerableCheckpoints = version.checkpoints.filter((cp) =>
+    activeQs.some((q) => q.checkpointId === cp.id),
+  );
+  if (answerableCheckpoints.length > 0) {
     const duration = version.videoDurationSec;
-    for (const cp of version.checkpoints) {
+    for (const cp of answerableCheckpoints) {
       if (cp.atSecond < 0) {
         reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' has an invalid position.`);
       }
       if (duration !== null && cp.atSecond > duration) {
         reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' is past the end of the video (${duration}s).`);
       }
-      const cpQs = activeQs.filter((q) => q.checkpointId === cp.id);
-      if (cpQs.length === 0) {
-        reasons.push(`Checkpoint '${cp.label ?? `@${cp.atSecond}s`}' needs at least one active question.`);
-      }
     }
     // 1s minimum spacing across adjacent checkpoints (list is sorted).
-    for (let i = 1; i < version.checkpoints.length; i++) {
-      const prev = version.checkpoints[i - 1];
-      const curr = version.checkpoints[i];
+    for (let i = 1; i < answerableCheckpoints.length; i++) {
+      const prev = answerableCheckpoints[i - 1];
+      const curr = answerableCheckpoints[i];
       if (curr.atSecond - prev.atSecond < 1) {
         reasons.push(`Checkpoints at ${prev.atSecond}s and ${curr.atSecond}s must be at least 1s apart.`);
       }

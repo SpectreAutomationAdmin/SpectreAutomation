@@ -77,6 +77,7 @@ import { canonicalise, sha256Hex } from "../ai-review/content-hash";
 import { buildMockProposals } from "./mock-inference";
 import {
   isMockInferenceAllowed,
+  readPipelineAuthorization,
   resolveInferenceModeForVersion,
 } from "./processing-authorization";
 // EP-TRAIN-4Y-AA §7 — employee-facing text sanitiser. Applied inside
@@ -211,7 +212,9 @@ export async function handleGenerateJob(
   // (checkpoints + final). Metadata may be skipped by the
   // attribution-column guard, but we project worst-case to pre-gate
   // honestly.
-  const plannedGroupCount = plan.proposedCheckpointGroups.length + 1;
+  const plannedGroupCount =
+    plan.proposedCheckpointGroups.length +
+    Math.max(1, plan.proposedFinalAssessmentChunks?.length ?? 0);
   const plannedCallsThisAttempt = 1 + plannedGroupCount;
 
   // EP-TRAIN-4Y-AN §2 — per-pilot budget override. Falls back to the
@@ -292,6 +295,40 @@ export async function handleGenerateJob(
     return { status: "FAILED" };
   }
   const mockUsedSegmentIndices = new Set<number>();
+  if (useMockInference) {
+    // A repair pass must not re-use evidence an earlier pass already
+    // turned into a question (it would be an exact duplicate).
+    const existingDrafts = await db.trainingQuestionAiDraft.findMany({
+      where: { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
+      select: { draftJson: true },
+    });
+    for (const d of existingDrafts) {
+      try {
+        const cited = (JSON.parse(d.draftJson) as { sourceSegmentIds?: unknown }).sourceSegmentIds;
+        if (Array.isArray(cited)) {
+          for (const id of cited) if (typeof id === "number") mockUsedSegmentIndices.add(id);
+        }
+      } catch {
+        // Unreadable draft body: nothing to reserve.
+      }
+    }
+  }
+  const mockOptions = useMockInference
+    ? (await readPipelineAuthorization(
+        { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
+        { prisma: db },
+      ))?.mock ?? { delayMs: 0, fault: "NONE" as const }
+    : { delayMs: 0, fault: "NONE" as const };
+  const mockIsFirstCompletedRun =
+    useMockInference &&
+    (await db.trainingQuestionAiGenerationRun.count({
+      where: {
+        clubId: claim.clubId,
+        courseVersionId: claim.courseVersionId,
+        executionStatus: "COMPLETED",
+        id: { not: claim.runId },
+      },
+    })) === 0;
 
   const metadataResult = isFinalAssessmentRecoveryShape || useMockInference
     ? { inferenceMs: 0, modalCalled: false }
@@ -693,7 +730,13 @@ export async function handleGenerateJob(
         readonly tokenCounts: { readonly prompt: number; readonly output: number };
       } = useMockInference
         ? {
-            proposals: buildMockProposals({
+            proposals: await mockProposalsForGroup({
+              delayMs: mockOptions.delayMs,
+              drop:
+                mockOptions.fault === "DROP_FIRST_CHECKPOINT" &&
+                mockIsFirstCompletedRun &&
+                g.kind === "CHECKPOINT" &&
+                g.id === sortedCheckpoints[0]?.id,
               target: g.target,
               windowSegmentIds,
               segments: eligibleSegments,
@@ -1275,11 +1318,35 @@ export async function handleGenerateJob(
       },
       { prisma: db },
     );
+    // Internal cost record for this run (operators only).
+    logger.info("training.generation.worker.cost_report", {
+      runId: claim.runId,
+      clubId: claim.clubId,
+      courseVersionId: claim.courseVersionId,
+      inferenceMode,
+      actualMicros: msToCostMicros(totalInferenceMs),
+      priorAndReservedMicros: priorAttemptCostMicros,
+      ceilingMicros: pilotBudgetMicros,
+      persistedCount,
+    });
     return { status: "COMPLETED" };
   } catch {
     // Cancellation race — don't overwrite.
     return { status: "FAILED" };
   }
+}
+
+async function mockProposalsForGroup(args: {
+  readonly delayMs: number;
+  readonly drop: boolean;
+  readonly target: number;
+  readonly windowSegmentIds: readonly number[];
+  readonly segments: readonly { readonly segmentIndex: number; readonly text: string }[];
+  readonly usedSegmentIndices: Set<number>;
+}): Promise<ModalGenerateProposal[]> {
+  if (args.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, args.delayMs));
+  if (args.drop) return [];
+  return buildMockProposals(args);
 }
 
 function formatTimestamp(sec: number): string {

@@ -134,8 +134,10 @@ describe("EP-TRAIN-4Y-AZ — duration accounting + fabrication fix + weighted %"
     );
     const obj = findStage(r!.stages, "objectives");
     expect(obj.status).toBe("BLOCKED");
-    expect(obj.canRecover).toBe(true);
-    expect(obj.blockedReason).toContain("Waiting to start");
+    // EP-TRAIN-4Y-BE: preparation is automatic — no manager recovery,
+    // and manager-visible text is plain language only.
+    expect(obj.canRecover).toBe(false);
+    expect(obj.blockedReason).toBe("This step has not started yet.");
     expect(obj.elapsedMs).toBeNull();
     // Current stage is now objectives (the honest "nothing is running
     // yet" state), not a fabricated RUNNING.

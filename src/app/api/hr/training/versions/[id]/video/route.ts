@@ -147,16 +147,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const durationRaw = fd.get("durationSec");
   const durationSec = typeof durationRaw === "string" && durationRaw.length > 0 ? Number(durationRaw) : null;
 
-  // Mock inference is an orchestration-test facility. Refuse BEFORE
-  // storing anything when it is requested where it is not enabled, so a
-  // test can never fall through to billable inference.
+  // Staging-only test controls (never honoured unless the environment
+  // explicitly allows mock inference). Refused BEFORE anything is
+  // stored, so a test can never fall through to billable processing.
   const mockRequested = req.headers.get("x-spectre-training-inference") === "mock";
-  if (mockRequested && !isMockInferenceAllowed()) {
+  const holdRequested = req.headers.get("x-spectre-training-hold") === "1";
+  if ((mockRequested || holdRequested) && !isMockInferenceAllowed()) {
     return NextResponse.json(
-      { error: "Mock inference is not enabled in this environment." },
+      { error: "Test controls are not enabled in this environment." },
       { status: 409 },
     );
   }
+  const mockDelayMs = Number(req.headers.get("x-spectre-training-mock-delay-ms") ?? "0") || 0;
+  const mockFault =
+    req.headers.get("x-spectre-training-mock-fault") === "drop-first-checkpoint"
+      ? ("DROP_FIRST_CHECKPOINT" as const)
+      : ("NONE" as const);
 
   try {
     const buf = Buffer.from(await entry.arrayBuffer());
@@ -167,32 +173,38 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       durationSec,
     });
 
-    // The authenticated upload IS the manager's authorization for the
-    // normal preparation pipeline (transcribe → objectives → questions),
-    // still subject to every cost cap. Start it server-side now; a
-    // failure here never fails the upload — the preparation page shows
-    // the stalled stage and offers Continue preparation.
-    let preparation: { action: string; message: string } | null = null;
-    try {
-      await recordProcessingAuthorization(principal, {
-        clubId,
-        courseVersionId: params.id,
-        operation: "GENERATE_FULL",
-        source: "UPLOAD",
-        inferenceMode: mockRequested ? "MOCK" : "LIVE",
-      });
-      const advanced = await advancePreparation(principal, {
-        clubId,
-        courseVersionId: params.id,
-        trigger: "UPLOAD",
-      });
-      preparation = { action: advanced.action, message: advanced.message };
-    } catch (err) {
-      logger.error("training.video.upload.preparation_start_failed", {
-        clubId,
-        courseVersionId: params.id,
-        error: (err as Error)?.message ?? String(err),
-      });
+    // A successful upload authorizes Spectre to prepare the whole course
+    // and starts it, server-side, right now. Every later stage is
+    // triggered by the one before it; nothing else is asked of the
+    // manager. A failure here never fails the upload — the worker
+    // watchdog picks the course up on its next pass.
+    // (holdRequested: staging test control that leaves a course exactly
+    // as an upload from before automatic preparation would be.)
+    let preparation: { action: string } | null = null;
+    if (!holdRequested) {
+      try {
+        await recordProcessingAuthorization(principal, {
+          clubId,
+          courseVersionId: params.id,
+          operation: "GENERATE_FULL",
+          source: "UPLOAD",
+          inferenceMode: mockRequested ? "MOCK" : "LIVE",
+          mockDelayMs,
+          mockFault,
+        });
+        const advanced = await advancePreparation({
+          clubId,
+          courseVersionId: params.id,
+          trigger: "UPLOAD",
+        });
+        preparation = { action: advanced.action };
+      } catch (err) {
+        logger.error("training.video.upload.preparation_start_failed", {
+          clubId,
+          courseVersionId: params.id,
+          error: (err as Error)?.message ?? String(err),
+        });
+      }
     }
 
     return NextResponse.json(
