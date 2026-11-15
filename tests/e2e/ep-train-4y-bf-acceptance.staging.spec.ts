@@ -386,6 +386,57 @@ test.describe("EP-TRAIN-4Y-BF — upload once, Spectre does the rest (simulated 
   });
 });
 
+test.describe("EP-TRAIN-4Y-BF — tenant isolation", () => {
+  /** A published course of ANOTHER club on staging ("Test Club uniqB"). */
+  const OTHER_CLUB_COURSE_ID = "cmt28yj4v00nm114f6p8weywz";
+  const OTHER_CLUB_VERSION_ID = "cmt28yj5c00no114fwletl7d3";
+
+  test("9. the test account cannot see, open or upload to another club's course", async ({ browser }) => {
+    const creds = trainingTestPrincipalAvailable();
+    test.skip(!creds.ready, creds.reason ?? "test-principal credentials missing");
+    const base = creds.baseURL;
+    const { ctx, page } = await newTestContext(browser);
+
+    // Its own club's data is reachable (so a 404 below is not just a broken session).
+    const own = await ctx.request.get(`${base}/api/admin/training/versions/${SOURCE_VERSION_ID}/preparation-status`);
+    expect(own.status()).toBe(200);
+
+    // Another club's course answers exactly like something that does not exist.
+    const status = await ctx.request.get(`${base}/api/admin/training/versions/${OTHER_CLUB_VERSION_ID}/preparation-status`);
+    expect(status.status()).toBe(404);
+    const video = await ctx.request.get(`${base}/api/hr/training/versions/${OTHER_CLUB_VERSION_ID}/video`);
+    expect(video.status()).toBe(404);
+    // An upload attempt is refused at the permission check — before the
+    // body is read and before anything is stored or marked.
+    const upload = await ctx.request.post(`${base}/api/hr/training/versions/${OTHER_CLUB_VERSION_ID}/video`, {
+      multipart: { video: { name: "x.mp4", mimeType: "video/mp4", buffer: Buffer.alloc(32) } },
+    });
+    expect(upload.status()).toBe(404);
+    const generate = await ctx.request.post(`${base}/api/admin/training/versions/${OTHER_CLUB_VERSION_ID}/generate`, { data: {} });
+    expect([403, 404]).toContain(generate.status());
+
+    // The review screen of the other club's course is not shown.
+    const response = await page.goto(
+      `${base}/app/admin/people/safety-training/${OTHER_CLUB_COURSE_ID}/${OTHER_CLUB_VERSION_ID}/review`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await expect(page.getByTestId("manager-review-mode-checkpoints")).toHaveCount(0);
+    await page.screenshot({ path: `${OUT}/9-other-club-not-visible.png`, fullPage: true });
+    fs.writeFileSync(
+      `${OUT}/9-tenant-isolation.json`,
+      JSON.stringify(
+        {
+          ownClubStatus: own.status(),
+          otherClub: { status: status.status(), video: video.status(), upload: upload.status(), generate: generate.status(), reviewPageHttp: response?.status() ?? null },
+        },
+        null,
+        2,
+      ),
+    );
+    await ctx.close();
+  });
+});
+
 test.describe("EP-TRAIN-4Y-BF — worker interruption (restarts the staging worker)", () => {
   test("8. the worker is restarted mid-generation; preparation recovers on its own", async ({ browser }) => {
     test.skip(
