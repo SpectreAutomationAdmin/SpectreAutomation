@@ -125,6 +125,12 @@ function formatElapsed(ms: number | null): string {
   return `${h}h ${rm}m`;
 }
 
+/** Reasons come from the server with or without a full stop. */
+function asSentence(text: string): string {
+  const t = text.trim();
+  return /[.!?]$/.test(t) ? t : t + ".";
+}
+
 function formatLastActivity(iso: string | null, now: Date): string {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -416,7 +422,7 @@ export default function CoursePrepProgress({ versionId }: Props) {
           <div className="mt-3">
             <button
               type="button"
-              className="btn-primary btn-sm"
+              className="btn btn-primary"
               onClick={() => handleStart(false)}
               disabled={starting || confirmation !== null}
               data-testid="training-prep-recover-shortfall"
@@ -448,16 +454,18 @@ export default function CoursePrepProgress({ versionId }: Props) {
                 : `${actionableStage.label} has not started.`}
             </strong>
             {" "}
-            {actionableStage.failureReason ??
-              actionableStage.blockedReason ??
-              "Preparation can resume from the last completed stage."}
+            {asSentence(
+              actionableStage.failureReason ??
+                actionableStage.blockedReason ??
+                "Preparation can resume from the last completed stage",
+            )}
             {" "}
             Continue preparation resumes from here — the upload and any finished
             stages are kept.
           </div>
           <button
             type="button"
-            className="btn-primary btn-sm flex-none"
+            className="btn btn-primary flex-none"
             onClick={() => handleStart(false)}
             disabled={starting || confirmation !== null}
             data-testid="training-prep-start-button"
@@ -485,7 +493,7 @@ export default function CoursePrepProgress({ versionId }: Props) {
           <div className="mt-3 flex items-center gap-2">
             <button
               type="button"
-              className="btn-primary btn-sm"
+              className="btn btn-primary"
               onClick={() => handleStart(true)}
               disabled={starting}
               data-testid="training-prep-confirm-accept"
@@ -494,7 +502,7 @@ export default function CoursePrepProgress({ versionId }: Props) {
             </button>
             <button
               type="button"
-              className="btn-secondary btn-sm"
+              className="btn btn-secondary"
               onClick={() => setConfirmation(null)}
               disabled={starting}
               data-testid="training-prep-confirm-cancel"
