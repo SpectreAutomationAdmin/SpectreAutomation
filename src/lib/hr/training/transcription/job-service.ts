@@ -36,6 +36,13 @@ import {
   ValidationError,
 } from "@/lib/errors";
 import { randomBytes } from "node:crypto";
+import {
+  HARD_QUEUE_WAIT_MS,
+  LEASE_GRACE_MS,
+  MAX_QUEUE_WAIT_MS,
+  hasLiveQueueEntry,
+} from "../generation/stall-policy";
+import { resolveTestScope } from "../generation/test-execution-identity";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -54,6 +61,11 @@ export type JobFailureCode =
   | "SHA_MISMATCH"
   | "INGEST_FAILED"
   | "CREDENTIAL_ABSENT"
+  // EP-TRAIN-4Y-BF — this environment has not enabled billable inference.
+  | "BILLABLE_INFERENCE_LOCKED"
+  // EP-TRAIN-4Y-BF — an unexpected error inside the worker after it
+  // claimed the job. Retryable: the job is handed back to the queue.
+  | "WORKER_ERROR"
   | "COST_CAP_EXCEEDED"
   | "INTEGRITY_FAILURE"
   // EP-TRAIN-4Y-B-IMPL widening — Hybrid contract failure codes.
@@ -86,7 +98,8 @@ export type RequestRejectionCode =
   | "VIDEO_SHA_UNRECORDED"                    // 409 — no videoSha256
   | "DUPLICATE_LIVE_JOB"                      // 409 — a non-terminal row already exists
   | "COST_CAP_EXCEEDED"                       // 409 — tenant daily cap
-  | "CREDENTIAL_ABSENT";                      // 503 — Fly secrets missing
+  | "CREDENTIAL_ABSENT"                       // 503 — Fly secrets missing
+  | "TEST_PRINCIPAL_SCOPE";                   // 409 — a test principal on a real course
 
 export class JobRejectedError extends AppError {
   readonly rejectionCode: RequestRejectionCode | "CLAIM_RACE" | "TERMINAL_STATE_WRITE";
@@ -197,6 +210,89 @@ export const DEFAULT_LEASE_TTL_MS = 15 * 60 * 1000; // 15 min (> job timeout)
  * If the tenant daily cost cap would be exceeded, the service
  * transitions directly to CANCELLED with code COST_CAP_EXCEEDED.
  */
+/** EP-TRAIN-4Y-BF — retire transcription jobs that were abandoned, by
+ *  the same rule as generation runs (see generation/stall-policy.ts):
+ *  RUNNING long past an unrenewed lease, or REQUESTED / QUEUED with no
+ *  queue entry left to run them. A job merely waiting behind another
+ *  job is left alone. Compare-and-set per row; the queue entry is
+ *  cancelled and the lease token cleared (fencing the old worker). */
+export async function retireStalledTranscriptionJobs(
+  args: {
+    readonly clubId: string;
+    readonly courseVersionId: string;
+    readonly now?: Date;
+    readonly retiredByUserId?: string | null;
+  },
+  opts: { prisma?: PrismaClient } = {},
+): Promise<{ readonly retiredJobIds: readonly string[] }> {
+  const db = opts.prisma ?? defaultPrisma;
+  const now = args.now ?? new Date();
+  const leaseCutoff = new Date(now.getTime() - LEASE_GRACE_MS);
+  const candidates = await db.trainingTranscriptionJob.findMany({
+    where: {
+      clubId: args.clubId,
+      courseVersionId: args.courseVersionId,
+      state: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+    },
+    select: { id: true, state: true, requestedAt: true, queuedAt: true, leaseExpiresAt: true },
+  });
+  const retiredJobIds: string[] = [];
+  for (const c of candidates) {
+    const queueKeys = [`training-transcribe:${c.id}`];
+    let where: Prisma.TrainingTranscriptionJobWhereInput;
+    if (c.state === "RUNNING") {
+      if (c.leaseExpiresAt === null || c.leaseExpiresAt.getTime() >= leaseCutoff.getTime()) continue;
+      where = { id: c.id, clubId: args.clubId, state: "RUNNING", leaseExpiresAt: { lt: leaseCutoff } };
+    } else {
+      const waitingSince = c.queuedAt ?? c.requestedAt;
+      const waitedMs = now.getTime() - waitingSince.getTime();
+      if (waitedMs <= MAX_QUEUE_WAIT_MS) continue;
+      if (
+        waitedMs <= HARD_QUEUE_WAIT_MS &&
+        (await hasLiveQueueEntry(db, {
+          clubId: args.clubId,
+          kind: "TRAINING_TRANSCRIBE_VIDEO",
+          idempotencyKeys: queueKeys,
+          now,
+        }))
+      ) {
+        continue;
+      }
+      const waitCutoff = new Date(now.getTime() - MAX_QUEUE_WAIT_MS);
+      where = {
+        id: c.id,
+        clubId: args.clubId,
+        state: { in: ["REQUESTED", "QUEUED"] },
+        OR: [{ queuedAt: { lt: waitCutoff } }, { queuedAt: null, requestedAt: { lt: waitCutoff } }],
+      };
+    }
+    const retired = await db.trainingTranscriptionJob.updateMany({
+      where,
+      data: {
+        state: "CANCELLED",
+        cancelledAt: now,
+        cancelledByUserId: args.retiredByUserId ?? null,
+        failureCode: "MODAL_TIMEOUT",
+        failureMessage: "Stalled job superseded by automatic recovery.",
+        leaseToken: null,
+        leaseExpiresAt: null,
+      },
+    });
+    if (retired.count === 0) continue;
+    retiredJobIds.push(c.id);
+    await db.backgroundJob.updateMany({
+      where: {
+        clubId: args.clubId,
+        kind: "TRAINING_TRANSCRIBE_VIDEO",
+        idempotencyKey: { in: queueKeys },
+        status: { in: ["QUEUED", "RUNNING"] },
+      },
+      data: { status: "CANCELLED", finishedAt: now },
+    });
+  }
+  return { retiredJobIds };
+}
+
 export async function requestTranscription(
   principal: Principal | null,
   clubId: string,
@@ -230,6 +326,19 @@ export async function requestTranscription(
       { versionState: version.state },
     );
   }
+  // EP-TRAIN-4Y-BF — a test principal may only work on courses a test
+  // principal created. Requesting work on a real manager's course would
+  // mark that course as non-billable for good.
+  if (
+    (await resolveTestScope(principal, { clubId, courseVersionId: input.courseVersionId }, { prisma: db })) ===
+    "TEST_PRINCIPAL_ON_REAL_COURSE"
+  ) {
+    throw new JobRejectedError(
+      "TEST_PRINCIPAL_SCOPE",
+      "Test accounts can only work on courses they created.",
+      409,
+    );
+  }
   if (!version.videoStorageKey) {
     throw new JobRejectedError("VIDEO_MISSING", "No video uploaded for this version.", 409);
   }
@@ -252,6 +361,13 @@ export async function requestTranscription(
   }
 
   const sourceVideoSha256 = version.videoSha256;
+
+  // EP-TRAIN-4Y-BF — an abandoned job must not be handed back as
+  // "already in progress" forever: retire it first.
+  await retireStalledTranscriptionJobs(
+    { clubId, courseVersionId: input.courseVersionId, retiredByUserId: principal.id },
+    { prisma: db },
+  );
 
   // Idempotent-request lookup: any non-terminal row for this video.
   const existing = await db.trainingTranscriptionJob.findFirst({
@@ -395,7 +511,14 @@ export interface ClaimResult {
  *   - Refuses when attempts >= maxAttempts; flips the row to FAILED.
  */
 export async function claimNextTranscriptionJob(
-  opts: { prisma?: PrismaClient; now?: Date; leaseTtlMs?: number } = {},
+  opts: {
+    prisma?: PrismaClient;
+    now?: Date;
+    leaseTtlMs?: number;
+    /** EP-TRAIN-4Y-BF — claim exactly this job. A queue entry must only
+     *  ever claim the job it was enqueued for. */
+    jobId?: string;
+  } = {},
 ): Promise<ClaimResult | null> {
   const db = opts.prisma ?? defaultPrisma;
   const now = opts.now ?? new Date();
@@ -403,8 +526,9 @@ export async function claimNextTranscriptionJob(
   const leaseToken = newLeaseToken();
 
   // Path 1: a QUEUED job waiting to be claimed.
+  const only = opts.jobId ? { id: opts.jobId } : {};
   const queuedCandidate = await db.trainingTranscriptionJob.findFirst({
-    where: { state: "QUEUED", leaseToken: null },
+    where: { ...only, state: "QUEUED", leaseToken: null },
     orderBy: [{ queuedAt: "asc" }, { id: "asc" }],
     select: { id: true, attempts: true, maxAttempts: true, sourceVideoSha256: true, courseVersionId: true, clubId: true },
   });
@@ -438,6 +562,7 @@ export async function claimNextTranscriptionJob(
   // Path 2: a RUNNING job whose lease expired (stale-lease recovery).
   const staleCandidate = await db.trainingTranscriptionJob.findFirst({
     where: {
+      ...only,
       state: "RUNNING",
       leaseExpiresAt: { lt: now },
     },

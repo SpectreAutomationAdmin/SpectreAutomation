@@ -16,6 +16,15 @@
 
 import { test, expect } from "@playwright/test";
 import { loginAsFounder } from "./_lib/staging-auth";
+import { liveInferenceSpecAllowed } from "./_lib/staging-auth";
+
+// EP-TRAIN-4Y-BF — this spec starts REAL (billable) AI processing as the
+// founder on a real course version. It is inert unless explicitly
+// allowed for the one command that runs it (see staging-auth.ts).
+test.beforeEach(() => {
+  const live = liveInferenceSpecAllowed();
+  test.skip(!live.allowed, live.reason);
+});
 import * as fs from "node:fs";
 import * as path from "node:path";
 

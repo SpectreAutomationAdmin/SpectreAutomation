@@ -165,6 +165,8 @@ function envWithCreds() {
     MODAL_GENERATE_URL: "https://modal.test/generate",
     MODAL_SPECTRE_HMAC_KEY: HMAC_KEY_STR,
     MODAL_SPECTRE_RESPONSE_HMAC_KEY: HMAC_KEY_STR,
+    // 4Y-BF: provider calls are refused unless this is set explicitly.
+    TRAINING_BILLABLE_INFERENCE: "enabled",
     MODAL_KEY: "modal-key",
     MODAL_SECRET: "modal-secret",
     SPECTRE_PILOT_AUTH_FINGERPRINT_SECRET: FP_SECRET,

@@ -30,6 +30,8 @@ import {
 } from "./assessment-plan";
 import { buildTopicAwareAssessmentPlan } from "./placement";
 import { sizeForDuration } from "./duration-sizing";
+import { resolveProcessingIdentity } from "./test-execution-identity";
+import { MOCK_TRANSCRIPT_MODEL_VARIANT } from "../transcription/mock-transcript";
 
 export interface BuildAndEnqueueInput {
   readonly clubId: string;
@@ -93,10 +95,19 @@ export async function buildPlanAndRequestGeneration(
   if (!version.videoSha256) {
     throw new BuildAndEnqueueRejected("VIDEO_SHA_UNRECORDED", "video_sha_unrecorded", 409);
   }
+  // EP-TRAIN-4Y-BF — a real version never plans on a simulated
+  // transcript, even if a test once uploaded the same bytes.
+  const planningIdentity = await resolveProcessingIdentity({
+    clubId: input.clubId,
+    courseVersionId: input.courseVersionId,
+  });
   const build = await prisma.trainingTranscriptBuild.findFirst({
     where: {
       clubId: input.clubId,
       sourceVideoSha256: version.videoSha256,
+      ...(planningIdentity.nonBillable
+        ? {}
+        : { transcriberModelName: { not: MOCK_TRANSCRIPT_MODEL_VARIANT } }),
       ...(input.resolvedTranscriptBuildId
         ? { resolvedTranscriptBuildId: input.resolvedTranscriptBuildId }
         : {}),
@@ -200,6 +211,15 @@ export async function requestGenerationForPlan(
   input: { readonly clubId: string; readonly courseVersionId: string; readonly plan: AssessmentPlanV1 },
 ): Promise<BuildAndEnqueueResult> {
   try {
+    // EP-TRAIN-4Y-BF — the queue entry carries the version's
+    // non-billable verdict so it travels with the job. The worker
+    // re-resolves it from the database as well; either one saying
+    // non-billable is enough. Resolved BEFORE the run is created, so
+    // nothing that can fail sits between creating a run and queueing it.
+    const identity = await resolveProcessingIdentity({
+      clubId: input.clubId,
+      courseVersionId: input.courseVersionId,
+    });
     const result = await requestGeneration(principal, input.clubId, {
       courseVersionId: input.courseVersionId,
       plan: input.plan,
@@ -209,7 +229,7 @@ export async function requestGenerationForPlan(
       await enqueue({
         kind: "TRAINING_GENERATE_QUESTIONS",
         clubId: input.clubId,
-        payload: { generationRunId: result.generationRunId },
+        payload: { generationRunId: result.generationRunId, nonBillable: identity.nonBillable },
         maxAttempts: 2,
         idempotencyKey: `training-generate:${result.generationRunId}`,
       });

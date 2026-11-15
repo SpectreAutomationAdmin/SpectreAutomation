@@ -30,7 +30,12 @@
 
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
-import { resolveInferenceModeForVersion } from "../generation/processing-authorization";
+import {
+  isMockInferenceAllowed,
+  readPipelineAuthorization,
+  resolveInferenceModeForVersion,
+} from "../generation/processing-authorization";
+import { buildMockTranscriptSegments, MOCK_TRANSCRIPT_MODEL_VARIANT } from "./mock-transcript";
 import {
   getPilotBudgetMicros,
   loadCourseProcessingCostMicros,
@@ -60,6 +65,7 @@ import {
   TRANSCRIBE_PLACEHOLDER_TRANSCRIPT_BUILD_ID,
   TRANSCRIBE_PLACEHOLDER_GROUNDING_SHA,
   ENV_FINGERPRINT_SECRET,
+  isBillableInferenceEnabled,
 } from "../modal-shared";
 
 /**
@@ -105,17 +111,18 @@ export interface HandlerDeps {
  * without side effects.
  */
 export async function handleTranscribeJob(
-  args: { readonly jobId: string },
+  args: {
+    readonly jobId: string;
+    /** EP-TRAIN-4Y-BF — set on the queue entry when the version was
+     *  non-billable at enqueue time. It can only make a job
+     *  non-billable; the database is consulted regardless. */
+    readonly nonBillable?: boolean;
+  },
   deps: HandlerDeps,
 ): Promise<{ status: "COMPLETED" | "FAILED" | "SKIPPED" }> {
-  // Claim (or reclaim) the next job matching the queued jobId. We
-  // use the job-service claim path to acquire a bounded lease — note
-  // the current claim picks the next available job globally, not
-  // specifically args.jobId. In production the queue adapter + a
-  // per-jobId lookup would narrow this; for 4V's offline scope the
-  // claim-next semantics are correct because the handler is only
-  // ever called after a job was just enqueued.
-  const claim = await claimNextTranscriptionJob();
+  // Claim (or reclaim after a lease expiry) exactly the job this queue
+  // entry was enqueued for. A queue entry never claims another job.
+  const claim = await claimNextTranscriptionJob({ jobId: args.jobId });
   if (!claim || claim.jobId !== args.jobId) {
     // Either someone else claimed it, or the state changed under us
     // (cancellation). Don't mutate.
@@ -126,6 +133,42 @@ export async function handleTranscribeJob(
     return { status: "SKIPPED" };
   }
 
+  try {
+    return await processClaimedTranscriptionJob(args, deps, claim);
+  } catch (err) {
+    if (err instanceof RetryTranscriptionJob) throw err;
+    // EP-TRAIN-4Y-BF — anything unexpected after the claim must not
+    // leave the job leased to a handler that has already given up.
+    // Hand it back so the queue's retry can claim it again.
+    try {
+      await recordJobFailed({
+        jobId: claim.jobId,
+        leaseToken: claim.leaseToken,
+        failureCode: "WORKER_ERROR",
+        failureMessage: (err as Error)?.message ?? String(err),
+        retryable: true,
+      });
+    } catch {
+      // The row changed under us; its current state is authoritative.
+    }
+    throw err;
+  }
+}
+
+/** Thrown after a retryable failure has put the job back in the queue,
+ *  so the queue entry is rescheduled and can claim it again. Without
+ *  it the entry would finish "successfully" and nothing would ever run
+ *  the re-queued job. */
+class RetryTranscriptionJob extends Error {}
+
+type TranscriptionClaim = NonNullable<Awaited<ReturnType<typeof claimNextTranscriptionJob>>>;
+
+/** Everything after the claim. */
+async function processClaimedTranscriptionJob(
+  args: { readonly jobId: string; readonly nonBillable?: boolean },
+  deps: HandlerDeps,
+  claim: TranscriptionClaim,
+): Promise<{ status: "COMPLETED" | "FAILED" | "SKIPPED" }> {
   // Load the course-version for its videoDurationSec + sanity.
   const version = await prisma.trainingCourseVersion.findUnique({
     where: { id: claim.courseVersionId },
@@ -142,20 +185,42 @@ export async function handleTranscribeJob(
     return { status: "FAILED" };
   }
 
-  // A version authorized for MOCK inference must never reach real
-  // Modal. This is the single choke point for Whisper, so it covers
-  // every enqueue path. Terminal, never retried.
-  const inferenceMode = await resolveInferenceModeForVersion({
-    clubId: claim.clubId,
-    courseVersionId: claim.courseVersionId,
-  });
+  // EP-TRAIN-4Y-BF — who is this job for? Resolved from durable state
+  // (see test-execution-identity.ts), never from the queue payload or a
+  // request marker. This is the single choke point for transcription,
+  // so it covers every enqueue path, retry and reclaim.
+  const env = deps.env ?? process.env;
+  const inferenceMode: "LIVE" | "MOCK" =
+    args.nonBillable === true
+      ? "MOCK"
+      : await resolveInferenceModeForVersion(
+          { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
+          { env },
+        );
   if (inferenceMode === "MOCK") {
+    // Non-billable version: simulate when this environment allows it,
+    // refuse otherwise. Either way no provider is contacted.
+    if (!isMockInferenceAllowed(env)) {
+      await recordJobFailed({
+        jobId: claim.jobId,
+        leaseToken: claim.leaseToken,
+        failureCode: "INTEGRITY_FAILURE",
+        failureMessage:
+          "This version is non-billable (test identity) and simulated processing is not enabled here; transcription was refused.",
+        retryable: false,
+      });
+      return { status: "FAILED" };
+    }
+    return completeWithSimulatedTranscript(claim, version.videoDurationSec);
+  }
+  if (!isBillableInferenceEnabled(env)) {
+    // Real version, but this environment has not enabled billable
+    // inference. Terminal; never retried.
     await recordJobFailed({
       jobId: claim.jobId,
       leaseToken: claim.leaseToken,
-      failureCode: "INTEGRITY_FAILURE",
-      failureMessage:
-        "This version is authorized for mock inference only; real transcription was refused.",
+      failureCode: "BILLABLE_INFERENCE_LOCKED",
+      failureMessage: "Billable inference is not enabled in this environment; transcription was refused.",
       retryable: false,
     });
     return { status: "FAILED" };
@@ -197,6 +262,8 @@ export async function handleTranscribeJob(
       failureCode: "INGEST_FAILED",
       failureMessage: `Signed-URL generation failed: ${(err as Error)?.message ?? String(err)}`,
       retryable: true,
+    }).then((r) => {
+      if (r.finalState === "QUEUED") throw new RetryTranscriptionJob("signed-URL generation failed; retrying");
     });
     return { status: "FAILED" };
   }
@@ -208,7 +275,6 @@ export async function handleTranscribeJob(
   // exist. The request-id is derived from the jobId + a random
   // nonce so a retry of the same jobId emits a DIFFERENT request-id
   // and the Modal replay store does not reject it as a duplicate.
-  const env = deps.env ?? process.env;
   const fingerprintSecret = env[ENV_FINGERPRINT_SECRET];
   if (!fingerprintSecret) {
     await recordJobFailed({
@@ -287,6 +353,7 @@ export async function handleTranscribeJob(
     // the attempt budget.
     const NON_RETRYABLE: ReadonlySet<string> = new Set([
       "CREDENTIAL_ABSENT",
+      "BILLABLE_INFERENCE_LOCKED",
       "MODAL_HMAC_INVALID",
       "REQUEST_HMAC_INVALID",
       "REQUEST_BODY_INVALID",
@@ -305,13 +372,20 @@ export async function handleTranscribeJob(
       "RESPONSE_OPERATION_MISMATCH",
     ]);
     const retryable = !NON_RETRYABLE.has(code);
-    await recordJobFailed({
+    const failed = await recordJobFailed({
       jobId: claim.jobId,
       leaseToken: claim.leaseToken,
       failureCode: code,
       failureMessage: (err as Error)?.message ?? String(err),
       retryable,
     });
+    // EP-TRAIN-4Y-BF — a retryable failure put the job back to QUEUED.
+    // Throw so the queue reschedules this entry (with back-off) and the
+    // retry claims the job; returning normally would mark the entry
+    // done and leave the job queued with nothing to run it.
+    if (failed.finalState === "QUEUED") {
+      throw new RetryTranscriptionJob(`TRAINING_TRANSCRIBE_VIDEO retryable failure (${code})`);
+    }
     return { status: "FAILED" };
   }
 
@@ -427,6 +501,85 @@ export async function handleTranscribeJob(
       // Row state changed under us (cancellation race). Skip the
       // failed write; the job's current terminal / pre-terminal state
       // is authoritative.
+    }
+    return { status: "FAILED" };
+  }
+}
+
+/** EP-TRAIN-4Y-BF — finish a NON-BILLABLE job with the deterministic
+ *  simulated transcript. Same ingest and same lease-fenced terminal
+ *  write as a real job; zero provider time and zero cost recorded. */
+async function completeWithSimulatedTranscript(
+  claim: {
+    readonly jobId: string;
+    readonly leaseToken: string;
+    readonly clubId: string;
+    readonly courseVersionId: string;
+    readonly sourceVideoSha256: string;
+  },
+  videoDurationSec: number | null,
+): Promise<{ status: "COMPLETED" | "FAILED" }> {
+  // Optional pacing, so a test can observe the stage while it runs.
+  const authorization = await readPipelineAuthorization({
+    clubId: claim.clubId,
+    courseVersionId: claim.courseVersionId,
+  });
+  const delayMs = authorization?.mock.delayMs ?? 0;
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+  const segments = buildMockTranscriptSegments(videoDurationSec);
+  const systemPrincipal = workerSystemPrincipal(claim.clubId);
+  const resolvedTranscriptBuildId = createHash("sha256")
+    .update(claim.sourceVideoSha256 + "|" + MOCK_TRANSCRIPT_MODEL_VARIANT, "utf-8")
+    .digest("hex");
+  const configSha = createHash("sha256")
+    .update(`spectre-simulated-config|${MOCK_TRANSCRIPT_MODEL_VARIANT}`, "utf-8")
+    .digest("hex");
+  try {
+    const buildResult = await persistTranscriptBuild(systemPrincipal, claim.clubId, {
+      courseVersionId: claim.courseVersionId,
+      sourceVideoSha256: claim.sourceVideoSha256,
+      resolvedTranscriptBuildId,
+      transcriberName: "spectre-simulated",
+      transcriberVersion: "1",
+      transcriberModelName: MOCK_TRANSCRIPT_MODEL_VARIANT,
+      transcriberModelVersion: "1",
+      transcriberConfigSha256: configSha,
+      producedAt: new Date(),
+    });
+    await persistTranscriptSegments(systemPrincipal, claim.clubId, buildResult.build.id, {
+      expectedResolvedTranscriptBuildId: resolvedTranscriptBuildId,
+      segments: segments.map((s) => ({
+        segmentIndex: s.id,
+        text: s.text,
+        startSec: s.startSec,
+        endSec: s.endSec,
+        pendingReview: [],
+      })),
+    });
+    await recordJobCompleted({
+      jobId: claim.jobId,
+      leaseToken: claim.leaseToken,
+      resolvedTranscriptBuildId: buildResult.build.id,
+      modelVariant: MOCK_TRANSCRIPT_MODEL_VARIANT,
+      elapsedMsTotal: 0,
+      elapsedMsColdBoot: 0,
+      elapsedMsTranscribe: 0,
+      estimatedCostUsdMicros: 0,
+    });
+    return { status: "COMPLETED" };
+  } catch (err) {
+    try {
+      await recordJobFailed({
+        jobId: claim.jobId,
+        leaseToken: claim.leaseToken,
+        failureCode: "INGEST_FAILED",
+        failureMessage: (err as Error)?.message ?? String(err),
+        retryable: false,
+      });
+    } catch {
+      // The row changed under us (cancelled or superseded); its current
+      // state is authoritative.
     }
     return { status: "FAILED" };
   }

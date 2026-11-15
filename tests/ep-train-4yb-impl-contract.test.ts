@@ -114,6 +114,8 @@ function buildTranscribeAuth(): PilotAuthorizationV1 {
 
 function fullEnv() {
   return {
+    // 4Y-BF: provider calls are refused unless this is set explicitly.
+    TRAINING_BILLABLE_INFERENCE: "enabled",
     MODAL_KEY: FIXTURE_PROXY_KEY,
     MODAL_SECRET: FIXTURE_PROXY_SECRET,
     MODAL_SPECTRE_HMAC_KEY: FIXTURE_HMAC_KEY,
@@ -874,7 +876,7 @@ describe("EP-TRAIN-4Y-B-IMPL — Shared library unit coverage", () => {
           transcript: "x",
           constraints: { proposalKind: "QUESTION_FINAL_ASSESSMENT", maxQuestions: 1, allowedQuestionTypes: ["SINGLE_CHOICE"], jsonSchema: {} },
         },
-        { fetchImpl: async () => new Response("", { status: 200 }), env: {}, clock: fixedClock() },
+        { fetchImpl: async () => new Response("", { status: 200 }), env: { TRAINING_BILLABLE_INFERENCE: "enabled" }, clock: fixedClock() },
       ),
     ).rejects.toSatisfy(
       (e: unknown) => e instanceof ModalContractError && e.code === "CREDENTIAL_ABSENT",

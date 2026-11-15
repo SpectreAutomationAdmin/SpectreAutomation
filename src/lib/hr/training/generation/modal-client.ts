@@ -12,6 +12,7 @@ import {
   OPERATION_GENERATE,
   SYSTEM_CLOCK,
   ModalContractError,
+  assertBillableInferenceEnabled,
   type Clock,
   type GeneratePayload,
   type GenerateResponseBody,
@@ -41,6 +42,9 @@ export async function callModalGenerate(
   input: ModalGenerateInput,
   opts: ModalGenerateClientOptions = {},
 ): Promise<GenerateResponseBody> {
+  // EP-TRAIN-4Y-BF — fail-closed: refused before credentials are read
+  // unless this environment has explicitly enabled billable inference.
+  assertBillableInferenceEnabled("question generation", opts.env ?? process.env);
   const clock = opts.clock ?? SYSTEM_CLOCK;
   const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as typeof fetch);
   const creds = resolveModalCredentials(OPERATION_GENERATE, opts.env ?? process.env);

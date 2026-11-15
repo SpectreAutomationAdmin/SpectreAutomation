@@ -80,6 +80,19 @@ kill_timeout = 30
   # Inference credentials themselves live only on
   # spectre-staging-worker per §7 least privilege.
   MODAL_HYBRID_ENABLED = "1"
+  # EP-TRAIN-4Y-BF §1 — automated-test principal(s) for Safety &
+  # Training (not a secret; a synthetic account's user id). Everything
+  # such an account creates, uploads or requests is processed as
+  # NON-BILLABLE by the server, whatever the request looks like. Must be
+  # identical on the web app and the worker.
+  TRAINING_TEST_PRINCIPAL_USER_IDS = "e2e-training-test-principal-01"
+  # EP-TRAIN-4Y-BF §1 — billable inference is LOCKED on staging:
+  # TRAINING_BILLABLE_INFERENCE is deliberately NOT set here. Real
+  # transcription / question generation is refused before any provider
+  # call unless that variable is exactly "enabled". It is switched on
+  # only for a founder-authorized real run (flyctl secrets set on BOTH
+  # apps) and removed again afterwards. A customer-serving deployment
+  # sets it permanently.
   MAILBOX_MAX_ATTACHMENT_MB = "25"
   # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. The
   # account-scoped values (KMS key ARN, R2 endpoint, R2 bucket) and

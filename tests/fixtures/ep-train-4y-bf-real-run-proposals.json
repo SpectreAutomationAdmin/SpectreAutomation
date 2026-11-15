@@ -1,0 +1,626 @@
+{
+  "groups": [
+    {
+      "group": "cg-1",
+      "kind": "CHECKPOINT",
+      "requested": 1,
+      "returned": 1,
+      "kept": 0,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "EMBEDDED_ANSWER_KEY",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "Which of the following questions is appropriate for engaging a guest during a brief conversation while serving them food at the buffet?",
+          "options": [
+            {
+              "text": "Do you prefer chicken or fish for dinner tonight? (Correct Answer: This question allows for a longer discussion and may not be suitable for a brief conversation.)",
+              "isCorrect": false
+            },
+            {
+              "text": "Is it still hot out there? (Correct Answer: This question is simple and allows for a brief, friendly exchange.)",
+              "isCorrect": true
+            },
+            {
+              "text": "What is your favorite hobby? (Correct Answer: This question may lead to a lengthy discussion and is not suitable for a brief conversation.)",
+              "isCorrect": false
+            },
+            {
+              "text": "Can you tell me about your job? (Correct Answer: This question may require a detailed response and is not suitable for a brief conversation.)",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The question 'Is it still hot out there?' is appropriate because it is simple and allows for a brief, friendly exchange. This aligns with the training material that suggests asking a question the guest can answer in a sentence or two, making it an ideal choice for engaging guests during service at the buffet. Other questions may lead to longer discussions or require detailed responses, which is not suitable for brief conversations with guests during service at the buffet. The other options are not as suitable because they either require more detailed answers or are not as direct and simple as the suggested question in the training material. This question helps create a welcoming atmosphere and encourages guests to feel appreciated and valued during their dining experience at Old Country Buffet. The other options are not as effective for brief, friendly exchanges with guests during service at the buffet. The correct answer is 'Is it still hot out there?'",
+          "sourceSegmentIds": [
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "group": "cg-2",
+      "kind": "CHECKPOINT",
+      "requested": 1,
+      "returned": 1,
+      "kept": 0,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "If a guest requests a half-inch slice of roast beef, how should you respond according to the training material?",
+          "options": [
+            {
+              "text": "I'd be glad to carve you that. Thinner slices are more tender, though. Would that be alright? You can always come back up for more. Is that correct?",
+              "isCorrect": true
+            },
+            {
+              "text": "Sure, I can give you a thicker slice. It will be juicier and tastier. Is that what you wanted?",
+              "isCorrect": false
+            },
+            {
+              "text": "No, we only serve dime-thickness cuts. That's our standard. Sorry, but that's not possible. Is that the policy?",
+              "isCorrect": false
+            },
+            {
+              "text": "I'm sorry, but we don't serve roast beef. Can I recommend something else?",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "This response aligns with the training material, which states that you should offer to carve the requested slice and confirm with the guest. It also mentions that thinner slices are more tender, which matches the guest's request for a half-inch slice of roast beef. The other options either contradict the training or are irrelevant to the guest's request for a specific thickness of roast beef slice.",
+          "sourceSegmentIds": [
+            31,
+            32,
+            33
+          ]
+        }
+      ]
+    },
+    {
+      "group": "cg-3",
+      "kind": "CHECKPOINT",
+      "requested": 1,
+      "returned": 1,
+      "kept": 0,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "EXPLICIT_SEGMENT_ID_REFERENCE",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "When serving meats, what should you do with your carving knives and chef's forks between groups of guests to maintain cleanliness and sanitation of the carving station?",
+          "options": [
+            {
+              "text": "Wash them in the sink with soap and water",
+              "isCorrect": false
+            },
+            {
+              "text": "Wipe them with a clean, sanitized towel",
+              "isCorrect": true
+            },
+            {
+              "text": "Place them on the table for the next group to use",
+              "isCorrect": false
+            },
+            {
+              "text": "Store them in a drawer until the end of your shift",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The correct action is to wipe the carving knives and chef's forks with a clean, sanitized towel to ensure they remain clean and sanitary between groups of guests. This aligns with the instruction given in segment [53].",
+          "sourceSegmentIds": [
+            53
+          ]
+        }
+      ]
+    },
+    {
+      "group": "cg-4",
+      "kind": "CHECKPOINT",
+      "requested": 1,
+      "returned": 1,
+      "kept": 0,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "After cutting 10 to 15 slices of meat, what action should you take to maintain the sharpness of your carving knife according to the training material?",
+          "options": [
+            {
+              "text": "Continue using the knife without sharpening",
+              "isCorrect": false
+            },
+            {
+              "text": "Use the grooved steel rod to hone the knife",
+              "isCorrect": true
+            },
+            {
+              "text": "Replace the knife with a new one",
+              "isCorrect": false
+            },
+            {
+              "text": "Wash the knife with soap and water",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "Using the grooved steel rod to hone the knife is the correct action because it aligns microscopic burs on the edge of the blade, maintaining its sharpness. The training material specifically states that after cutting 10 to 15 slices of meat, the knife's performance diminishes, indicating the need for honing rather than replacing or continuing to use it without sharpening. Washing the knife is a general maintenance step but does not address the specific issue of maintaining sharpness after repeated use of the knife for slicing meat. Replacing the knife is an extreme measure not recommended for routine maintenance purposes unless the knife is severely damaged or worn out beyond repair through normal use and honing. Therefore, honing the knife with the steel rod is the best practice to maintain its sharpness after cutting several slices of meat, as described in the training material. [66, 67]",
+          "sourceSegmentIds": [
+            66,
+            67
+          ]
+        }
+      ]
+    },
+    {
+      "group": "cg-5",
+      "kind": "CHECKPOINT",
+      "requested": 1,
+      "returned": 1,
+      "kept": 0,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "EXPLICIT_SEGMENT_ID_REFERENCE",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "What is the primary responsibility during a light guest flow according to the training video?",
+          "options": [
+            {
+              "text": "Assist line attendants",
+              "isCorrect": true
+            },
+            {
+              "text": "Clean the carver area",
+              "isCorrect": false
+            },
+            {
+              "text": "Sanitize towels",
+              "isCorrect": false
+            },
+            {
+              "text": "Serve guests",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The training video states that during a light guest flow, the primary responsibility is to assist line attendants when there are no guests at your station and you're caught up on your own tasks. This aligns with segment [84].",
+          "sourceSegmentIds": [
+            84
+          ]
+        }
+      ]
+    },
+    {
+      "group": "fa-1",
+      "kind": "FINAL_ASSESSMENT",
+      "requested": 3,
+      "returned": 3,
+      "kept": 1,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "When greeting a guest at Old Country Buffet, what is an appropriate opening statement according to the training material?",
+          "options": [
+            {
+              "text": "Good evening. How was your day at work today?",
+              "isCorrect": false
+            },
+            {
+              "text": "Hi, how are you? Have you tried the lasagna yet?",
+              "isCorrect": true
+            },
+            {
+              "text": "Hello, did you enjoy your meal so far?",
+              "isCorrect": false
+            },
+            {
+              "text": "Good afternoon. What would you like to order?",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The training material suggests starting conversations with guests by saying 'Good evening' or 'Hi, how are you?' and then asking a question they can answer briefly, such as 'Have you tried the lasagna yet?'",
+          "sourceSegmentIds": [
+            10,
+            11,
+            13
+          ]
+        },
+        {
+          "proposalIndex": 2,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "What is the recommended approach for serving meat to children according to the training material?",
+          "options": [
+            {
+              "text": "Serve them the same size cut as adults to ensure they get enough food",
+              "isCorrect": false
+            },
+            {
+              "text": "Carve a smaller cut and place it on an open section of the plate",
+              "isCorrect": true
+            },
+            {
+              "text": "Serve them a full cut regardless of the amount of food on their plate",
+              "isCorrect": false
+            },
+            {
+              "text": "Ask the children what size cut they prefer before carving",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The training material advises that children usually prefer smaller portions and recommends carving a smaller cut and placing it on an open section of the plate.",
+          "sourceSegmentIds": [
+            26,
+            27
+          ]
+        }
+      ]
+    },
+    {
+      "group": "fa-2",
+      "kind": "FINAL_ASSESSMENT",
+      "requested": 3,
+      "returned": 3,
+      "kept": 2,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "When a guest asks about the food being served, what is the best way to respond according to the training material?",
+          "options": [
+            {
+              "text": "Tell them the food is their favorite regardless of their opinion",
+              "isCorrect": false
+            },
+            {
+              "text": "Ask them how they like the food and offer to explain the preparation methods",
+              "isCorrect": true
+            },
+            {
+              "text": "Avoid answering and suggest they try the food instead",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The correct response is to ask the guest how they like the food and offer to explain the preparation methods. This approach ensures the guest feels valued and allows you to address any concerns or questions they may have about the menu items.",
+          "sourceSegmentIds": [
+            38,
+            39
+          ]
+        }
+      ]
+    },
+    {
+      "group": "fa-3",
+      "kind": "FINAL_ASSESSMENT",
+      "requested": 2,
+      "returned": 2,
+      "kept": 1,
+      "rejected": [
+        {
+          "proposalIndex": 0,
+          "stage": "SANITISER",
+          "codes": "ACCORDING_TO_TRAINING_MATERIAL",
+          "questionType": "SINGLE_CHOICE",
+          "questionText": "When handling a falling knife, what is the safest action to take according to the training material?",
+          "options": [
+            {
+              "text": "Catch the blade with your hand",
+              "isCorrect": false
+            },
+            {
+              "text": "Let it hit the floor",
+              "isCorrect": true
+            },
+            {
+              "text": "Try to grab the handle mid-air",
+              "isCorrect": false
+            }
+          ],
+          "explanation": "The training material advises against grabbing a falling knife, stating that standing a 50-50 chance of grabbing the blade instead of the handle makes it unsafe. Therefore, letting the knife hit the floor is the safest action to take according to the training material. [88, 91, 92]",
+          "sourceSegmentIds": [
+            88,
+            91,
+            92
+          ]
+        }
+      ]
+    }
+  ],
+  "kept": [
+    {
+      "group": "fa-1",
+      "questionType": "SINGLE_CHOICE",
+      "questionText": "How should a carver handle a guest's request for a thicker slice of meat compared to the usual dime width?",
+      "options": [
+        {
+          "text": "Deny the request as it goes against company policy",
+          "isCorrect": false
+        },
+        {
+          "text": "Honor the request, as long as the guest insists",
+          "isCorrect": true
+        },
+        {
+          "text": "Carve a thinner slice to compensate for the extra thickness",
+          "isCorrect": false
+        },
+        {
+          "text": "Ask the guest to choose between a thinner and thicker slice",
+          "isCorrect": false
+        }
+      ],
+      "explanation": "The training material states that if a guest asks for a thicker slice, the carver should honor the request as long as the guest insists. This ensures the guest feels they are getting more value for their meal.",
+      "sourceSegmentIds": [
+        29,
+        30,
+        33
+      ]
+    },
+    {
+      "group": "fa-2",
+      "questionType": "SINGLE_CHOICE",
+      "questionText": "What should you do if you encounter a question you cannot answer during your shift at the carving station?",
+      "options": [
+        {
+          "text": "Find someone else to answer the question",
+          "isCorrect": false
+        },
+        {
+          "text": "Look for the nearest manager to assist",
+          "isCorrect": true
+        },
+        {
+          "text": "Ignore the question and continue serving",
+          "isCorrect": false
+        }
+      ],
+      "explanation": "The correct action is to find the nearest manager to assist. This ensures that the guest receives accurate information and maintains the quality of service.",
+      "sourceSegmentIds": [
+        41
+      ]
+    },
+    {
+      "group": "fa-2",
+      "questionType": "SINGLE_CHOICE",
+      "questionText": "How often should you rinse out your towels during cleaning tasks at the carving station?",
+      "options": [
+        {
+          "text": "Every few minutes",
+          "isCorrect": false
+        },
+        {
+          "text": "After each cleaning task",
+          "isCorrect": true
+        },
+        {
+          "text": "Only once at the end of the shift",
+          "isCorrect": false
+        }
+      ],
+      "explanation": "It is recommended to rinse out your towels after each cleaning task to ensure they remain sanitized and do not leave streaks on surfaces. This practice helps maintain the cleanliness and appearance of the carving station.",
+      "sourceSegmentIds": [
+        60
+      ]
+    },
+    {
+      "group": "fa-3",
+      "questionType": "SINGLE_CHOICE",
+      "questionText": "Which of the following is a safety tip provided for knife handling during cleaning tasks?",
+      "options": [
+        {
+          "text": "Place knives in bus tubs with soapy water",
+          "isCorrect": false
+        },
+        {
+          "text": "Use only sharp knives",
+          "isCorrect": true
+        },
+        {
+          "text": "Rinse knives quickly to save time",
+          "isCorrect": false
+        }
+      ],
+      "explanation": "The training material advises using only sharp knives and warns against placing them in bus tubs or sinks full of soapy water. It also suggests slowing down and taking extra care when washing knives to avoid slipping. Therefore, using only sharp knives is a safety tip provided for knife handling during cleaning tasks. [95, 96]",
+      "sourceSegmentIds": [
+        95,
+        96
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "segmentIndex": 10,
+      "text": "you hold with a guest should begin something like this. Good evening. Or, hi, how are you? Once",
+      "startSec": 58.52,
+      "endSec": 65.58
+    },
+    {
+      "segmentIndex": 11,
+      "text": "you've greeted the guest, start a brief conversation. Try asking a question the guest can answer in a",
+      "startSec": 65.58,
+      "endSec": 70.96
+    },
+    {
+      "segmentIndex": 12,
+      "text": "sentence or two. You might ask something like this. Is it still hot out there? Or this. Did you catch",
+      "startSec": 70.96,
+      "endSec": 78.4
+    },
+    {
+      "segmentIndex": 13,
+      "text": "a game last night? Or this. Have you tried the lasagna? It's my favorite. Don't forget to hold",
+      "startSec": 78.4,
+      "endSec": 84.86
+    },
+    {
+      "segmentIndex": 26,
+      "text": "a portion of the plate. Children usually prefer smaller portions. Carve them a smaller cut. Place it",
+      "startSec": 148.52,
+      "endSec": 156.38
+    },
+    {
+      "segmentIndex": 27,
+      "text": "on an open section of the plate. If your guest's plate looks like this, quarter cut or a half cut of",
+      "startSec": 156.38,
+      "endSec": 164.94
+    },
+    {
+      "segmentIndex": 29,
+      "text": "pieces they want. Other guests will ask you to carve a slight thicker than our usual dime width.",
+      "startSec": 171.9,
+      "endSec": 178.06
+    },
+    {
+      "segmentIndex": 30,
+      "text": "These guests all feel they're getting more when getting a thicker cut. Actually, the thin cut ensures them a",
+      "startSec": 178.52,
+      "endSec": 186.36
+    },
+    {
+      "segmentIndex": 31,
+      "text": "tender piece of meat, which is why we carve dime thicknesses. If a guest asks you, I'd like a half inch slice of that",
+      "startSec": 186.36,
+      "endSec": 194.68
+    },
+    {
+      "segmentIndex": 32,
+      "text": "roast beef, please. Say something like this. I'd be glad to carve you that. Thinner slices are more tender, though.",
+      "startSec": 194.68,
+      "endSec": 200.14
+    },
+    {
+      "segmentIndex": 33,
+      "text": "Would that be alright? You can always come back up for more. Okay. Of course, if the guest insists on a thicker slice,",
+      "startSec": 200.14,
+      "endSec": 208.14
+    },
+    {
+      "segmentIndex": 38,
+      "text": "questions about the food we serve. If they are happy, please let them know that the food is not their favorite. These are",
+      "startSec": 236.96,
+      "endSec": 238.5
+    },
+    {
+      "segmentIndex": 39,
+      "text": "and how we prepare it. To be ready for these questions, make the most of",
+      "startSec": 238.52,
+      "endSec": 243.44
+    },
+    {
+      "segmentIndex": 41,
+      "text": "can't answer, find someone who can answer it. The nearest manager is usually a good",
+      "startSec": 248.3,
+      "endSec": 254.78
+    },
+    {
+      "segmentIndex": 53,
+      "text": "carving knives and chef's forks with your clean, sanitized towel. Keep an eye",
+      "startSec": 305.16,
+      "endSec": 311.16
+    },
+    {
+      "segmentIndex": 60,
+      "text": "performing every cleaning task. Rinse out your towels frequently in sanitizing",
+      "startSec": 340.94,
+      "endSec": 346.56
+    },
+    {
+      "segmentIndex": 66,
+      "text": "burs on the edge of the blade. After cutting about 10 to 15 slices of meat, you will notice",
+      "startSec": 374.34,
+      "endSec": 380.98
+    },
+    {
+      "segmentIndex": 67,
+      "text": "that your knife isn't cutting as easily as it was when it was first sharpened. It's then",
+      "startSec": 380.98,
+      "endSec": 386.2
+    },
+    {
+      "segmentIndex": 84,
+      "text": "duty is assisting when the guest flow is light. When there are no guests at your station and",
+      "startSec": 482.8,
+      "endSec": 488.38
+    },
+    {
+      "segmentIndex": 88,
+      "text": "As a carver, you work in an area with a high potential for accidents. Sharp knives. Grease from the hand. And the rush of a busy shift can sometimes combine to create a disaster.",
+      "startSec": 527.46,
+      "endSec": 540.22
+    },
+    {
+      "segmentIndex": 91,
+      "text": "matter to the knife if it's cutting through a ham or your finger. Don't grab for a falling",
+      "startSec": 557.46,
+      "endSec": 563.08
+    },
+    {
+      "segmentIndex": 92,
+      "text": "knife. Let it hit the floor. In your haste to prevent it from falling, you stand a 50-50",
+      "startSec": 563.08,
+      "endSec": 569.96
+    },
+    {
+      "segmentIndex": 95,
+      "text": "Slow down and complete the job safely. Never place knives in bus tubs, lexans, or sinks",
+      "startSec": 583.8,
+      "endSec": 591.74
+    },
+    {
+      "segmentIndex": 96,
+      "text": "full of soapy water. Use only sharp knives. Believe it or not, dull knives are more dangerous",
+      "startSec": 591.74,
+      "endSec": 599.4
+    }
+  ],
+  "plan": {
+    "eligibleCount": 103,
+    "eligibleMin": 0,
+    "eligibleMax": 104,
+    "cp": [
+      {
+        "id": "cg-1",
+        "atSec": 111.66
+      },
+      {
+        "id": "cg-2",
+        "atSec": 215.86
+      },
+      {
+        "id": "cg-3",
+        "atSec": 322.42
+      },
+      {
+        "id": "cg-4",
+        "atSec": 431.54
+      },
+      {
+        "id": "cg-5",
+        "atSec": 540.22
+      }
+    ],
+    "chunks": [
+      {
+        "id": "fa-1",
+        "n": 3
+      },
+      {
+        "id": "fa-2",
+        "n": 3
+      },
+      {
+        "id": "fa-3",
+        "n": 2
+      }
+    ]
+  }
+}

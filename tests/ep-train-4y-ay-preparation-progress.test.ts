@@ -71,6 +71,13 @@ function makeFakePrisma(args: {
     },
     trainingQuestionAiGenerationRun: {
       findFirst: async (_q: unknown) => args.run ?? null,
+      // 4Y-BE: progress is measured across every run of the version.
+      findMany: async (_q: unknown) => (args.run ? [args.run] : []),
+    },
+    // 4Y-BE: upload authorization / halt / completion records.
+    auditLog: {
+      findMany: async (_q: unknown) => [],
+      findFirst: async (_q: unknown) => null,
     },
     trainingQuestionAiDraft: {
       findMany: async (_q: unknown) => args.drafts ?? [],

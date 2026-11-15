@@ -81,11 +81,11 @@ describe("EP-TRAIN-4Y-Z §3 — pilot-budget-guard pure surface", () => {
       currentAttemptCostMicros: 200_000,
       callsRemainingThisAttempt: 5,
       coldBootConsumed: true,
-    });
+    }, { budgetMicros: 1_000_000 });
     // Projection = 350k + 200k + 5 × 97_501 + 0 = 1_037_505 > 1_000_000.
     expect(decision.allow).toBe(false);
     expect(decision.projectedTotalMicros).toBe(1_037_505);
-    expect(decision.reason).toContain("Pilot $1 budget would be exceeded");
+    expect(decision.reason).toContain("Pilot $1.00 budget would be exceeded");
     // The reason string carries the diagnostic breakdown so the audit
     // log entry is truthful — but it does NOT embed secrets, tokens, or
     // signed URLs (asserted structurally by the fields it mentions).
@@ -102,12 +102,12 @@ describe("EP-TRAIN-4Y-Z §3 — pilot-budget-guard pure surface", () => {
       currentAttemptCostMicros: 0,
       callsRemainingThisAttempt: 7,
       coldBootConsumed: false,
-    });
+    }, { budgetMicros: 1_000_000 });
     // Projection = 800k + 0 + 7 × 97_501 + 32_501 = 1_515_008 > 1_000_000.
     expect(decision.allow).toBe(false);
     // Retries do NOT reset the pilot's cumulative budget — the basis is
     // preserved across attempts.
-    expect(decision.projectedTotalMicros).toBeGreaterThan(PILOT_BUDGET_USD_MICROS);
+    expect(decision.projectedTotalMicros).toBeGreaterThan(1_000_000);
   });
 
   it("preInvocationBudgetGate ALLOWS the realistic founder-pilot profile (no prior cost, fresh attempt)", () => {
@@ -130,74 +130,48 @@ describe("EP-TRAIN-4Y-Z §3 — pilot-budget-guard pure surface", () => {
 });
 
 describe("EP-TRAIN-4Y-Z §3 — loadPriorPilotCostMicros", () => {
-  function makePrismaStub(aggregateMs: number): {
-    trainingQuestionAiGenerationRun: {
-      aggregate: (args: unknown) => Promise<{ _sum: { inferenceMs: number | null } }>;
-    };
-  } {
+  // 4Y-BE: the loader reads the rows (finished runs at actual cost, live
+  // siblings reserved at worst case, transcription included) instead of
+  // one aggregate over inferenceMs.
+  type RunRow = { executionStatus: string; inferenceMs: number | null; assessmentPlanJson: string | null };
+  function makePrismaStub(runs: RunRow[], onWhere?: (where: unknown) => void) {
     return {
       trainingQuestionAiGenerationRun: {
-        aggregate: async () => ({ _sum: { inferenceMs: aggregateMs } }),
+        findMany: async (args: { where: unknown }) => {
+          onWhere?.(args.where);
+          return runs;
+        },
       },
-    };
+      trainingTranscriptionJob: { findMany: async () => [] },
+    } as unknown as import("@prisma/client").PrismaClient;
   }
+  const finished = (inferenceMs: number | null, executionStatus = "COMPLETED"): RunRow => ({
+    executionStatus,
+    inferenceMs,
+    assessmentPlanJson: null,
+  });
 
-  it("returns 0 when no prior runs exist (nullable _sum)", async () => {
-    const stub = {
-      trainingQuestionAiGenerationRun: {
-        aggregate: async () => ({ _sum: { inferenceMs: null } }),
-      },
-    };
+  it("returns 0 when no prior runs exist", async () => {
     const cost = await loadPriorPilotCostMicros(
-      {
-        clubId: "club-1",
-        courseVersionId: "ver-1",
-        excludeRunId: "run-current",
-      },
-      // The real type is PrismaClient but the guard only touches aggregate.
-      // Deliberate unknown-cast for the stub.
-      { prisma: stub as unknown as import("@prisma/client").PrismaClient },
+      { clubId: "club-1", courseVersionId: "ver-1", excludeRunId: "run-current" },
+      { prisma: makePrismaStub([]) },
     );
     expect(cost).toBe(0);
   });
 
-  it("converts aggregated inferenceMs to micros via L40S rate (DUPLICATE-DELIVERY-SAFE basis)", async () => {
-    // Two prior runs totaling 50_000 ms + 30_000 ms = 80_000 ms
-    // (the aggregate would include both regardless of state).
-    const stub = makePrismaStub(80_000);
+  it("converts each finished run's inferenceMs to micros via the L40S rate (DUPLICATE-DELIVERY-SAFE basis)", async () => {
     const cost = await loadPriorPilotCostMicros(
-      {
-        clubId: "club-1",
-        courseVersionId: "ver-1",
-        excludeRunId: "run-current",
-      },
-      { prisma: stub as unknown as import("@prisma/client").PrismaClient },
+      { clubId: "club-1", courseVersionId: "ver-1", excludeRunId: "run-current" },
+      { prisma: makePrismaStub([finished(50_000), finished(30_000)]) },
     );
-    // 80_000 × 0.5416667 = 43_333.336 → ceil → 43_334.
-    expect(cost).toBe(43_334);
+    expect(cost).toBe(msToCostMicros(50_000) + msToCostMicros(30_000));
   });
 
   it("excludes the CURRENT run from the prior-cost basis", async () => {
-    // Observe the WHERE clause passed to aggregate. The guard must
-    // ask Prisma for runs with id != excludeRunId. This proves the
-    // retry case does not double-count its own inferenceMs when the
-    // worker updates it mid-run.
     let capturedWhere: unknown = null;
-    const stub = {
-      trainingQuestionAiGenerationRun: {
-        aggregate: async (args: { where: unknown }) => {
-          capturedWhere = args.where;
-          return { _sum: { inferenceMs: 0 } };
-        },
-      },
-    };
     await loadPriorPilotCostMicros(
-      {
-        clubId: "club-X",
-        courseVersionId: "ver-X",
-        excludeRunId: "run-current-X",
-      },
-      { prisma: stub as unknown as import("@prisma/client").PrismaClient },
+      { clubId: "club-X", courseVersionId: "ver-X", excludeRunId: "run-current-X" },
+      { prisma: makePrismaStub([], (where) => { capturedWhere = where; }) },
     );
     expect(capturedWhere).toMatchObject({
       clubId: "club-X",
@@ -205,62 +179,50 @@ describe("EP-TRAIN-4Y-Z §3 — loadPriorPilotCostMicros", () => {
       id: { not: "run-current-X" },
     });
   });
+
+  it("a live sibling run is reserved at its worst case, not counted as zero", async () => {
+    const cost = await loadPriorPilotCostMicros(
+      { clubId: "club-1", courseVersionId: "ver-1", excludeRunId: "run-current" },
+      { prisma: makePrismaStub([finished(null, "RUNNING")]) },
+    );
+    expect(cost).toBeGreaterThan(0);
+  });
 });
 
 describe("EP-TRAIN-4Y-Z §3 — cancellation + duplicate-delivery semantics", () => {
-  it("a CANCELLED prior run's inferenceMs still participates in the budget basis", async () => {
-    // Even a CANCELLED run that burned 100_000 ms of GPU time before
-    // cancellation counts toward the pilot's cumulative budget. The
-    // aggregate does NOT filter by status — the guard's loader sums
-    // across every state.
-    const stub = {
+  function stubWith(inferenceMs: number, executionStatus: string) {
+    return {
       trainingQuestionAiGenerationRun: {
-        aggregate: async () => ({ _sum: { inferenceMs: 100_000 } }),
+        findMany: async () => [{ executionStatus, inferenceMs, assessmentPlanJson: null }],
       },
-    };
+      trainingTranscriptionJob: { findMany: async () => [] },
+    } as unknown as import("@prisma/client").PrismaClient;
+  }
+
+  it("a CANCELLED prior run's inferenceMs still participates in the budget basis", async () => {
     const prior = await loadPriorPilotCostMicros(
-      {
-        clubId: "club-1",
-        courseVersionId: "ver-1",
-        excludeRunId: "run-current",
-      },
-      { prisma: stub as unknown as import("@prisma/client").PrismaClient },
+      { clubId: "club-1", courseVersionId: "ver-1", excludeRunId: "run-current" },
+      { prisma: stubWith(100_000, "CANCELLED") },
     );
     expect(prior).toBe(msToCostMicros(100_000));
-
-    // Project a fresh retry attempt with this basis + 7 pending calls.
     const decision = preInvocationBudgetGate({
       priorAttemptCostMicros: prior,
       currentAttemptCostMicros: 0,
       callsRemainingThisAttempt: 7,
       coldBootConsumed: false,
     });
-    // Should still allow: prior ≈ $0.054, projected ≈ $0.77.
     expect(decision.allow).toBe(true);
   });
 
-  it("a duplicate queue delivery cannot re-authorise inference once budget is exhausted", async () => {
-    // Simulates: duplicate job delivered to the queue, runs the worker
-    // a second time. loadPriorPilotCostMicros reports the first
-    // attempt's full inference cost. The guard refuses the second
-    // attempt immediately — PILOT_BUDGET_EXCEEDED, non-retryable.
-    const stub = {
-      trainingQuestionAiGenerationRun: {
-        aggregate: async () => ({ _sum: { inferenceMs: 1_600_000 } }),
-      },
-    };
+  it("a duplicate queue delivery cannot re-authorise inference once the ceiling is exhausted", async () => {
+    // The first attempt already burned 9,000 s of provider time
+    // (≈ $4.88). A second delivery of the same queue entry sees that
+    // cost and is refused: 4.88 + worst case of 7 calls > $5.
     const prior = await loadPriorPilotCostMicros(
-      {
-        clubId: "club-1",
-        courseVersionId: "ver-1",
-        excludeRunId: "run-duplicate-2",
-      },
-      { prisma: stub as unknown as import("@prisma/client").PrismaClient },
+      { clubId: "club-1", courseVersionId: "ver-1", excludeRunId: "run-duplicate-2" },
+      { prisma: stubWith(9_000_000, "COMPLETED") },
     );
-    // 1_600_000 ms × 0.5416667 = 866_667 micros.
-    expect(prior).toBe(866_667);
-
-    // Even without any current-attempt cost, the pre-gate refuses.
+    expect(prior).toBe(msToCostMicros(9_000_000));
     const decision = preInvocationBudgetGate({
       priorAttemptCostMicros: prior,
       currentAttemptCostMicros: 0,
@@ -273,8 +235,8 @@ describe("EP-TRAIN-4Y-Z §3 — cancellation + duplicate-delivery semantics", ()
 });
 
 describe("EP-TRAIN-4Y-Z §3 — invariants (regression guards)", () => {
-  it("the pilot budget is $1 (1_000_000 micros), distinct from the $10 daily cap", () => {
-    expect(PILOT_BUDGET_USD_MICROS).toBe(1_000_000);
+  it("the per-course ceiling is $5 (5_000_000 micros), distinct from the $10 daily cap", () => {
+    expect(PILOT_BUDGET_USD_MICROS).toBe(5_000_000);
   });
 
   it("cost-per-ms rate matches generation-service's L40S rate exactly", () => {

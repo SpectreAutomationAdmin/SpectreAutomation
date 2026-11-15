@@ -204,3 +204,74 @@ export async function assertAuthenticated(page: Page, protectedPath = "/app/admi
     );
   }
 }
+
+// ─── EP-TRAIN-4Y-BF §1 — dedicated Safety & Training test principal ───
+//
+// Automated Safety & Training specs MUST log in as this synthetic
+// account and never as the founder. The server lists its user id in
+// TRAINING_TEST_PRINCIPAL_USER_IDS, so everything it creates or uploads
+// is processed as NON-BILLABLE no matter what the request looks like.
+// A spec that logs in as anyone else is a real upload.
+//
+// Credential surface (git-ignored .env.playwright.local):
+//   SPECTRE_E2E_TRAINING_EMAIL
+//   SPECTRE_E2E_TRAINING_PASSWORD
+
+function readTrainingTestCreds() {
+  const file = loadLocalEnvFiles();
+  return {
+    email: process.env.SPECTRE_E2E_TRAINING_EMAIL ?? file.SPECTRE_E2E_TRAINING_EMAIL ?? "",
+    password: process.env.SPECTRE_E2E_TRAINING_PASSWORD ?? file.SPECTRE_E2E_TRAINING_PASSWORD ?? "",
+    baseURL: readCreds().baseURL,
+  };
+}
+
+/** Availability check for test.skip(). Never exposes the credentials. */
+export function trainingTestPrincipalAvailable(): StagingCredsAvailability {
+  const { email, password, baseURL } = readTrainingTestCreds();
+  if (!email || !password) {
+    return {
+      ready: false,
+      reason:
+        "SPECTRE_E2E_TRAINING_EMAIL / SPECTRE_E2E_TRAINING_PASSWORD not set in .env.playwright.local — skipping Safety & Training staging spec.",
+      baseURL,
+    };
+  }
+  return { ready: true, reason: null, baseURL };
+}
+
+/** Log in as the dedicated Safety & Training test principal. */
+export async function loginAsTrainingTestPrincipal(
+  context: BrowserContext,
+  opts: { landing?: string } = {},
+): Promise<Page> {
+  const { email, password } = readTrainingTestCreds();
+  if (!email || !password) {
+    throw new Error("Safety & Training test-principal credentials missing — check .env.playwright.local.");
+  }
+  return loginAs(context, email, password, opts);
+}
+
+// ─── EP-TRAIN-4Y-BF §1 — specs that start REAL (billable) AI work ───
+//
+// A handful of older pilot specs log in as the founder and call the
+// transcription / generation endpoints on real course versions. They
+// are inert unless the person running them sets, for that one command,
+//
+//   SPECTRE_E2E_ALLOW_LIVE_INFERENCE=founder-authorized-billable-run
+//
+// It is read from the process environment only — never from an env
+// file — so it cannot be left switched on by accident. (Independently,
+// staging refuses real inference unless billable inference has been
+// enabled there for a founder-authorized run.)
+const LIVE_INFERENCE_OPT_IN = "founder-authorized-billable-run";
+
+export function liveInferenceSpecAllowed(): { allowed: boolean; reason: string } {
+  const allowed = process.env.SPECTRE_E2E_ALLOW_LIVE_INFERENCE === LIVE_INFERENCE_OPT_IN;
+  return {
+    allowed,
+    reason: allowed
+      ? ""
+      : `This spec starts real, billable AI processing as the founder. It only runs with SPECTRE_E2E_ALLOW_LIVE_INFERENCE=${LIVE_INFERENCE_OPT_IN} set for that command, after founder authorization.`,
+  };
+}

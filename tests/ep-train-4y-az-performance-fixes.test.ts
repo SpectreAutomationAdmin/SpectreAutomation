@@ -51,7 +51,13 @@ function makePrisma(args: {
     trainingCourseVersion: { findFirst: async () => args.version },
     trainingTranscriptionJob: { findFirst: async () => args.job ?? null },
     trainingTranscriptBuild: { findFirst: async () => args.build ?? null },
-    trainingQuestionAiGenerationRun: { findFirst: async () => args.run ?? null },
+    trainingQuestionAiGenerationRun: {
+      findFirst: async () => args.run ?? null,
+      // 4Y-BE: progress is measured across every run of the version.
+      findMany: async () => (args.run ? [args.run] : []),
+    },
+    // 4Y-BE: upload authorization / halt / completion records.
+    auditLog: { findMany: async () => [], findFirst: async () => null },
     trainingQuestionAiDraft: { findMany: async () => args.drafts ?? [] },
   };
 }

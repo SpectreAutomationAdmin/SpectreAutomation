@@ -81,12 +81,35 @@ vi.mock("@/lib/hr/training/transcription/ingest", () => ({
 const prismaMocks = vi.hoisted(() => ({
   trainingCourseVersion: {
     findUnique: vi.fn(),
+    // 4Y-BF — processing-identity lookup (who created the course).
+    findFirst: vi.fn().mockResolvedValue({ course: { createdByUserId: null } }),
+  },
+  user: {
+    findMany: vi.fn().mockResolvedValue([]),
   },
   trainingTranscriptBuild: {
     findFirst: vi.fn(),
   },
   trainingTranscriptSegment: {
     findMany: vi.fn(),
+  },
+  // 4Y-BE / 4Y-BF — the handlers resolve the version's processing
+  // identity and its accumulated cost from these tables. Empty here:
+  // a real (billable) version with no history.
+  auditLog: {
+    findMany: vi.fn().mockResolvedValue([]),
+    findFirst: vi.fn().mockResolvedValue(null),
+    create: vi.fn().mockResolvedValue({}),
+  },
+  trainingQuestionAiGenerationRun: {
+    findMany: vi.fn().mockResolvedValue([]),
+    findFirst: vi.fn().mockResolvedValue(null),
+    count: vi.fn().mockResolvedValue(0),
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+  },
+  trainingTranscriptionJob: {
+    findMany: vi.fn().mockResolvedValue([]),
+    findFirst: vi.fn().mockResolvedValue(null),
   },
   trainingQuestionAiDraft: {
     create: vi.fn().mockResolvedValue({ id: "mock-draft-id" }),
@@ -152,6 +175,8 @@ const RESPONSE_KEY = "test-response-hmac-key-0000000000";
 
 function fullEnv() {
   return {
+    // 4Y-BF: provider calls are refused unless this is set explicitly.
+    TRAINING_BILLABLE_INFERENCE: "enabled",
     MODAL_KEY: "k",
     MODAL_SECRET: "s",
     MODAL_SPECTRE_HMAC_KEY: HMAC_KEY,
@@ -609,22 +634,22 @@ describe("EP-TRAIN-4Y-C §4-G — generation worker handler", () => {
     const fetchImpl = requestIdAwareFetch((rid) =>
       signedGenerateOk(rid, [
         {
-          questionText: "Q1 cites segment 1",
+          questionText: "Which towel should be used to wipe the carving knife?",
           options: [
-            { text: "A", isCorrect: true },
-            { text: "B", isCorrect: false },
+            { text: "A clean sanitized towel", isCorrect: true },
+            { text: "The apron on the hook", isCorrect: false },
           ],
           sourceSegmentIds: [1],
-          explanation: "cites seg 1",
+          explanation: "A clean sanitized towel keeps the knife sanitary.",
         },
         {
-          questionText: "Q2 cites segment 2",
+          questionText: "How often should the station counter be cleared of crumbs?",
           options: [
-            { text: "A", isCorrect: true },
-            { text: "B", isCorrect: false },
+            { text: "After every group of guests", isCorrect: true },
+            { text: "Only at closing time", isCorrect: false },
           ],
           sourceSegmentIds: [2],
-          explanation: "cites seg 2",
+          explanation: "Clearing after every group keeps the station presentable.",
         },
       ]),
     );
@@ -671,22 +696,22 @@ describe("EP-TRAIN-4Y-C §4-G — generation worker handler", () => {
     const fetchImpl = requestIdAwareFetch((rid) =>
       signedGenerateOk(rid, [
         {
-          questionText: "Q cites non-eligible seg 99 only",
+          questionText: "Where should spare plates be stacked during a busy shift?",
           options: [
-            { text: "A", isCorrect: true },
-            { text: "B", isCorrect: false },
+            { text: "On the lower shelf", isCorrect: true },
+            { text: "Beside the heat lamp", isCorrect: false },
           ],
           sourceSegmentIds: [99], // not in eligibleSegmentIds
-          explanation: "x",
+          explanation: "The lower shelf keeps spare plates out of the way.",
         },
         {
-          questionText: "Q cites valid seg 1",
+          questionText: "Which towel should be used to wipe the carving knife?",
           options: [
-            { text: "A", isCorrect: true },
-            { text: "B", isCorrect: false },
+            { text: "A clean sanitized towel", isCorrect: true },
+            { text: "The apron on the hook", isCorrect: false },
           ],
           sourceSegmentIds: [1],
-          explanation: "x",
+          explanation: "A clean sanitized towel keeps the knife sanitary.",
         },
       ]),
     );

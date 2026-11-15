@@ -14,15 +14,17 @@ import {
 const SILVER_SPRINGS_VERSION = "cmw8n6z9a000az4nx56vwh02f";
 
 describe("§2 — override applies ONLY to the Silver Springs pilot", () => {
-  it("global $1 default unchanged", () => {
-    expect(PILOT_BUDGET_USD_MICROS).toBe(1_000_000);
+  // 4Y-BA raised the default per-course ceiling from the $1 pilot
+  // figure to $5; 4Y-BE / 4Y-BF keep it there (founder directive).
+  it("the default per-course ceiling is $5", () => {
+    expect(PILOT_BUDGET_USD_MICROS).toBe(5_000_000);
   });
 
   it("Silver Springs (cmw8n6z9a000az4nx56vwh02f) resolves to $2 override", () => {
     expect(getPilotBudgetMicros(SILVER_SPRINGS_VERSION)).toBe(2_000_000);
   });
 
-  it("every other tenant / course version falls back to $1", () => {
+  it("every other tenant / course version falls back to the default ceiling", () => {
     const otherVersions = [
       "some-other-course-version-id",
       "cv-arbitrary-1234",
@@ -53,14 +55,14 @@ describe("§2 — preInvocationBudgetGate honours the override via opts.budgetMi
   const sessionCostMicros = Math.ceil(SESSION_WORST_CASE_MS * (1.95 / (3600 * 1000) * 1_000_000 / 1_000));
   // 780000 * 0.541_666_7 ≈ 422_500 micros
 
-  it("$1 default: $0.6285 prior + $0.4225 session → BLOCKED (previous AM Gate 3 condition)", () => {
+  it("$1 budget: $0.6285 prior + $0.4225 session → BLOCKED (previous AM Gate 3 condition)", () => {
     const decision = preInvocationBudgetGate({
       priorAttemptCostMicros: msToCostMicros(689_220) + Math.ceil(471_010 * (1.95 / 3_600_000 * 1_000_000)),
       // ≈ 628 500 micros = $0.6285
       currentAttemptCostMicros: 0,
       callsRemainingThisAttempt: 4,
       coldBootConsumed: false,
-    });
+    }, { budgetMicros: 1_000_000 });
     expect(decision.allow).toBe(false);
     expect(decision.budgetMicros).toBe(1_000_000);
     expect(decision.reason).toMatch(/\$1\.00 budget would be exceeded/);

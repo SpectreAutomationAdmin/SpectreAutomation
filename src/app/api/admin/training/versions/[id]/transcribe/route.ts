@@ -23,6 +23,7 @@ import {
 } from "@/lib/hr/training/transcription/job-service";
 import { enqueue } from "@/lib/queue";
 import { AppError, UnauthenticatedError } from "@/lib/errors";
+import { resolveProcessingIdentity } from "@/lib/hr/training/generation/test-execution-identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,11 +59,14 @@ export async function POST(
     // was freshly created; replays leave the existing lifecycle state
     // intact).
     if (!result.idempotent) {
+      // EP-TRAIN-4Y-BF — the queue entry carries the version's
+      // non-billable verdict; the worker re-resolves it as well.
+      const identity = await resolveProcessingIdentity({ clubId, courseVersionId: id });
       await markQueued(clubId, result.jobId);
       await enqueue({
         kind: "TRAINING_TRANSCRIBE_VIDEO",
         clubId,
-        payload: { jobId: result.jobId },
+        payload: { jobId: result.jobId, nonBillable: identity.nonBillable },
         maxAttempts: 2,
         idempotencyKey: `training-transcribe:${result.jobId}`,
       });

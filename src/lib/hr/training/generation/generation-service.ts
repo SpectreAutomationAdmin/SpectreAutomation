@@ -37,6 +37,14 @@ import {
   planIdentityHash,
   type AssessmentPlanV1,
 } from "./assessment-plan";
+import {
+  HARD_QUEUE_WAIT_MS,
+  LEASE_GRACE_MS,
+  LIVE_EXECUTION_STATES,
+  MAX_QUEUE_WAIT_MS,
+  hasLiveQueueEntry,
+} from "./stall-policy";
+import { resolveTestScope } from "./test-execution-identity";
 
 export type GenerationState =
   | "REQUESTED"
@@ -53,6 +61,11 @@ export type GenerationFailureCode =
   | "MODAL_BODY_INVALID"
   | "INVALID_STRUCTURED_OUTPUT"
   | "CREDENTIAL_ABSENT"
+  // EP-TRAIN-4Y-BF — this environment has not enabled billable inference.
+  | "BILLABLE_INFERENCE_LOCKED"
+  // EP-TRAIN-4Y-BF — an unexpected error inside the worker after it
+  // claimed the run. Retryable: the run is handed back to the queue.
+  | "WORKER_ERROR"
   | "COST_CAP_EXCEEDED"
   | "INSUFFICIENT_EVIDENCE"
   | "SOURCE_VIDEO_MISMATCH"
@@ -91,7 +104,9 @@ export type RequestRejectionCode =
   | "PLAN_INVALID"
   | "DUPLICATE_LIVE_RUN"
   | "COST_CAP_EXCEEDED"
-  | "CREDENTIAL_ABSENT";
+  | "CREDENTIAL_ABSENT"
+  // EP-TRAIN-4Y-BF — a test principal may only work on test courses.
+  | "TEST_PRINCIPAL_SCOPE";
 
 export class GenerationRejectedError extends AppError {
   readonly rejectionCode:
@@ -177,6 +192,127 @@ export interface RequestGenerationResult {
   readonly state: GenerationState;
   readonly idempotent: boolean;
   readonly planIdentity: string;
+  /** EP-TRAIN-4Y-BF — true when another run was already live for this
+   *  version and the request resolved to it instead of creating a second
+   *  run. The live run may carry a different plan than the one asked for. */
+  readonly resolvedToActiveRun?: boolean;
+}
+
+/** Client usable both on the pool and inside a transaction. */
+type Db = PrismaClient | Prisma.TransactionClient;
+
+/** Message written on a run retired as abandoned. The per-course cost
+ *  loader recognises it (a retired RUNNING run has unknown real cost and
+ *  is counted at its worst case). */
+export const SUPERSEDED_RUN_MESSAGE = "Stalled run superseded by automatic recovery.";
+
+/** EP-TRAIN-4Y-BF — retire generation runs that were abandoned:
+ *    - RUNNING long past a lease nobody renewed (the worker died);
+ *    - REQUESTED / QUEUED with no queue entry left to run them, or
+ *      queued beyond the hard limit.
+ *  A run that is merely WAITING behind another job on the serial worker
+ *  is not abandoned and is left alone. Each retirement is a
+ *  compare-and-set on the row's state, so a run a worker claimed or
+ *  renewed in the meantime is untouched. The run's queue entry is
+ *  cancelled, and its lease token is cleared — which fences its
+ *  worker: every later write by that worker is conditional on the
+ *  token. */
+export async function retireStalledGenerationRuns(
+  args: { readonly clubId: string; readonly courseVersionId: string; readonly now?: Date },
+  opts: { prisma?: Db } = {},
+): Promise<{ readonly retiredRunIds: readonly string[] }> {
+  const db: Db = opts.prisma ?? defaultPrisma;
+  const now = args.now ?? new Date();
+  const leaseCutoff = new Date(now.getTime() - LEASE_GRACE_MS);
+  const candidates = await db.trainingQuestionAiGenerationRun.findMany({
+    where: {
+      clubId: args.clubId,
+      courseVersionId: args.courseVersionId,
+      executionStatus: { in: [...LIVE_EXECUTION_STATES] },
+    },
+    select: { id: true, executionStatus: true, requestedAt: true, queuedAt: true, leaseExpiresAt: true },
+  });
+  const retiredRunIds: string[] = [];
+  for (const c of candidates) {
+    const queueKeys = [`training-generate:${c.id}`, `training-fa-recovery:${c.id}`];
+    let where: Prisma.TrainingQuestionAiGenerationRunWhereInput;
+    if (c.executionStatus === "RUNNING") {
+      if (c.leaseExpiresAt === null || c.leaseExpiresAt.getTime() >= leaseCutoff.getTime()) continue;
+      where = { id: c.id, clubId: args.clubId, executionStatus: "RUNNING", leaseExpiresAt: { lt: leaseCutoff } };
+    } else {
+      const waitingSince = c.queuedAt ?? c.requestedAt;
+      const waitedMs = now.getTime() - waitingSince.getTime();
+      if (waitedMs <= MAX_QUEUE_WAIT_MS) continue;
+      if (
+        waitedMs <= HARD_QUEUE_WAIT_MS &&
+        (await hasLiveQueueEntry(db, {
+          clubId: args.clubId,
+          kind: "TRAINING_GENERATE_QUESTIONS",
+          idempotencyKeys: queueKeys,
+          now,
+        }))
+      ) {
+        // Waiting its turn behind another job: not abandoned.
+        continue;
+      }
+      const waitCutoff = new Date(now.getTime() - MAX_QUEUE_WAIT_MS);
+      where = {
+        id: c.id,
+        clubId: args.clubId,
+        executionStatus: { in: ["REQUESTED", "QUEUED"] },
+        OR: [{ queuedAt: { lt: waitCutoff } }, { queuedAt: null, requestedAt: { lt: waitCutoff } }],
+      };
+    }
+    const retired = await db.trainingQuestionAiGenerationRun.updateMany({
+      where,
+      data: {
+        executionStatus: "FAILED",
+        executionErrorCode: "MODAL_TIMEOUT",
+        executionErrorMessage: SUPERSEDED_RUN_MESSAGE,
+        completedAt: now,
+        leaseToken: null,
+        leaseExpiresAt: null,
+      },
+    });
+    if (retired.count === 0) continue;
+    retiredRunIds.push(c.id);
+    await db.backgroundJob.updateMany({
+      where: {
+        clubId: args.clubId,
+        kind: "TRAINING_GENERATE_QUESTIONS",
+        idempotencyKey: { in: queueKeys },
+        status: { in: ["QUEUED", "RUNNING"] },
+      },
+      data: { status: "CANCELLED", finishedAt: now },
+    });
+  }
+  return { retiredRunIds };
+}
+
+/** EP-TRAIN-4Y-BF — single-flight per (club, course version) for the
+ *  generation operation. "Is a run live? If not, create one" executes
+ *  under a per-version database lock, so two requests that arrive
+ *  together cannot both create a run — whatever their plans, whoever
+ *  sent them, and whichever process they run in. The lock is held by
+ *  the database transaction; nothing in memory or in a browser is
+ *  relied on. (SQLite, used by the unit tests, serializes writers.) */
+async function withGenerationSingleFlight<T>(
+  db: PrismaClient,
+  clubId: string,
+  courseVersionId: string,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T> {
+  const isPostgres = (process.env.DATABASE_URL ?? "").startsWith("postgres");
+  const key = `training-generation-single-flight:${clubId}:${courseVersionId}`;
+  return db.$transaction(
+    async (tx) => {
+      if (isPostgres) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+      }
+      return fn(tx);
+    },
+    { timeout: 20_000, maxWait: 15_000 },
+  );
 }
 
 export async function requestGeneration(
@@ -218,6 +354,19 @@ export async function requestGeneration(
   if (version.state !== "DRAFT") {
     throw new GenerationRejectedError("VERSION_NOT_DRAFT", `Cannot generate for ${version.state} version.`, 409);
   }
+  // EP-TRAIN-4Y-BF — a test principal may only work on courses a test
+  // principal created. Requesting a run on a real manager's course would
+  // mark that course as non-billable for good.
+  if (
+    (await resolveTestScope(principal, { clubId, courseVersionId: input.courseVersionId }, { prisma: db })) ===
+    "TEST_PRINCIPAL_ON_REAL_COURSE"
+  ) {
+    throw new GenerationRejectedError(
+      "TEST_PRINCIPAL_SCOPE",
+      "Test accounts can only work on courses they created.",
+      409,
+    );
+  }
   if (!version.videoSha256 || version.videoSha256 !== plan.sourceVideoSha256) {
     throw new GenerationRejectedError(
       "PLAN_INVALID",
@@ -257,94 +406,93 @@ export async function requestGeneration(
 
   const identity = planIdentityHash(plan);
 
-  // Return any existing non-terminal run with this identity (DB-
-  // boundary dedup + application-level pre-check).
-  const existing = await db.trainingQuestionAiGenerationRun.findFirst({
-    where: {
-      clubId,
-      courseVersionId: input.courseVersionId,
-      resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
-      planIdentity: identity,
-      executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING", "COMPLETED"] },
-    },
-    select: { id: true, executionStatus: true },
-  });
-  if (existing) {
-    return {
-      ok: true,
-      generationRunId: existing.id,
-      state: existing.executionStatus as GenerationState,
-      idempotent: true,
-      planIdentity: identity,
-    };
-  }
-
-  // Cost cap.
+  // Cost cap (read before taking the single-flight lock).
   const currentCost = await tenantGenerationDailyCostMicros(clubId, { prisma: db });
   const estimateMicros = 1_000_000; // $1.00 per generation run (worst-case estimate)
-  if (currentCost + estimateMicros > DEFAULT_DAILY_USD_MICROS) {
-    throw new GenerationRejectedError(
-      "COST_CAP_EXCEEDED",
-      "Daily generation cost cap would be exceeded.",
-      409,
-      { currentCostMicros: currentCost, capMicros: DEFAULT_DAILY_USD_MICROS },
-    );
-  }
+  const overCostCap = currentCost + estimateMicros > DEFAULT_DAILY_USD_MICROS;
 
-  // Create the REQUESTED run.
+  // EP-TRAIN-4Y-BF — single-flight. Under the per-version lock:
+  //   1. retire abandoned runs (so a dead run cannot block forever);
+  //   2. if ANY run is still live for this version, resolve to it;
+  //   3. if this exact plan already completed, return that run;
+  //   4. otherwise create the one new run.
+  type Outcome =
+    | { readonly kind: "ACTIVE"; readonly id: string; readonly state: GenerationState; readonly planIdentity: string | null }
+    | { readonly kind: "COMPLETED"; readonly id: string }
+    | { readonly kind: "COST_CAP" }
+    | { readonly kind: "CREATED"; readonly id: string };
+  let outcome: Outcome;
   try {
-    const run = await db.trainingQuestionAiGenerationRun.create({
-      data: {
-        clubId,
-        courseId: version.course.id,
-        courseVersionId: input.courseVersionId,
-        pilotAuthorizationId: "4w-generation",
-        pilotAuthorizationFingerprint: identity.slice(0, 32),
-        sourceVideoSha256: plan.sourceVideoSha256,
-        resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
-        groundingProjectionSha256: "pending",
-        modelName: input.modelName ?? "qwen-2.5-7b-instruct-awq",
-        modelBackend: input.modelBackend ?? "vllm",
-        modelFormatEnforcer: input.modelFormatEnforcer ?? "lm-format-enforcer",
-        modalAppIdentity: input.modalAppIdentity ?? null,
-        requestedByUserId: principal.id,
-        executionStatus: "REQUESTED",
-        assessmentPlanJson: JSON.stringify(plan),
-        planIdentity: identity,
-      },
-      select: { id: true },
-    });
-    void audit(principal, {
-      action: "hr.training.generation.request",
-      entityType: "TrainingQuestionAiGenerationRun",
-      entityId: run.id,
-      clubId,
-      after: {
-        courseVersionId: input.courseVersionId,
-        planIdentity: identity,
-        totalTargetQuestionCount: plan.totalTargetQuestionCount,
-      },
-    });
-    return {
-      ok: true,
-      generationRunId: run.id,
-      state: "REQUESTED",
-      idempotent: false,
-      planIdentity: identity,
-    };
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      // Race — someone wrote the same planIdentity while we were
-      // between the pre-check and the create. Re-read the winner.
-      const winner = await db.trainingQuestionAiGenerationRun.findFirst({
+    outcome = await withGenerationSingleFlight(db, clubId, input.courseVersionId, async (tx): Promise<Outcome> => {
+      await retireStalledGenerationRuns(
+        { clubId, courseVersionId: input.courseVersionId },
+        { prisma: tx },
+      );
+      const live = await tx.trainingQuestionAiGenerationRun.findFirst({
+        where: {
+          clubId,
+          courseVersionId: input.courseVersionId,
+          executionStatus: { in: [...LIVE_EXECUTION_STATES] },
+        },
+        orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+        select: { id: true, executionStatus: true, planIdentity: true },
+      });
+      if (live) {
+        return {
+          kind: "ACTIVE",
+          id: live.id,
+          state: live.executionStatus as GenerationState,
+          planIdentity: live.planIdentity,
+        };
+      }
+      const completed = await tx.trainingQuestionAiGenerationRun.findFirst({
         where: {
           clubId,
           courseVersionId: input.courseVersionId,
           resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
           planIdentity: identity,
+          executionStatus: "COMPLETED",
+        },
+        select: { id: true },
+      });
+      if (completed) return { kind: "COMPLETED", id: completed.id };
+      if (overCostCap) return { kind: "COST_CAP" };
+      const run = await tx.trainingQuestionAiGenerationRun.create({
+        data: {
+          clubId,
+          courseId: version.course.id,
+          courseVersionId: input.courseVersionId,
+          pilotAuthorizationId: "4w-generation",
+          pilotAuthorizationFingerprint: identity.slice(0, 32),
+          sourceVideoSha256: plan.sourceVideoSha256,
+          resolvedTranscriptBuildId: plan.resolvedTranscriptBuildId,
+          groundingProjectionSha256: "pending",
+          modelName: input.modelName ?? "qwen-2.5-7b-instruct-awq",
+          modelBackend: input.modelBackend ?? "vllm",
+          modelFormatEnforcer: input.modelFormatEnforcer ?? "lm-format-enforcer",
+          modalAppIdentity: input.modalAppIdentity ?? null,
+          requestedByUserId: principal.id,
+          executionStatus: "REQUESTED",
+          assessmentPlanJson: JSON.stringify(plan),
+          planIdentity: identity,
+        },
+        select: { id: true },
+      });
+      return { kind: "CREATED", id: run.id };
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      // The DB-boundary unique index caught a duplicate the lock could
+      // not (for example a writer outside this service). Re-read the
+      // winner and resolve to it.
+      const winner = await db.trainingQuestionAiGenerationRun.findFirst({
+        where: {
+          clubId,
+          courseVersionId: input.courseVersionId,
           executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING", "COMPLETED"] },
         },
-        select: { id: true, executionStatus: true },
+        orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+        select: { id: true, executionStatus: true, planIdentity: true },
       });
       if (winner) {
         return {
@@ -352,12 +500,59 @@ export async function requestGeneration(
           generationRunId: winner.id,
           state: winner.executionStatus as GenerationState,
           idempotent: true,
-          planIdentity: identity,
+          planIdentity: winner.planIdentity ?? identity,
+          resolvedToActiveRun: winner.executionStatus !== "COMPLETED",
         };
       }
     }
     throw err;
   }
+
+  if (outcome.kind === "ACTIVE") {
+    return {
+      ok: true,
+      generationRunId: outcome.id,
+      state: outcome.state,
+      idempotent: true,
+      planIdentity: outcome.planIdentity ?? identity,
+      resolvedToActiveRun: true,
+    };
+  }
+  if (outcome.kind === "COMPLETED") {
+    return {
+      ok: true,
+      generationRunId: outcome.id,
+      state: "COMPLETED",
+      idempotent: true,
+      planIdentity: identity,
+    };
+  }
+  if (outcome.kind === "COST_CAP") {
+    throw new GenerationRejectedError(
+      "COST_CAP_EXCEEDED",
+      "Daily generation cost cap would be exceeded.",
+      409,
+      { currentCostMicros: currentCost, capMicros: DEFAULT_DAILY_USD_MICROS },
+    );
+  }
+  void audit(principal, {
+    action: "hr.training.generation.request",
+    entityType: "TrainingQuestionAiGenerationRun",
+    entityId: outcome.id,
+    clubId,
+    after: {
+      courseVersionId: input.courseVersionId,
+      planIdentity: identity,
+      totalTargetQuestionCount: plan.totalTargetQuestionCount,
+    },
+  });
+  return {
+    ok: true,
+    generationRunId: outcome.id,
+    state: "REQUESTED",
+    idempotent: false,
+    planIdentity: identity,
+  };
 }
 
 /** Transition REQUESTED → QUEUED. Refuses on any other starting state. */
@@ -400,15 +595,25 @@ function newLeaseToken(): string {
  *  back to RUNNING rows whose leaseExpiresAt has passed (stale-lease
  *  recovery), subject to attempts < maxAttempts. */
 export async function claimNextGenerationRun(
-  opts: { prisma?: PrismaClient; now?: Date; leaseTtlMs?: number } = {},
+  opts: {
+    prisma?: PrismaClient;
+    now?: Date;
+    leaseTtlMs?: number;
+    /** EP-TRAIN-4Y-BF — claim exactly this run. A queue entry must only
+     *  ever claim the run it was enqueued for; claiming "whatever is
+     *  next" let one entry take another run's lease and then skip it,
+     *  leaving that run leased and unprocessed until the lease expired. */
+    runId?: string;
+  } = {},
 ): Promise<GenerationClaimResult | null> {
   const db = opts.prisma ?? defaultPrisma;
   const now = opts.now ?? new Date();
   const leaseExpiresAt = new Date(now.getTime() + (opts.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS));
   const leaseToken = newLeaseToken();
 
+  const only = opts.runId ? { id: opts.runId } : {};
   const queuedCandidate = await db.trainingQuestionAiGenerationRun.findFirst({
-    where: { executionStatus: "QUEUED", leaseToken: null },
+    where: { ...only, executionStatus: "QUEUED", leaseToken: null },
     orderBy: [{ queuedAt: "asc" }, { id: "asc" }],
     select: { id: true, attempts: true, maxAttempts: true, clubId: true, courseVersionId: true, planIdentity: true, assessmentPlanJson: true },
   });
@@ -441,6 +646,7 @@ export async function claimNextGenerationRun(
   // Stale-lease reclaim.
   const stale = await db.trainingQuestionAiGenerationRun.findFirst({
     where: {
+      ...only,
       executionStatus: "RUNNING",
       leaseExpiresAt: { lt: now },
     },

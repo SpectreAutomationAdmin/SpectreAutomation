@@ -97,3 +97,25 @@ export function buildMockProposals(args: {
   }
   return proposals;
 }
+
+/** EP-TRAIN-4Y-BF — decorate simulated proposals with the three
+ *  formatting defects observed in real model output, so the
+ *  deterministic normaliser can be exercised end to end without a
+ *  provider call:
+ *    - "… according to the training material?" in the stem;
+ *    - "This aligns with segment [N]." in the explanation (N is one of
+ *      the proposal's own source segments);
+ *    - a "(Correct Answer: …)" note on every option.
+ *  Without normalisation every one of these is rejected by the
+ *  employee-facing text sanitiser. */
+export function withFormattingDefects(proposals: readonly ModalGenerateProposal[]): ModalGenerateProposal[] {
+  return proposals.map((p) => ({
+    ...p,
+    questionText: p.questionText.replace(/\?\s*$/, " according to the training material?"),
+    options: p.options.map((o) => ({
+      ...o,
+      text: `${o.text} (Correct Answer: simulated note, ${o.isCorrect ? "this is the continuation" : "this is a different line"}.)`,
+    })),
+    explanation: `${p.explanation ?? ""} This aligns with segment [${p.sourceSegmentIds[0]}].`.trim(),
+  }));
+}

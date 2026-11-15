@@ -48,6 +48,7 @@ import {
   destinationKindForGroup,
 } from "./destination-resolver";
 import type { PrismaClient } from "@prisma/client";
+import { resolveProcessingIdentity } from "./test-execution-identity";
 
 export type FinalAssessmentRecoveryState =
   | "REQUESTED"
@@ -429,6 +430,18 @@ export async function requestFinalAssessmentRecovery(
     throw err;
   }
 
+  // EP-TRAIN-4Y-BF — one generation workflow per version. If another run
+  // (a different plan) is already in flight, this recovery was NOT
+  // created: say so, instead of reporting the other run as the recovery.
+  if (request.resolvedToActiveRun) {
+    throw new FinalAssessmentRecoveryRejectedError(
+      "UNDERLYING_GENERATION_REJECTED",
+      "Another generation run is already in progress for this course version. Try again when it has finished.",
+      409,
+      { rejectionCode: "DUPLICATE_LIVE_RUN", activeRunId: request.generationRunId },
+    );
+  }
+
   // 8. If new, flip to QUEUED + enqueue the worker job. ONE attempt
   //    only (directive §7 — no automatic retries that could exceed the
   //    pilot budget). The run's own maxAttempts default (set by the
@@ -439,11 +452,16 @@ export async function requestFinalAssessmentRecovery(
       where: { id: request.generationRunId, clubId, executionStatus: "REQUESTED" },
       data: { maxAttempts: 1 },
     });
+    // EP-TRAIN-4Y-BF — the queue entry carries the non-billable verdict.
+    const identity = await resolveProcessingIdentity(
+      { clubId, courseVersionId: original.courseVersionId },
+      { prisma: db },
+    );
     await markGenerationQueued(clubId, request.generationRunId, { prisma: db });
     await enqueue({
       kind: "TRAINING_GENERATE_QUESTIONS",
       clubId,
-      payload: { generationRunId: request.generationRunId },
+      payload: { generationRunId: request.generationRunId, nonBillable: identity.nonBillable },
       maxAttempts: 1, // NO automatic retries.
       idempotencyKey: `training-fa-recovery:${request.generationRunId}`,
     });

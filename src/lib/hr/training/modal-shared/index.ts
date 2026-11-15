@@ -44,6 +44,13 @@ export {
 export type { ModalContractFailureCode } from "./errors";
 
 export {
+  ENV_BILLABLE_INFERENCE,
+  BILLABLE_INFERENCE_ENABLED_VALUE,
+  isBillableInferenceEnabled,
+  assertBillableInferenceEnabled,
+} from "./billable-inference-gate";
+
+export {
   ENV_MODAL_KEY,
   ENV_MODAL_SECRET,
   ENV_TRANSCRIBE_URL,

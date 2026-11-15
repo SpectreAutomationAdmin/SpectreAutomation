@@ -27,6 +27,15 @@
 
 import { test, expect } from "@playwright/test";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
+import { liveInferenceSpecAllowed } from "./_lib/staging-auth";
+
+// EP-TRAIN-4Y-BF — this spec starts REAL (billable) AI processing as the
+// founder on a real course version. It is inert unless explicitly
+// allowed for the one command that runs it (see staging-auth.ts).
+test.beforeEach(() => {
+  const live = liveInferenceSpecAllowed();
+  test.skip(!live.allowed, live.reason);
+});
 
 const BASE = process.env.SPECTRE_STAGING_BASE_URL ?? "https://staging.spectreautomation.com";
 const COURSE_ID = "cmw8n6z8f0008z4nxck6uvms9";

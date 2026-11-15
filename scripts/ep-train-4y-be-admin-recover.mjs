@@ -8,6 +8,13 @@
 // course automatically from the last completed stage (the existing
 // video and transcript are reused). Nothing else is modified.
 //
+// EP-TRAIN-4Y-BF — MODE=LIVE additionally needs the environment to have
+// billable inference enabled (TRAINING_BILLABLE_INFERENCE=enabled on
+// BOTH the web app and the worker). Staging keeps it locked, so a LIVE
+// recovery written while locked simply halts ("billable inference is not
+// enabled") without contacting any provider: enable it first, and only
+// for a founder-authorized run; remove it again afterwards.
+//
 // Operator tool. Run inside the staging web container:
 //   VERSION_ID=<id> MODE=LIVE|MOCK node scripts/ep-train-4y-be-admin-recover.mjs
 // Dry run by default. To write:

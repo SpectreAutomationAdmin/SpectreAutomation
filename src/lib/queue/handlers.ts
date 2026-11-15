@@ -501,13 +501,15 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
 // unit tests can mock the dependencies without pulling in the whole
 // queue machinery.
 // ---------------------------------------------------------------------------
-registerHandler<{ jobId: string }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload }) => {
+registerHandler<{ jobId: string; nonBillable?: boolean }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload }) => {
   // Local import keeps the queue bootstrap free of training-domain
   // transitive deps when a worker only runs other queues.
   const { handleTranscribeJob } = await import("../hr/training/transcription/worker-handler");
   const { makeSignedTrainingVideoUrl } = await import("../hr/training/video-signed-url");
   const result = await handleTranscribeJob(
-    { jobId: payload.jobId },
+    // EP-TRAIN-4Y-BF — the queue entry carries the non-billable verdict
+    // from enqueue time; the handler also re-resolves it from the DB.
+    { jobId: payload.jobId, nonBillable: payload.nonBillable === true },
     {
       makeSignedVideoUrl: makeSignedTrainingVideoUrl,
     },
@@ -538,9 +540,12 @@ registerHandler<{ jobId: string }>("TRAINING_TRANSCRIBE_VIDEO", async ({ payload
 //
 // Delegates to src/lib/hr/training/generation/worker-handler.ts.
 // ---------------------------------------------------------------------------
-registerHandler<{ generationRunId: string }>("TRAINING_GENERATE_QUESTIONS", async ({ payload }) => {
+registerHandler<{ generationRunId: string; nonBillable?: boolean }>("TRAINING_GENERATE_QUESTIONS", async ({ payload }) => {
   const { handleGenerateJob } = await import("../hr/training/generation/worker-handler");
-  const result = await handleGenerateJob({ runId: payload.generationRunId });
+  const result = await handleGenerateJob({
+    runId: payload.generationRunId,
+    nonBillable: payload.nonBillable === true,
+  });
   logger.info("queue.handler.training_generate_questions", {
     generationRunId: payload.generationRunId,
     status: result.status,

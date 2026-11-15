@@ -41,6 +41,14 @@ kill_timeout = 60
   # generation, whose request precheck reads this non-secret flag. The
   # real inference credentials already live on this app.
   MODAL_HYBRID_ENABLED = "1"
+  # EP-TRAIN-4Y-BF §1 — automated-test principal(s); see fly.web.toml.
+  # Must be identical on the web app and the worker.
+  TRAINING_TEST_PRINCIPAL_USER_IDS = "e2e-training-test-principal-01"
+  # EP-TRAIN-4Y-BF §1 — billable inference is LOCKED on staging:
+  # TRAINING_BILLABLE_INFERENCE is deliberately NOT set here. This is
+  # the process that holds the provider credentials, so this is the
+  # lock that matters: without the exact value "enabled" every provider
+  # client refuses before reading a credential or opening a socket.
   WORKER_POLL_MS = "1000"
   # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. Values
   # match the web app; both processes must resolve KMS + R2 identically.

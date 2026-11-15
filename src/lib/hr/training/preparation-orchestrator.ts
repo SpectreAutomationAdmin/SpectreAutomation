@@ -15,6 +15,11 @@
 // Operational controls (never shown to a manager):
 //   - every decision is serialized per version (advisory lock), so
 //     triggers that race cannot create two live jobs or runs;
+//   - single flight per version: while ANY transcription job or
+//     generation run is live for the version — whichever upload or
+//     recovery started it — nothing new is dispatched;
+//   - test-identity versions are simulated, and real versions are
+//     only dispatched where billable inference is enabled;
 //   - bounded attempts per upload: MAX_TRANSCRIPTION_ATTEMPTS and
 //     MAX_GENERATION_RUNS;
 //   - a hard per-course cost ceiling: nothing billable is enqueued
@@ -30,6 +35,7 @@ import { logger } from "@/lib/observability/logger";
 import {
   requestTranscription,
   markQueued,
+  retireStalledTranscriptionJobs,
   JobRejectedError,
 } from "./transcription/job-service";
 import {
@@ -41,11 +47,16 @@ import {
   PREPARATION_COMPLETED_ACTION,
   PREPARATION_HALT_ACTION,
   hasPreparationCompleted,
+  isMockInferenceAllowed,
   readPipelineAuthorization,
   readPreparationHalt,
+  resolveInferenceModeForVersion,
   type PipelineAuthorization,
   type PreparationHaltCode,
 } from "./generation/processing-authorization";
+import { retireStalledGenerationRuns } from "./generation/generation-service";
+import { isBillableInferenceEnabled } from "./modal-shared";
+import { MOCK_TRANSCRIPT_MODEL_VARIANT } from "./transcription/mock-transcript";
 import {
   buildFinalAssessmentChunks,
   type AssessmentPlanV1,
@@ -64,7 +75,6 @@ import {
   transcriptionWorstCaseMicros,
 } from "./generation/pilot-budget-guard";
 import { ensureCheckpointEventsForVersion } from "./generation/checkpoint-events";
-import { MAX_QUEUE_WAIT_MS, LEASE_GRACE_MS } from "./preparation-progress";
 
 export type PreparationTrigger =
   | "UPLOAD"
@@ -81,6 +91,11 @@ export type AdvanceAction =
   | "GENERATION_IN_PROGRESS"
   | "COMPLETE"
   | "HALTED"
+  // The process that received the upload cannot dispatch real work (it
+  // does not have billable inference enabled). Nothing is decided
+  // here; the worker — which holds the provider credentials and the
+  // lock that matters — decides on its next pass.
+  | "DEFERRED"
   | "NOT_AUTHORIZED"
   | "NOT_APPLICABLE";
 
@@ -111,24 +126,11 @@ const NON_RETRYABLE_RUN_FAILURES = new Set([
   "PILOT_BUDGET_EXCEEDED",
   "COST_CAP_EXCEEDED",
   "CREDENTIAL_ABSENT",
+  "BILLABLE_INFERENCE_LOCKED",
   "INSUFFICIENT_EVIDENCE",
   "TRANSCRIPT_MISSING",
   "SOURCE_VIDEO_MISMATCH",
 ]);
-
-function isStalled(
-  row: { state: string; requestedAt: Date; leaseExpiresAt: Date | null },
-  now: Date,
-): boolean {
-  if (row.state === "REQUESTED" || row.state === "QUEUED") {
-    return now.getTime() - row.requestedAt.getTime() > MAX_QUEUE_WAIT_MS;
-  }
-  return (
-    row.state === "RUNNING" &&
-    row.leaseExpiresAt !== null &&
-    row.leaseExpiresAt.getTime() + LEASE_GRACE_MS < now.getTime()
-  );
-}
 
 /** Serialize preparation decisions for one version. Postgres only; the
  *  SQLite test database is single-writer already. */
@@ -152,6 +154,28 @@ export async function withPreparationLock<T>(
  *  callers are workers and the upload route, none of which may fail
  *  because orchestration had a problem. */
 export async function advancePreparation(args: {
+  readonly clubId: string;
+  readonly courseVersionId: string;
+  readonly trigger: PreparationTrigger;
+}): Promise<AdvanceResult> {
+  return inProcessTurn(() => advanceOnce(args));
+}
+
+/** One orchestration decision at a time PER PROCESS. This is not what
+ *  makes decisions safe — the per-version database lock does that,
+ *  across processes. It only keeps one process from holding several
+ *  lock connections at once: each decision pins a connection for its
+ *  lock while it works on others, and a small pool can be starved if
+ *  several uploads finish in the same instant. A decision takes well
+ *  under a second. */
+let turn: Promise<unknown> = Promise.resolve();
+function inProcessTurn<T>(fn: () => Promise<T>): Promise<T> {
+  const run = turn.then(fn, fn);
+  turn = run.catch(() => undefined);
+  return run;
+}
+
+async function advanceOnce(args: {
   readonly clubId: string;
   readonly courseVersionId: string;
   readonly trigger: PreparationTrigger;
@@ -196,9 +220,16 @@ interface ProducedState {
   readonly questionTexts: readonly string[];
 }
 
-async function loadProducedState(clubId: string, courseVersionId: string): Promise<ProducedState> {
+/** What already exists for THIS video. Questions generated from a
+ *  video the manager has since replaced do not count: they describe a
+ *  different recording. */
+async function loadProducedState(
+  clubId: string,
+  courseVersionId: string,
+  sourceVideoSha256: string,
+): Promise<ProducedState> {
   const runs = await prisma.trainingQuestionAiGenerationRun.findMany({
-    where: { clubId, courseVersionId },
+    where: { clubId, courseVersionId, sourceVideoSha256 },
     select: { shortfallReasonJson: true },
     orderBy: { requestedAt: "asc" },
   });
@@ -209,7 +240,7 @@ async function loadProducedState(clubId: string, courseVersionId: string): Promi
     }
   }
   const drafts = await prisma.trainingQuestionAiDraft.findMany({
-    where: { clubId, courseVersionId },
+    where: { clubId, courseVersionId, sourceVideoSha256 },
     select: { id: true, state: true, contentHash: true, supersedesDraftId: true, draftJson: true },
   });
   const draftById = new Map(drafts.map((d) => [d.id, d] as const));
@@ -328,67 +359,121 @@ async function decideAndAct(args: {
     }),
   );
 
+  // EP-TRAIN-4Y-BF — how this version is processed is resolved from
+  // durable state (test execution identity), never from the request
+  // that happened to trigger this pass. A non-billable version is
+  // simulated; a real one is only dispatched where billable inference
+  // is enabled. Either mismatch halts before anything is queued.
+  const inferenceMode = await resolveInferenceModeForVersion({ clubId, courseVersionId });
+  const dispatchBlock: { code: PreparationHaltCode; detail: string } | null =
+    inferenceMode === "MOCK"
+      ? isMockInferenceAllowed()
+        ? null
+        : {
+            code: "TEST_ISOLATION_UNAVAILABLE",
+            detail: "non-billable (test identity) version; simulated processing is not enabled here",
+          }
+      : isBillableInferenceEnabled()
+        ? null
+        : {
+            code: "BILLABLE_INFERENCE_LOCKED",
+            detail: "billable inference is not enabled in this environment",
+          };
+
+  /** What to do when this process may not dispatch. A closed billable
+   *  lock seen by the process that merely RECEIVED the upload is not
+   *  final — the worker owns the provider credentials and its own
+   *  lock, and it decides on its next pass (within seconds). Every
+   *  other case halts. */
+  const refuseDispatch = async (block: { code: PreparationHaltCode; detail: string }): Promise<AdvanceResult> => {
+    if (block.code === "BILLABLE_INFERENCE_LOCKED" && trigger === "UPLOAD") {
+      return { action: "DEFERRED", detail: `${block.detail}; left for the worker to decide` };
+    }
+    return halt(auth, args, block.code, block.detail);
+  };
+
+  // A real version never builds on a simulated transcript, even if a
+  // test once uploaded the same bytes.
   const build = await prisma.trainingTranscriptBuild.findFirst({
-    where: { clubId, sourceVideoSha256: version.videoSha256 },
+    where: {
+      clubId,
+      sourceVideoSha256: version.videoSha256,
+      ...(inferenceMode === "LIVE" ? { transcriberModelName: { not: MOCK_TRANSCRIPT_MODEL_VARIANT } } : {}),
+    },
     orderBy: { producedAt: "desc" },
     select: { id: true },
   });
 
+  // ── Single flight ────────────────────────────────────────────────
+  // Anything already in flight for this version is THE workflow, no
+  // matter which upload, recovery or request started it. Look at every
+  // job and run for the version — not only those since the newest
+  // authorization — so a second upload can never start a second run
+  // beside one that is still working.
+  // Abandoned jobs are retired first (compare-and-set, queue entry
+  // cancelled, lease cleared — which fences the old worker). A job that
+  // is merely waiting its turn on the worker is NOT abandoned.
+  const retiredJobs = await retireStalledTranscriptionJobs({
+    clubId,
+    courseVersionId,
+    now,
+    retiredByUserId: principal.id,
+  });
+  for (const jobId of retiredJobs.retiredJobIds) {
+    logger.warn("training.preparation.transcription.superseded_stalled", { clubId, courseVersionId, jobId });
+  }
+  const liveJob = await prisma.trainingTranscriptionJob.findFirst({
+    where: { clubId, courseVersionId, state: { in: LIVE_STATES } },
+    orderBy: { requestedAt: "asc" },
+    select: { id: true },
+  });
+  if (liveJob) {
+    return { action: "TRANSCRIPTION_IN_PROGRESS", detail: "live job", transcriptionJobId: liveJob.id };
+  }
+  // Abandoned generation runs are retired (compare-and-set, queue entry
+  // cancelled, lease cleared); any run still live after that is in
+  // flight and is waited for.
+  const retiredRuns = await retireStalledGenerationRuns({ clubId, courseVersionId, now });
+  for (const runId of retiredRuns.retiredRunIds) {
+    logger.warn("training.preparation.generation.superseded_stalled", { clubId, courseVersionId, runId });
+  }
+  const allRuns = await prisma.trainingQuestionAiGenerationRun.findMany({
+    where: { clubId, courseVersionId },
+    select: {
+      id: true,
+      executionStatus: true,
+      executionErrorCode: true,
+      requestedAt: true,
+      completedAt: true,
+      sourceVideoSha256: true,
+      assessmentPlanJson: true,
+    },
+    orderBy: { requestedAt: "asc" },
+  });
+  const liveRun = allRuns.find((r) => LIVE_STATES.includes(r.executionStatus));
+  if (liveRun) {
+    return { action: "GENERATION_IN_PROGRESS", detail: "live run", generationRunId: liveRun.id };
+  }
+
   // ── Transcription leg ────────────────────────────────────────────
   if (!build) {
+    // Attempts are counted per upload (authorization) and per video. A
+    // job that was still in flight when this upload arrived belongs to
+    // this upload's workflow too.
     const jobs = await prisma.trainingTranscriptionJob.findMany({
       where: {
         clubId,
         courseVersionId,
         sourceVideoSha256: version.videoSha256,
-        requestedAt: { gte: auth.authorizedAt },
+        OR: [
+          { requestedAt: { gte: auth.authorizedAt } },
+          { completedAt: { gte: auth.authorizedAt } },
+          { cancelledAt: { gte: auth.authorizedAt } },
+        ],
       },
-      select: { id: true, state: true, requestedAt: true, leaseExpiresAt: true },
+      select: { id: true },
     });
-    const liveJob = jobs.find((j) => LIVE_STATES.includes(j.state));
-    if (liveJob) {
-      if (!isStalled(liveJob, now)) {
-        return { action: "TRANSCRIPTION_IN_PROGRESS", detail: "live job", transcriptionJobId: liveJob.id };
-      }
-      // Compare-and-set: retire the row only if it is STILL stalled, so
-      // a worker that claimed it meanwhile keeps it and two
-      // transcriptions can never overlap.
-      const retired = await prisma.trainingTranscriptionJob.updateMany({
-        where: {
-          id: liveJob.id,
-          clubId,
-          OR: [
-            { state: { in: ["REQUESTED", "QUEUED"] }, requestedAt: { lt: new Date(now.getTime() - MAX_QUEUE_WAIT_MS) } },
-            { state: "RUNNING", leaseExpiresAt: { lt: new Date(now.getTime() - LEASE_GRACE_MS) } },
-          ],
-        },
-        data: {
-          state: "CANCELLED",
-          cancelledAt: now,
-          cancelledByUserId: principal.id,
-          failureCode: "MODAL_TIMEOUT",
-          failureMessage: "Stalled job superseded by automatic recovery.",
-          leaseToken: null,
-          leaseExpiresAt: null,
-        },
-      });
-      if (retired.count === 0) {
-        return { action: "TRANSCRIPTION_IN_PROGRESS", detail: "job resumed on its own", transcriptionJobId: liveJob.id };
-      }
-      await prisma.backgroundJob.updateMany({
-        where: {
-          clubId,
-          kind: "TRAINING_TRANSCRIBE_VIDEO",
-          idempotencyKey: `training-transcribe:${liveJob.id}`,
-          status: { in: ["QUEUED", "RUNNING"] },
-        },
-        data: { status: "CANCELLED", finishedAt: now },
-      });
-      logger.warn("training.preparation.transcription.superseded_stalled", { clubId, courseVersionId, jobId: liveJob.id });
-    }
-    if (auth.inferenceMode === "MOCK") {
-      return halt(auth, args, "MOCK_REQUIRES_EXISTING_TRANSCRIPT", "mock version has no transcript to reuse");
-    }
+    if (dispatchBlock) return refuseDispatch(dispatchBlock);
     if (jobs.length >= MAX_TRANSCRIPTION_ATTEMPTS) {
       return halt(auth, args, "TRANSCRIPTION_ATTEMPTS_EXHAUSTED", `${jobs.length} transcription attempts used`);
     }
@@ -406,7 +491,7 @@ async function decideAndAct(args: {
         await enqueue({
           kind: "TRAINING_TRANSCRIBE_VIDEO",
           clubId,
-          payload: { jobId: result.jobId },
+          payload: { jobId: result.jobId, nonBillable: inferenceMode === "MOCK" },
           maxAttempts: 2,
           idempotencyKey: `training-transcribe:${result.jobId}`,
         });
@@ -425,61 +510,20 @@ async function decideAndAct(args: {
   }
 
   // ── Generation leg ───────────────────────────────────────────────
-  const runs = await prisma.trainingQuestionAiGenerationRun.findMany({
-    where: { clubId, courseVersionId, requestedAt: { gte: auth.authorizedAt } },
-    select: {
-      id: true,
-      executionStatus: true,
-      executionErrorCode: true,
-      requestedAt: true,
-      leaseExpiresAt: true,
-      assessmentPlanJson: true,
-    },
-    orderBy: { requestedAt: "asc" },
-  });
-  const liveRun = runs.find((r) => LIVE_STATES.includes(r.executionStatus));
-  if (liveRun) {
-    const stalled = isStalled(
-      { state: liveRun.executionStatus, requestedAt: liveRun.requestedAt, leaseExpiresAt: liveRun.leaseExpiresAt },
-      now,
-    );
-    if (!stalled) return { action: "GENERATION_IN_PROGRESS", detail: "live run", generationRunId: liveRun.id };
-    const retired = await prisma.trainingQuestionAiGenerationRun.updateMany({
-      where: {
-        id: liveRun.id,
-        clubId,
-        OR: [
-          { executionStatus: { in: ["REQUESTED", "QUEUED"] }, requestedAt: { lt: new Date(now.getTime() - MAX_QUEUE_WAIT_MS) } },
-          { executionStatus: "RUNNING", leaseExpiresAt: { lt: new Date(now.getTime() - LEASE_GRACE_MS) } },
-        ],
-      },
-      data: {
-        executionStatus: "FAILED",
-        executionErrorCode: "MODAL_TIMEOUT",
-        executionErrorMessage: "Stalled run superseded by automatic recovery.",
-        completedAt: now,
-        leaseToken: null,
-        leaseExpiresAt: null,
-      },
-    });
-    if (retired.count === 0) {
-      return { action: "GENERATION_IN_PROGRESS", detail: "run resumed on its own", generationRunId: liveRun.id };
-    }
-    // Make the superseded queue entry inert so it can never claim the
-    // replacement run.
-    await prisma.backgroundJob.updateMany({
-      where: {
-        clubId,
-        kind: "TRAINING_GENERATE_QUESTIONS",
-        idempotencyKey: `training-generate:${liveRun.id}`,
-        status: { in: ["QUEUED", "RUNNING"] },
-      },
-      data: { status: "CANCELLED", finishedAt: now },
-    });
-    logger.warn("training.preparation.generation.superseded_stalled", { clubId, courseVersionId, runId: liveRun.id });
-  }
+  // Passes are counted per upload (authorization) and per video. A run
+  // that was still in flight when this upload arrived — and was waited
+  // for by the single-flight check above — belongs to this upload's
+  // workflow: its plan, its outcome and its attempt all count. Without
+  // that, its questions would be ignored and a second full run started.
+  const epochStart = auth.authorizedAt.getTime();
+  const runs = allRuns.filter(
+    (r) =>
+      r.sourceVideoSha256 === version.videoSha256 &&
+      (r.requestedAt.getTime() >= epochStart ||
+        (r.completedAt !== null && r.completedAt.getTime() >= epochStart)),
+  );
 
-  const produced = await loadProducedState(clubId, courseVersionId);
+  const produced = await loadProducedState(clubId, courseVersionId, version.videoSha256);
   const missingCheckpoints = Math.max(0, target.checkpointCount - produced.producedCheckpoints);
   const missingFinal = Math.max(0, target.finalCount - produced.producedFinal);
   if (missingCheckpoints === 0 && missingFinal === 0) {
@@ -520,13 +564,25 @@ async function decideAndAct(args: {
     );
   }
 
+  if (dispatchBlock) return refuseDispatch(dispatchBlock);
+
   // First pass, or a retry after a pass that produced nothing: the full
   // plan. Otherwise a repair pass for exactly what is missing.
+  //
+  // The plan to repair against is the fullest plan that ever completed
+  // for THIS video — whichever upload started it. Questions that already
+  // exist are never asked for again, so re-uploading the same video
+  // after a partial result tops it up instead of doubling it.
   const basePlan =
-    runs
-      .filter((r) => r.executionStatus === "COMPLETED")
+    allRuns
+      .filter((r) => r.executionStatus === "COMPLETED" && r.sourceVideoSha256 === version.videoSha256)
       .map((r) => parsePlan(r.assessmentPlanJson))
-      .find((p): p is AssessmentPlanV1 => p !== null) ?? null;
+      .filter((p): p is AssessmentPlanV1 => p !== null)
+      .reduce<AssessmentPlanV1 | null>(
+        (best, p) =>
+          best === null || p.proposedCheckpointGroups.length > best.proposedCheckpointGroups.length ? p : best,
+        null,
+      );
   const unfilledGroupIds = basePlan
     ? basePlan.proposedCheckpointGroups
         .filter((g) => !produced.filledGroupIds.has(g.id))
@@ -575,7 +631,7 @@ async function decideAndAct(args: {
         }),
       });
       return {
-        action: "REPAIR_ENQUEUED",
+        action: result.idempotent ? "GENERATION_IN_PROGRESS" : "REPAIR_ENQUEUED",
         detail: `missing ${unfilledGroupIds.length} checkpoint and ${missingFinal} final questions`,
         generationRunId: result.generationRunId,
       };

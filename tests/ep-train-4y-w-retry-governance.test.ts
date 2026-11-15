@@ -100,13 +100,18 @@ beforeEach(async () => {
   // Hybrid path requires fingerprint + HMAC envs + proxy key/secret
   // to satisfy modalGenerateCredentialsPresent + resolveModalCredentials.
   process.env.MODAL_HYBRID_ENABLED = "1";
+  // 4Y-BF: provider calls are refused unless this is set explicitly.
+  process.env.TRAINING_BILLABLE_INFERENCE = "enabled";
   process.env.MODAL_KEY = "test-proxy-key";
   process.env.MODAL_SECRET = "test-proxy-secret";
   process.env.MODAL_SPECTRE_HMAC_KEY = "x".repeat(40);
   process.env.MODAL_SPECTRE_RESPONSE_HMAC_KEY = "x".repeat(40);
   process.env.SPECTRE_PILOT_AUTH_FINGERPRINT_SECRET = "y".repeat(40);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete process.env.TRAINING_BILLABLE_INFERENCE;
+});
 
 describe("EP-TRAIN-4Y-W §6 retry governance", () => {
   it("retryable Modal 500 (no signed headers) → handler THROWS so BackgroundJob reschedules", async () => {

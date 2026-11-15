@@ -102,13 +102,18 @@ beforeEach(async () => {
   await resetDb();
   process.env.MODAL_GENERATE_URL = URL;
   process.env.MODAL_HYBRID_ENABLED = "1";
+  // 4Y-BF: provider calls are refused unless this is set explicitly.
+  process.env.TRAINING_BILLABLE_INFERENCE = "enabled";
   process.env.MODAL_KEY = "k";
   process.env.MODAL_SECRET = "s";
   process.env.MODAL_SPECTRE_HMAC_KEY = "x".repeat(40);
   process.env.MODAL_SPECTRE_RESPONSE_HMAC_KEY = "x".repeat(40);
   process.env.SPECTRE_PILOT_AUTH_FINGERPRINT_SECRET = "y".repeat(40);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete process.env.TRAINING_BILLABLE_INFERENCE;
+});
 
 describe("EP-TRAIN-4Y-X §5.5 cancellation prevents queued work from reaching Modal", () => {
   it("cancel before claim → worker handler's claim returns null; no fetch to Modal", async () => {

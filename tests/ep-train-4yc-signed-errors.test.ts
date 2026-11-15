@@ -40,6 +40,8 @@ function fixedClock(nowMs: number = 1_765_000_000_000): Clock {
 
 function env() {
   return {
+    // 4Y-BF: provider calls are refused unless this is set explicitly.
+    TRAINING_BILLABLE_INFERENCE: "enabled",
     MODAL_KEY: "k",
     MODAL_SECRET: "s",
     MODAL_SPECTRE_HMAC_KEY: HMAC_KEY,

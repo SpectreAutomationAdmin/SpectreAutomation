@@ -70,7 +70,8 @@ describe("EP-TRAIN-4Y-BD §3 — CP prompt employee-facing text purity", () => {
   });
 
   it("CP prompt frames the bracketed tag as internal metadata for sourceSegmentIds only", () => {
-    expect(cpSrc).toMatch(/INTERNAL METADATA for the `sourceSegmentIds` JSON field ONLY/);
+    // The prompt lives in a template literal, so its backticks are escaped in the source.
+    expect(cpSrc).toMatch(/INTERNAL METADATA for the \\?`sourceSegmentIds\\?` JSON field ONLY/);
     expect(cpSrc).toMatch(/Cite 1-3 tags per question; do NOT list the whole passage set/);
   });
 
@@ -80,7 +81,7 @@ describe("EP-TRAIN-4Y-BD §3 — CP prompt employee-facing text purity", () => {
   });
 
   it("CP prompt still carries the explanation rule and the application / judgment preference", () => {
-    expect(cpSrc).toMatch(/`explanation` is grounded context for WHY the correct option is correct/);
+    expect(cpSrc).toMatch(/\\?`explanation\\?` is grounded context for WHY the correct option is correct/);
     expect(cpSrc).toMatch(/Do NOT append the explanation to the stem/);
     expect(cpSrc).toMatch(/tests APPLICATION or JUDGMENT/);
   });

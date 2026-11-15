@@ -135,11 +135,10 @@ export interface PreparationProgress {
 
 // ─── Health thresholds (§6 stall detection) ─────────────────────────
 
-/** QUEUED for longer than this → BLOCKED (queue-stuck classification). */
-export const MAX_QUEUE_WAIT_MS = 5 * 60 * 1000;
-
-/** RUNNING past the lease TTL without a refresh → BLOCKED (dead worker). */
-export const LEASE_GRACE_MS = 60 * 1000;
+// Defined once in generation/stall-policy.ts and shared with the
+// orchestrator and the single-flight claim.
+import { MAX_QUEUE_WAIT_MS, LEASE_GRACE_MS } from "./generation/stall-policy";
+export { MAX_QUEUE_WAIT_MS, LEASE_GRACE_MS };
 
 // ─── Computation ────────────────────────────────────────────────────
 

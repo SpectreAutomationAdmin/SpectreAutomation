@@ -12,6 +12,9 @@
 export type ModalContractFailureCode =
   // Env / credential surface
   | "CREDENTIAL_ABSENT"
+  // EP-TRAIN-4Y-BF — the environment has not enabled billable
+  // inference; the call was refused before any provider I/O.
+  | "BILLABLE_INFERENCE_LOCKED"
   // Transport
   | "MODAL_HTTP_ERROR"
   | "MODAL_TIMEOUT"
@@ -45,6 +48,7 @@ export type ModalContractFailureCode =
  *  Documented alongside the implementation plan §4.5. */
 export const NON_RETRYABLE_CODES: ReadonlySet<ModalContractFailureCode> = new Set([
   "CREDENTIAL_ABSENT",
+  "BILLABLE_INFERENCE_LOCKED",
   "REQUEST_HMAC_INVALID",
   "REQUEST_BODY_INVALID",
   "MODAL_HMAC_INVALID",

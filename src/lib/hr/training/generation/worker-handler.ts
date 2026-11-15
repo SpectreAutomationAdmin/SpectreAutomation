@@ -19,6 +19,7 @@ import { logger } from "@/lib/observability/logger";
 import { randomBytes } from "node:crypto";
 import {
   claimNextGenerationRun,
+  type GenerationClaimResult,
   recordGenerationCompleted,
   recordGenerationFailed,
   renewGenerationLease,
@@ -74,7 +75,7 @@ import {
   type QuestionCandidate,
 } from "./dedup";
 import { canonicalise, sha256Hex } from "../ai-review/content-hash";
-import { buildMockProposals } from "./mock-inference";
+import { buildMockProposals, withFormattingDefects } from "./mock-inference";
 import {
   isMockInferenceAllowed,
   readPipelineAuthorization,
@@ -87,11 +88,15 @@ import {
   checkEmployeeFacingText,
   codesForAudit,
 } from "../ai-review/question-text-sanitizer";
+import { type NormalisationTransform } from "../ai-review/question-text-normaliser";
+// EP-TRAIN-4Y-BF §3 — whole-proposal normalisation (stem + options +
+// explanation). Runs BEFORE the sanitiser; never replaces it.
 import {
-  normaliseQuestionStem,
-  normalisationAuditSummary,
-  type NormalisationTransform,
-} from "../ai-review/question-text-normaliser";
+  normaliseProposal,
+  proposalNormalisationRuleSummary,
+  type ProposalTransform,
+} from "../ai-review/proposal-normaliser";
+import { audit } from "@/lib/audit";
 import {
   buildRetainedRejectedProposal,
   type RetainedRejectedProposal,
@@ -101,6 +106,7 @@ import {
   issuePilotAuthorization,
   ModalContractError,
   ENV_FINGERPRINT_SECRET,
+  isBillableInferenceEnabled,
 } from "../modal-shared";
 // EP-TRAIN-4Y-Z §3 — per-pilot cumulative spending guard. See the
 // module header in pilot-budget-guard.ts for the three-layer spending
@@ -135,13 +141,20 @@ export interface HandlerDeps {
 }
 
 export async function handleGenerateJob(
-  args: { readonly runId: string },
+  args: {
+    readonly runId: string;
+    /** EP-TRAIN-4Y-BF — set on the queue entry when the version was
+     *  non-billable at enqueue time. It can only make a run
+     *  non-billable; the database is consulted regardless. */
+    readonly nonBillable?: boolean;
+  },
   deps: HandlerDeps = {},
 ): Promise<{ status: "COMPLETED" | "FAILED" | "SKIPPED" }> {
   const db = deps.prisma ?? defaultPrisma;
 
-  // Claim (or reclaim).
-  const claim = await claimNextGenerationRun({ prisma: db });
+  // Claim (or reclaim after a lease expiry) exactly the run this queue
+  // entry was enqueued for. A queue entry never claims another run.
+  const claim = await claimNextGenerationRun({ prisma: db, runId: args.runId });
   if (!claim || claim.runId !== args.runId) {
     logger.info("training.generation.worker.skipped", {
       runId: args.runId,
@@ -150,6 +163,35 @@ export async function handleGenerateJob(
     return { status: "SKIPPED" };
   }
 
+  try {
+    return await processClaimedGenerationRun(args, deps, db, claim);
+  } catch (err) {
+    // EP-TRAIN-4Y-BF — anything unexpected after the claim (a database
+    // error while loading the plan's context, for example) must not
+    // leave the run leased to a handler that has already given up: it
+    // would sit untouched until the lease expired. Hand it back so the
+    // queue's retry can claim it again. (A deliberate retryable failure
+    // has already released the run; this second release is then a
+    // no-op, because the lease token no longer matches.)
+    await safeFail(
+      db,
+      claim,
+      "WORKER_ERROR",
+      (err as Error)?.message ?? String(err),
+      true,
+    );
+    throw err;
+  }
+}
+
+/** Everything after the claim. May throw; `handleGenerateJob` then
+ *  releases the run for a retry. */
+async function processClaimedGenerationRun(
+  args: { readonly runId: string; readonly nonBillable?: boolean },
+  deps: HandlerDeps,
+  db: PrismaClient,
+  claim: GenerationClaimResult,
+): Promise<{ status: "COMPLETED" | "FAILED" | "SKIPPED" }> {
   // Parse + revalidate the plan. The service already validated at
   // request time; we re-validate here as defence in depth.
   let plan: AssessmentPlanV1;
@@ -278,12 +320,34 @@ export async function handleGenerateJob(
   // Sticky per version and fail-closed: a version whose authorization
   // asked for MOCK never reaches Modal, even if the environment gate is
   // missing (the run fails instead of falling through to billable GPU).
-  const inferenceMode = await resolveInferenceModeForVersion(
-    { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
-    { prisma: db },
-  );
+  //
+  // EP-TRAIN-4Y-BF — the mode is resolved from durable state (test
+  // execution identity, see test-execution-identity.ts) at execution
+  // time, so it holds across queue dispatch, retries and reclaims. The
+  // queue entry's own flag can only ADD the non-billable verdict.
+  const runtimeEnv = deps.env ?? process.env;
+  const inferenceMode: "LIVE" | "MOCK" =
+    args.nonBillable === true
+      ? "MOCK"
+      : await resolveInferenceModeForVersion(
+          { clubId: claim.clubId, courseVersionId: claim.courseVersionId },
+          { prisma: db, env: runtimeEnv },
+        );
   const useMockInference = inferenceMode === "MOCK";
-  if (useMockInference && !isMockInferenceAllowed(deps.env ?? process.env)) {
+  if (!useMockInference && !isBillableInferenceEnabled(runtimeEnv)) {
+    // A real version in an environment that has not enabled billable
+    // inference. Terminal; never retried; nothing was sent anywhere.
+    await safeFail(
+      db,
+      claim,
+      "BILLABLE_INFERENCE_LOCKED",
+      "Billable inference is not enabled in this environment; question generation was refused.",
+      false,
+      0,
+    );
+    return { status: "FAILED" };
+  }
+  if (useMockInference && !isMockInferenceAllowed(runtimeEnv)) {
     await safeFail(
       db,
       claim,
@@ -349,6 +413,16 @@ export async function handleGenerateJob(
       runId: claim.runId, clubId: claim.clubId, courseVersionId: claim.courseVersionId,
       proposedChunkCount: plan.proposedFinalAssessmentChunks?.length ?? 0,
     });
+  }
+
+  // EP-TRAIN-4Y-BF — the course-title call above can take minutes. Renew
+  // the lease before the first question call, so claim → first renewal
+  // can never span two slow provider calls back to back.
+  try {
+    await renewGenerationLease(claim.runId, claim.leaseToken, { prisma: db });
+  } catch {
+    // Superseded or cancelled meanwhile.
+    return { status: "FAILED" };
   }
 
   // Fold metadata Modal time into the attempt's cumulative cost.
@@ -498,6 +572,22 @@ export async function handleGenerateJob(
       appliedTransforms: NormalisationTransform[];
       refusedForSafety: boolean;
       refusalReason?: string;
+      // EP-TRAIN-4Y-BF §3 — whole-proposal normalisation. Present
+      // only when a transform was applied or skipped. `original` and
+      // `normalised` keep BOTH versions of every employee-facing
+      // field in this restricted (admin-only) diagnostic record.
+      proposalTransforms?: ProposalTransform[];
+      skipped?: Array<{ field: string; reason: string }>;
+      original?: {
+        questionText: string;
+        options: Array<{ text: string; isCorrect: boolean }>;
+        explanation: string | null;
+      };
+      normalised?: {
+        questionText: string;
+        options: Array<{ text: string; isCorrect: boolean }>;
+        explanation: string | null;
+      };
     }>;
     // EP-TRAIN-4Y-AR §2 — tenant-scoped, admin-access-only
     // retention of rejected proposals so future diagnostics can
@@ -510,6 +600,15 @@ export async function handleGenerateJob(
     modalElapsedMs: number;
     modalPromptTokens: number;
     modalOutputTokens: number;
+  }> = [];
+  // EP-TRAIN-4Y-BF §3 — one entry per proposal the normaliser changed
+  // or refused, for the audit row written when the run ends.
+  const normalisationAudit: Array<{
+    group: string;
+    proposalIndex: number;
+    rules: string;
+    refusalReason: string | null;
+    accepted: boolean;
   }> = [];
   let shortfallCount = 0;
   let dedupDropCount = 0;
@@ -741,6 +840,7 @@ export async function handleGenerateJob(
               windowSegmentIds,
               segments: eligibleSegments,
               usedSegmentIndices: mockUsedSegmentIndices,
+              formattingDefects: mockOptions.fault === "FORMATTING_DEFECTS",
             }),
             elapsedMs: { coldBoot: 0, generate: 0 },
             tokenCounts: { prompt: 0, output: 0 },
@@ -852,16 +952,68 @@ export async function handleGenerateJob(
         // violation) is a safety-fail — the original text is handed
         // unchanged to the sanitiser. Options, correct-answer,
         // explanation, provenance are NEVER touched.
-        const norm = normaliseQuestionStem({ questionText: p.questionText });
-        const textForSanitiser = norm.ok ? norm.normalisedText : p.questionText;
+        //
+        // EP-TRAIN-4Y-BF §3 — extended to the whole proposal: source-
+        // reference phrases anywhere in the stem or explanation,
+        // internal segment references in the explanation, and
+        // "(Correct Answer: …)" annotations in options. Deterministic,
+        // deletion-only, and all-or-nothing: on any conflict or
+        // malformed result the ORIGINAL proposal goes to the sanitiser
+        // unchanged. sourceSegmentIds and every isCorrect flag are
+        // never touched. Every validator below still runs.
+        const originalFields = {
+          questionText: p.questionText,
+          options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+          explanation: p.explanation ?? null,
+        };
+        const proposalNorm = normaliseProposal({
+          ...originalFields,
+          sourceSegmentIds: p.sourceSegmentIds,
+        });
+        const norm = proposalNorm.stem;
+        const textForSanitiser = proposalNorm.questionText;
+        const wasNormalised = proposalNorm.ok && proposalNorm.transforms.length > 0;
+        // `np` is the proposal every later stage sees.
+        const np: ModalGenerateProposal = wasNormalised
+          ? {
+              ...p,
+              questionText: proposalNorm.questionText,
+              options: p.options.map((o, oi) => ({ ...o, text: proposalNorm.options[oi].text })),
+              explanation: proposalNorm.explanation ?? p.explanation,
+            }
+          : p;
+        const recordTrace = wasNormalised || proposalNorm.refusedForSafety || proposalNorm.skipped.length > 0;
         diag.normalisationTrace.push({
           proposalIndex: pi,
-          beforeText: norm.originalText.slice(0, 240),
-          afterText: norm.normalisedText.slice(0, 240),
-          appliedTransforms: [...norm.transforms],
-          refusedForSafety: norm.refusedForSafety,
-          refusalReason: norm.refusalReason,
+          beforeText: p.questionText.slice(0, 240),
+          afterText: textForSanitiser.slice(0, 240),
+          appliedTransforms: norm.ok ? [...norm.transforms] : [],
+          refusedForSafety: proposalNorm.refusedForSafety,
+          refusalReason: proposalNorm.refusalReason,
+          ...(recordTrace
+            ? {
+                proposalTransforms: [...proposalNorm.transforms],
+                skipped: proposalNorm.skipped.map((sk) => ({ field: sk.field, reason: sk.reason })),
+                original: originalFields,
+                normalised: {
+                  questionText: proposalNorm.questionText,
+                  options: proposalNorm.options.map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
+                  explanation: proposalNorm.explanation,
+                },
+              }
+            : {}),
         });
+        const auditEntry =
+          wasNormalised || proposalNorm.refusedForSafety
+            ? {
+                group: g.id,
+                proposalIndex: pi,
+                rules: proposalNormalisationRuleSummary(proposalNorm),
+                refusalReason: proposalNorm.refusalReason ?? null,
+                accepted: false,
+              }
+            : null;
+        if (auditEntry) normalisationAudit.push(auditEntry);
 
         // AR §2 — retention helper: build a retained record for a
         // rejection at this stage (stem = normalised when the
@@ -880,7 +1032,7 @@ export async function handleGenerateJob(
               },
               normalisedQuestionText: textForSanitiser,
               normalisationTransforms: [...norm.transforms],
-              normalisationRefusalReason: norm.refusalReason ?? null,
+              normalisationRefusalReason: proposalNorm.refusalReason ?? norm.refusalReason ?? null,
               findingCodes,
               rejectedAt: new Date(),
               generationRunId: claim.runId,
@@ -902,8 +1054,8 @@ export async function handleGenerateJob(
         // untouched — options, explanation, mid-sentence refs.
         const san = checkEmployeeFacingText({
           questionText: textForSanitiser,
-          options: p.options.map((o) => ({ text: o.text })),
-          explanation: p.explanation ?? null,
+          options: np.options.map((o) => ({ text: o.text })),
+          explanation: np.explanation ?? null,
         });
         if (!san.ok) {
           diag.sanitizerDroppedCount++;
@@ -917,7 +1069,7 @@ export async function handleGenerateJob(
           // the normaliser safety-gated AND the sanitiser then
           // failed on content the normaliser would have attempted
           // to clean; otherwise ordinary SANITISER stage.
-          retainRejection(norm.refusedForSafety ? "NORMALISATION_REFUSED" : "SANITISER", findingCodes);
+          retainRejection(proposalNorm.refusedForSafety ? "NORMALISATION_REFUSED" : "SANITISER", findingCodes);
           continue;
         }
 
@@ -930,8 +1082,8 @@ export async function handleGenerateJob(
         const { checkQuestionStructure } = await import("@/lib/hr/training/ai-review/question-structure-validator");
         const struct = checkQuestionStructure({
           questionText: textForSanitiser,
-          options: p.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
-          explanation: p.explanation ?? null,
+          options: np.options.map((o) => ({ text: o.text, isCorrect: !!o.isCorrect })),
+          explanation: np.explanation ?? null,
         });
         if (!struct.ok) {
           diag.sanitizerDroppedCount++;
@@ -954,10 +1106,10 @@ export async function handleGenerateJob(
         // ALL untouched. The audit trail in diag.normalisationTrace
         // preserves the original for forensics.
         const canonicalBody = {
-          questionType: p.questionType,
+          questionType: np.questionType,
           questionText: textForSanitiser,
-          options: p.options.map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
-          explanation: p.explanation,
+          options: np.options.map((o) => ({ text: o.text, isCorrect: o.isCorrect })),
+          explanation: np.explanation,
           sourceSegmentIds: [...p.sourceSegmentIds],
         };
         const candidateContentHash = sha256Hex(canonicalise(canonicalBody));
@@ -993,8 +1145,8 @@ export async function handleGenerateJob(
         const candidate: QuestionCandidate = {
           id: candidateContentHash,
           questionText: textForSanitiser,
-          options: p.options,
-          explanation: p.explanation,
+          options: np.options,
+          explanation: np.explanation,
           destination: g.id,
           sourceSegmentIds: p.sourceSegmentIds,
         };
@@ -1012,7 +1164,10 @@ export async function handleGenerateJob(
         }
 
         // AQ: persisted draft body carries the NORMALISED stem.
-        const persistedProposal = { ...p, questionText: textForSanitiser };
+        // BF: and the normalised options + explanation. Provenance
+        // (sourceSegmentIds) is the model's, unchanged.
+        const persistedProposal = { ...np, questionText: textForSanitiser };
+        if (auditEntry) auditEntry.accepted = true;
         generatedDrafts.push({
           group: g.id,
           kind: g.kind,
@@ -1036,6 +1191,7 @@ export async function handleGenerateJob(
       const code: GenerationFailureCode = (contractCode as GenerationFailureCode | null) ?? "MODAL_HTTP_ERROR";
       const NON_RETRYABLE: ReadonlySet<string> = new Set([
         "CREDENTIAL_ABSENT",
+        "BILLABLE_INFERENCE_LOCKED",
         "MODAL_HMAC_INVALID",
         "REQUEST_HMAC_INVALID",
         "REQUEST_BODY_INVALID",
@@ -1093,7 +1249,33 @@ export async function handleGenerateJob(
     }
   }
 
+  // EP-TRAIN-4Y-BF §3 — audit what the normaliser did in this run. The
+  // full before/after text stays in the restricted per-group
+  // diagnostics on the run row; the audit row carries rule ids only.
+  const auditNormalisation = async (): Promise<void> => {
+    if (normalisationAudit.length === 0) return;
+    const byRule: Record<string, number> = {};
+    for (const entry of normalisationAudit) {
+      for (const rule of entry.rules.split(",").filter(Boolean)) byRule[rule] = (byRule[rule] ?? 0) + 1;
+    }
+    await audit(null, {
+      action: "hr.training.generation.normalisation_applied",
+      entityType: "TrainingQuestionAiGenerationRun",
+      entityId: claim.runId,
+      clubId: claim.clubId,
+      after: {
+        courseVersionId: claim.courseVersionId,
+        proposalsNormalised: normalisationAudit.filter((e) => e.refusalReason === null).length,
+        proposalsRefused: normalisationAudit.filter((e) => e.refusalReason !== null).length,
+        normalisedAndAccepted: normalisationAudit.filter((e) => e.accepted).length,
+        byRule,
+        proposals: normalisationAudit,
+      },
+    });
+  };
+
   if (generatedDrafts.length === 0) {
+    await auditNormalisation();
     // EP-TRAIN-4Y-AH §5 — persist durable diagnostics BEFORE safeFail
     // transitions the row out of RUNNING. The AF slice left
     // shortfallReasonJson NULL on INSUFFICIENT_EVIDENCE, so operators
@@ -1130,6 +1312,25 @@ export async function handleGenerateJob(
       });
     }
     await safeFail(db, claim, "INSUFFICIENT_EVIDENCE", "No grounded proposals produced.", false, totalInferenceMs);
+    return { status: "FAILED" };
+  }
+
+  // EP-TRAIN-4Y-BF §2 — fencing. Renew the lease immediately before the
+  // first durable write of results. If this run was superseded,
+  // cancelled or re-claimed while the model was working, the token no
+  // longer matches and NOTHING is written: a stale worker can never add
+  // questions beside the run that replaced it. After a successful
+  // renewal the run cannot be superseded for a full lease period, which
+  // is far longer than the writes below take.
+  try {
+    await renewGenerationLease(claim.runId, claim.leaseToken, { prisma: db });
+  } catch {
+    logger.warn("training.generation.worker.fenced_before_persist", {
+      runId: claim.runId,
+      clubId: claim.clubId,
+      courseVersionId: claim.courseVersionId,
+      discardedDrafts: generatedDrafts.length,
+    });
     return { status: "FAILED" };
   }
 
@@ -1318,6 +1519,9 @@ export async function handleGenerateJob(
       },
       { prisma: db },
     );
+    // The run is complete and its questions are stored: audit what the
+    // normaliser changed.
+    await auditNormalisation();
     // Internal cost record for this run (operators only).
     logger.info("training.generation.worker.cost_report", {
       runId: claim.runId,
@@ -1343,10 +1547,12 @@ async function mockProposalsForGroup(args: {
   readonly windowSegmentIds: readonly number[];
   readonly segments: readonly { readonly segmentIndex: number; readonly text: string }[];
   readonly usedSegmentIndices: Set<number>;
+  readonly formattingDefects: boolean;
 }): Promise<ModalGenerateProposal[]> {
   if (args.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, args.delayMs));
   if (args.drop) return [];
-  return buildMockProposals(args);
+  const proposals = buildMockProposals(args);
+  return args.formattingDefects ? withFormattingDefects(proposals) : proposals;
 }
 
 function formatTimestamp(sec: number): string {

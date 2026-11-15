@@ -37,6 +37,11 @@ import {
   recordProcessingAuthorization,
 } from "@/lib/hr/training/generation/processing-authorization";
 import { advancePreparation } from "@/lib/hr/training/preparation-orchestrator";
+import {
+  markVersionNonBillable,
+  resolveTestScope,
+  type TestScope,
+} from "@/lib/hr/training/generation/test-execution-identity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -147,24 +152,83 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const durationRaw = fd.get("durationSec");
   const durationSec = typeof durationRaw === "string" && durationRaw.length > 0 ? Number(durationRaw) : null;
 
-  // Staging-only test controls (never honoured unless the environment
-  // explicitly allows mock inference). Refused BEFORE anything is
-  // stored, so a test can never fall through to billable processing.
-  const mockRequested = req.headers.get("x-spectre-training-inference") === "mock";
-  const holdRequested = req.headers.get("x-spectre-training-hold") === "1";
-  if ((mockRequested || holdRequested) && !isMockInferenceAllowed()) {
+  // EP-TRAIN-4Y-BF — test execution identity. Whether an upload is a
+  // test is decided by WHO is authenticated (a principal the server
+  // recognises as a test principal), never by a request header. A test
+  // principal's upload is always non-billable; everyone else's is a
+  // real upload. Every mismatch is refused BEFORE anything is stored:
+  //   - a test principal reaching for a real manager's course (it
+  //     would leave that course permanently simulated-only);
+  //   - a real account uploading into a test course (it would be
+  //     answered with simulated content);
+  //   - a test principal where simulated processing is not allowed;
+  //   - test controls sent by anyone who is not a test principal.
+  let scope: TestScope;
+  try {
+    scope = await resolveTestScope(principal, { clubId, courseVersionId: params.id });
+  } catch {
+    // Could not establish whose course this is: store nothing.
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
+  }
+  if (scope === "TEST_PRINCIPAL_ON_REAL_COURSE") {
     return NextResponse.json(
-      { error: "Test controls are not enabled in this environment." },
+      { error: "Test accounts can only upload to courses they created." },
       { status: 409 },
     );
   }
-  const mockDelayMs = Number(req.headers.get("x-spectre-training-mock-delay-ms") ?? "0") || 0;
+  if (scope === "REAL_PRINCIPAL_ON_TEST_COURSE") {
+    return NextResponse.json(
+      {
+        error:
+          "This course was created by automated testing and cannot take a real upload. Please create a new course.",
+      },
+      { status: 409 },
+    );
+  }
+  const TEST_CONTROL_HEADERS = [
+    "x-spectre-training-inference",
+    "x-spectre-training-hold",
+    "x-spectre-training-mock-delay-ms",
+    "x-spectre-training-mock-fault",
+  ] as const;
+  const testExecution = scope === "TEST";
+  const sentTestControl = TEST_CONTROL_HEADERS.some((h) => req.headers.get(h) !== null);
+  if (testExecution && !isMockInferenceAllowed()) {
+    return NextResponse.json(
+      { error: "Test accounts cannot upload in this environment." },
+      { status: 409 },
+    );
+  }
+  if (!testExecution && sentTestControl) {
+    return NextResponse.json(
+      { error: "Test controls are only available to test accounts." },
+      { status: 409 },
+    );
+  }
+  // The controls below only tune a simulated run (pace, one injected
+  // fault, hold). None of them can select real processing.
+  const holdRequested = testExecution && req.headers.get("x-spectre-training-hold") === "1";
+  const mockDelayMs = testExecution
+    ? Number(req.headers.get("x-spectre-training-mock-delay-ms") ?? "0") || 0
+    : 0;
+  const requestedFault = testExecution ? req.headers.get("x-spectre-training-mock-fault") : null;
   const mockFault =
-    req.headers.get("x-spectre-training-mock-fault") === "drop-first-checkpoint"
+    requestedFault === "drop-first-checkpoint"
       ? ("DROP_FIRST_CHECKPOINT" as const)
-      : ("NONE" as const);
+      : requestedFault === "formatting-defects"
+        ? ("FORMATTING_DEFECTS" as const)
+        : ("NONE" as const);
 
   try {
+    if (testExecution) {
+      // Durable, written first: from this point the version can never
+      // reach a billable provider, whatever happens to this request.
+      await markVersionNonBillable(principal, {
+        clubId,
+        courseVersionId: params.id,
+        reason: "video uploaded by a test principal",
+      });
+    }
     const buf = Buffer.from(await entry.arrayBuffer());
     const result = await uploadTrainingVideo(principal, params.id, {
       bytes: buf,
@@ -188,7 +252,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           courseVersionId: params.id,
           operation: "GENERATE_FULL",
           source: "UPLOAD",
-          inferenceMode: mockRequested ? "MOCK" : "LIVE",
+          inferenceMode: testExecution ? "MOCK" : "LIVE",
           mockDelayMs,
           mockFault,
         });

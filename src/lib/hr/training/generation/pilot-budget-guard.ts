@@ -199,6 +199,10 @@ export async function loadPriorPilotCostMicros(
 }
 
 const LIVE_STATES = ["REQUESTED", "QUEUED", "RUNNING"];
+/** Start of the message `retireStalledGenerationRuns` writes
+ *  (generation-service.ts `SUPERSEDED_RUN_MESSAGE`). Kept as a literal
+ *  here so this module stays free of service imports. */
+const SUPERSEDED_RUN_MESSAGE_PREFIX = "Stalled run superseded";
 
 /** Billable model calls a plan makes: course metadata + one per
  *  checkpoint event + one per final-assessment chunk (or one call when
@@ -269,13 +273,30 @@ export async function loadCourseProcessingCostMicros(
       courseVersionId: args.courseVersionId,
       ...(args.excludeRunId ? { id: { not: args.excludeRunId } } : {}),
     },
-    select: { executionStatus: true, inferenceMs: true, assessmentPlanJson: true },
+    select: {
+      executionStatus: true,
+      inferenceMs: true,
+      assessmentPlanJson: true,
+      startedAt: true,
+      executionErrorMessage: true,
+    },
   });
   let total = 0;
   for (const r of runs) {
-    total += LIVE_STATES.includes(r.executionStatus)
-      ? reservationForLiveRun(r.assessmentPlanJson, r.inferenceMs)
-      : msToCostMicros(r.inferenceMs ?? 0);
+    // EP-TRAIN-4Y-BF — a run that was RUNNING when it was retired as
+    // abandoned (its worker died, or was fenced out) has no recorded
+    // cost, but the provider may well have worked. Its real cost is
+    // unknown, so it keeps counting at its worst case: the ceiling must
+    // never be under-counted.
+    const retiredMidFlight =
+      r.executionStatus === "FAILED" &&
+      (r.inferenceMs ?? 0) === 0 &&
+      r.startedAt != null &&
+      (r.executionErrorMessage ?? "").startsWith(SUPERSEDED_RUN_MESSAGE_PREFIX);
+    total +=
+      LIVE_STATES.includes(r.executionStatus) || retiredMidFlight
+        ? reservationForLiveRun(r.assessmentPlanJson, r.inferenceMs)
+        : msToCostMicros(r.inferenceMs ?? 0);
   }
   const jobs = await db.trainingTranscriptionJob.findMany({
     where: {

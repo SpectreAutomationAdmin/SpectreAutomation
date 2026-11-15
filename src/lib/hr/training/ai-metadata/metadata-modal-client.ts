@@ -26,6 +26,7 @@ import {
   verifyResponseSignature,
   CONTRACT_VERSION,
   SYSTEM_CLOCK,
+  isBillableInferenceEnabled,
   type Clock,
 } from "../modal-shared";
 import {
@@ -56,6 +57,14 @@ export async function callModalMetadata(
   input: MetadataClientInput,
   opts: MetadataClientOptions = {},
 ): Promise<MetadataResponseBody> {
+  // EP-TRAIN-4Y-BF — fail-closed: refused before credentials are read
+  // unless this environment has explicitly enabled billable inference.
+  if (!isBillableInferenceEnabled(opts.env ?? process.env)) {
+    throw new MetadataContractError(
+      "CREDENTIAL_ABSENT",
+      "Billable inference is not enabled in this environment; course metadata generation was refused before any provider call.",
+    );
+  }
   const clock = opts.clock ?? SYSTEM_CLOCK;
   const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as typeof fetch);
   // Reuse the generate credentials — same transport, same HMAC key.

@@ -37,7 +37,13 @@ function makePrisma(args: {
     trainingCourseVersion: { findFirst: async () => args.version },
     trainingTranscriptionJob: { findFirst: async () => args.job ?? null },
     trainingTranscriptBuild: { findFirst: async () => args.build ?? null },
-    trainingQuestionAiGenerationRun: { findFirst: async () => args.run ?? null },
+    trainingQuestionAiGenerationRun: {
+      findFirst: async () => args.run ?? null,
+      // 4Y-BE: progress is measured across every run of the version.
+      findMany: async () => (args.run ? [args.run] : []),
+    },
+    // 4Y-BE: upload authorization / halt / completion records.
+    auditLog: { findMany: async () => [], findFirst: async () => null },
     trainingQuestionAiDraft: { findMany: async () => args.drafts ?? [] },
   };
 }
@@ -191,7 +197,7 @@ describe("EP-TRAIN-4Y-BB §5 — preparation-lifecycle outcome", () => {
       ],
     });
     // Different shortfall map: cg-1 for CP, final for FA.
-    (prisma.trainingQuestionAiGenerationRun as { findFirst: () => Promise<Record<string, unknown>> }).findFirst = async () => ({
+    const readyRun = async () => ({
       ...makeRun("COMPLETED"),
       shortfallReasonJson: JSON.stringify({
         dedupDecisions: [
@@ -204,6 +210,13 @@ describe("EP-TRAIN-4Y-BB §5 — preparation-lifecycle outcome", () => {
         ],
       }),
     });
+    // 4Y-BE reads the run both singly and across every run of the version.
+    const runTable = prisma.trainingQuestionAiGenerationRun as unknown as {
+      findFirst: () => Promise<Record<string, unknown>>;
+      findMany: () => Promise<Array<Record<string, unknown>>>;
+    };
+    runTable.findFirst = readyRun;
+    runTable.findMany = async () => [await readyRun()];
     const r = await computePreparationProgress(
       { clubId: CLUB, versionId: VID, now },
       prisma as unknown as never,

@@ -16,6 +16,7 @@ import { prisma as defaultPrisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
 import type { Principal } from "@/lib/rbac";
 import type { PrismaClient } from "@prisma/client";
+import { resolveProcessingIdentity } from "./test-execution-identity";
 
 /** TTL (ms) a single authorization record is considered fresh. Two
  *  hours is long enough to cover the full automated pipeline (upload
@@ -83,8 +84,12 @@ export interface MockInferenceOptions {
    *  leave-and-return while work is in flight. */
   readonly delayMs: number;
   /** DROP_FIRST_CHECKPOINT: the first run returns nothing for its first
-   *  checkpoint, to exercise automatic repair. */
-  readonly fault: "NONE" | "DROP_FIRST_CHECKPOINT";
+   *  checkpoint, to exercise automatic repair.
+   *  FORMATTING_DEFECTS: every simulated question carries the three
+   *  formatting defects real model output showed (source reference in
+   *  the stem, segment pointer in the explanation, answer-key notes in
+   *  the options), to exercise deterministic normalisation end to end. */
+  readonly fault: "NONE" | "DROP_FIRST_CHECKPOINT" | "FORMATTING_DEFECTS";
 }
 
 export interface PipelineAuthorization {
@@ -116,7 +121,12 @@ function parsePipelineAuthorization(row: {
       inferenceMode: after.inferenceMode === "MOCK" ? "MOCK" : "LIVE",
       mock: {
         delayMs: Math.max(0, Math.min(10_000, Math.floor(delay))),
-        fault: after.mockFault === "DROP_FIRST_CHECKPOINT" ? "DROP_FIRST_CHECKPOINT" : "NONE",
+        fault:
+          after.mockFault === "DROP_FIRST_CHECKPOINT"
+            ? "DROP_FIRST_CHECKPOINT"
+            : after.mockFault === "FORMATTING_DEFECTS"
+              ? "FORMATTING_DEFECTS"
+              : "NONE",
       },
     };
   } catch {
@@ -212,7 +222,13 @@ export type PreparationHaltCode =
   | "GENERATION_REJECTED"
   | "NON_RETRYABLE_FAILURE"
   | "AUTHORIZER_LOST_ACCESS"
-  | "MOCK_REQUIRES_EXISTING_TRANSCRIPT";
+  | "MOCK_REQUIRES_EXISTING_TRANSCRIPT"
+  // EP-TRAIN-4Y-BF — this environment has not enabled billable
+  // inference, so a real (non-test) course cannot be processed here.
+  | "BILLABLE_INFERENCE_LOCKED"
+  // EP-TRAIN-4Y-BF — a test-identity (non-billable) version in an
+  // environment that does not allow simulated processing.
+  | "TEST_ISOLATION_UNAVAILABLE";
 
 /** Latest halt recorded at or after `since` (the driving authorization). */
 export async function readPreparationHalt(
@@ -249,34 +265,20 @@ export function isMockInferenceAllowed(env: NodeJS.ProcessEnv = process.env): bo
   return env[MOCK_INFERENCE_ENV_FLAG] === "true";
 }
 
-/** Inference mode a generation run must use: MOCK iff ANY authorization
- *  ever recorded for the version asked for MOCK. Sticky on purpose — a
- *  version created for an orchestration test can never fall through to
- *  billable inference because a later click wrote a LIVE record. */
+/** Inference mode every worker must use for a version: MOCK iff the
+ *  version is non-billable — an authorization asked for MOCK, it carries
+ *  the test-isolation marker, or a server-listed test principal created,
+ *  uploaded to, authorized or requested work for it (see
+ *  test-execution-identity.ts). Sticky on purpose, resolved from durable
+ *  state at execution time, and independent of any request marker: a
+ *  test can never fall through to billable inference because a header
+ *  went missing or a later record said LIVE. */
 export async function resolveInferenceModeForVersion(
   args: { readonly clubId: string; readonly courseVersionId: string },
-  opts: { prisma?: PrismaClient } = {},
+  opts: { prisma?: PrismaClient; env?: NodeJS.ProcessEnv } = {},
 ): Promise<InferenceMode> {
-  const db = opts.prisma ?? defaultPrisma;
-  const rows = await db.auditLog.findMany({
-    where: {
-      clubId: args.clubId,
-      action: "hr.training.generation.authorize",
-      entityType: "TrainingCourseVersion",
-      entityId: args.courseVersionId,
-    },
-    select: { afterJson: true },
-  });
-  for (const row of rows) {
-    if (!row.afterJson) continue;
-    try {
-      const after = JSON.parse(row.afterJson) as { inferenceMode?: unknown };
-      if (after.inferenceMode === "MOCK") return "MOCK";
-    } catch {
-      // Malformed record: ignore, other records still decide.
-    }
-  }
-  return "LIVE";
+  const identity = await resolveProcessingIdentity(args, opts);
+  return identity.nonBillable ? "MOCK" : "LIVE";
 }
 
 /** Return true iff a fresh authorization exists for the (clubId,
