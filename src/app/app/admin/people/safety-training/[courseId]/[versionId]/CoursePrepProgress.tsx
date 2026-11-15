@@ -262,7 +262,9 @@ export default function CoursePrepProgress({ versionId }: Props) {
           setNotice(
             recBody.outcome === "ALREADY_SATISFIED"
               ? "Every planned question already exists. Nothing more to write."
-              : "Writing the missing questions now. This page will update as they are saved.",
+              : recBody.outcome === "ALREADY_RUNNING"
+                ? "Questions are already being written for this course. Nothing else is needed."
+                : "Writing the missing questions now. This page will update as they are saved.",
           );
         } else {
           setNotice(body.message ?? "Preparation is continuing.");
@@ -312,6 +314,16 @@ export default function CoursePrepProgress({ versionId }: Props) {
   // is RUNNING or QUEUED (the server's elapsedMs is a snapshot).
   const currentStage = data.stages.find(
     (s) => s.id === data.overall.currentStageId,
+  );
+  // The stage the Continue button acts on: the first recoverable
+  // stalled stage, even when an earlier stage is still reported as
+  // running (so a slow thumbnail can never hide the button).
+  const actionableStage = data.stages.find(
+    (s) =>
+      (s.status === "BLOCKED" || s.status === "FAILED") &&
+      s.canRecover &&
+      s.id !== "upload" &&
+      s.id !== "ingest",
   );
   const liveElapsedMs =
     currentStage &&
@@ -424,25 +436,20 @@ export default function CoursePrepProgress({ versionId }: Props) {
           objectives gap (no generation run yet). The 4Y-AZ auto-prepare
           orchestration normally covers both automatically; this button
           is the explicit fallback. */}
-      {data.overall.outcome !== "PARTIALLY_GENERATED" &&
-        currentStage &&
-        (currentStage.status === "BLOCKED" || currentStage.status === "FAILED") &&
-        currentStage.canRecover &&
-        currentStage.id !== "upload" &&
-        currentStage.id !== "ingest" && (
+      {data.overall.outcome !== "PARTIALLY_GENERATED" && actionableStage && (
         <div
           className="mt-5 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 p-4"
           data-testid="training-prep-recovery"
         >
           <div className="text-sm text-amber-900">
             <strong className="font-semibold">
-              {currentStage.status === "FAILED"
-                ? `${currentStage.label} stopped.`
-                : `${currentStage.label} has not started.`}
+              {actionableStage.status === "FAILED"
+                ? `${actionableStage.label} stopped.`
+                : `${actionableStage.label} has not started.`}
             </strong>
             {" "}
-            {currentStage.failureReason ??
-              currentStage.blockedReason ??
+            {actionableStage.failureReason ??
+              actionableStage.blockedReason ??
               "Preparation can resume from the last completed stage."}
             {" "}
             Continue preparation resumes from here — the upload and any finished

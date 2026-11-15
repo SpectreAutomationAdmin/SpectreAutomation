@@ -124,11 +124,29 @@ export async function POST(
   const budgetMicros = getPilotBudgetMicros(versionId);
   const sized = sizeForDuration(version.videoDurationSec);
 
-  // Shortfall top-up: always additional spend, always confirmed.
-  if (outcome === "PARTIALLY_GENERATED") {
+  // What would the next step be? (No writes.)
+  const plan =
+    outcome === "PARTIALLY_GENERATED"
+      ? null
+      : await advancePreparation(principal, {
+          clubId,
+          courseVersionId: versionId,
+          trigger: "MANAGER_CONTINUE",
+          dryRun: true,
+        });
+
+  // Shortfall top-up: always additional spend, always confirmed. Also
+  // taken when an earlier run completed but the course is still not
+  // ready (for example a top-up run that failed) — answering "already
+  // finished" there would contradict the page.
+  if (outcome === "PARTIALLY_GENERATED" || plan?.action === "GENERATION_COMPLETE") {
     const shortfall = progress.overall.generationShortfall;
-    const missingCp = shortfall ? Math.max(0, shortfall.checkpointPlanned - shortfall.checkpointProduced) : 0;
-    const missingFa = shortfall ? Math.max(0, shortfall.finalPlanned - shortfall.finalProduced) : 0;
+    const missingCp = shortfall
+      ? Math.max(0, shortfall.checkpointPlanned - shortfall.checkpointProduced)
+      : sized.checkpointCount;
+    const missingFa = shortfall
+      ? Math.max(0, shortfall.finalPlanned - shortfall.finalProduced)
+      : sized.finalCount;
     if (!confirmSpend) {
       const est = estimateSpend({
         checkpointCount: missingCp,
@@ -138,9 +156,11 @@ export async function POST(
       });
       return respond(200, {
         action: "CONFIRMATION_REQUIRED",
-        message:
-          `Spectre will write the ${missingCp} missing checkpoint question(s) and ${missingFa} missing ` +
-          `final-assessment question(s). Existing questions are kept as they are.`,
+        message: shortfall
+          ? `Spectre will write the ${missingCp} missing checkpoint question(s) and ${missingFa} missing ` +
+            `final-assessment question(s). Existing questions are kept as they are.`
+          : `Spectre will write whichever planned questions are still missing (at most ${missingCp} checkpoint ` +
+            `and ${missingFa} final-assessment questions). Existing questions are kept as they are.`,
         estimate: {
           typical: usd(est.typicalMicros),
           maximum: usd(est.maximumMicros),
@@ -160,18 +180,23 @@ export async function POST(
     });
   }
 
-  // PREPARING / BLOCKED / FAILED — find out what the next step is.
-  const plan = await advancePreparation(principal, {
-    clubId,
-    courseVersionId: versionId,
-    trigger: "MANAGER_CONTINUE",
-    dryRun: true,
-  });
+  // PREPARING / BLOCKED / FAILED with no completed run.
+  if (!plan) {
+    return respond(409, { action: "REJECTED", message: "Preparation state could not be read. Refresh and try again." });
+  }
   const needsEnqueue =
     plan.action === "WOULD_ENQUEUE_TRANSCRIPTION" || plan.action === "WOULD_ENQUEUE_GENERATION";
   if (!needsEnqueue) {
-    const rejected = plan.action === "NO_VIDEO" || plan.action === "NOT_DRAFT" || plan.action === "NOT_FOUND";
-    return respond(rejected ? 409 : 200, { action: rejected ? "REJECTED" : plan.action, message: plan.message });
+    const rejected =
+      plan.action === "NO_VIDEO" ||
+      plan.action === "NOT_DRAFT" ||
+      plan.action === "NOT_FOUND" ||
+      plan.action === "REJECTED";
+    return respond(rejected ? 409 : 200, {
+      action: rejected ? "REJECTED" : plan.action,
+      message: plan.message,
+      rejectionCode: plan.rejectionCode ?? null,
+    });
   }
 
   const authorized = await hasFreshProcessingAuthorization({

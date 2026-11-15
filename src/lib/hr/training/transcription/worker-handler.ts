@@ -30,6 +30,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
+import { resolveInferenceModeForVersion } from "../generation/processing-authorization";
 import type { Principal } from "@/lib/rbac";
 import {
   claimNextTranscriptionJob,
@@ -131,6 +132,25 @@ export async function handleTranscribeJob(
       leaseToken: claim.leaseToken,
       failureCode: "SHA_MISMATCH",
       failureMessage: "Version video SHA changed under us.",
+      retryable: false,
+    });
+    return { status: "FAILED" };
+  }
+
+  // A version authorized for MOCK inference must never reach real
+  // Modal. This is the single choke point for Whisper, so it covers
+  // every enqueue path. Terminal, never retried.
+  const inferenceMode = await resolveInferenceModeForVersion({
+    clubId: claim.clubId,
+    courseVersionId: claim.courseVersionId,
+  });
+  if (inferenceMode === "MOCK") {
+    await recordJobFailed({
+      jobId: claim.jobId,
+      leaseToken: claim.leaseToken,
+      failureCode: "INTEGRITY_FAILURE",
+      failureMessage:
+        "This version is authorized for mock inference only; real transcription was refused.",
       retryable: false,
     });
     return { status: "FAILED" };

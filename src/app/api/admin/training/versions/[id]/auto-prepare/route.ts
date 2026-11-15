@@ -18,18 +18,6 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { audit } from "@/lib/audit";
-import {
-  buildPlanAndRequestGeneration,
-  BuildAndEnqueueRejected,
-} from "@/lib/hr/training/generation/enqueue-helper";
-import {
-  requestTranscription,
-  markQueued,
-  JobRejectedError,
-} from "@/lib/hr/training/transcription/job-service";
-import { enqueue } from "@/lib/queue";
-import { logger } from "@/lib/observability/logger";
-import { hasFreshProcessingAuthorization } from "@/lib/hr/training/generation/processing-authorization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -160,47 +148,12 @@ export async function POST(
     if (activeTranscribe) {
       report.transcript = { state: "ALREADY_QUEUED", jobId: activeTranscribe.id };
     } else {
-      // EP-TRAIN-4Y-AZ §3 — actually enqueue. Prior to AZ this branch
-      // only reported WOULD_ENQUEUE (the source comment said "In a
-      // non-mock build this is where enqueue() would run"), which left
-      // every new upload stalled at "Preparing video" indefinitely.
-      // The enqueue is governed by the existing gates inside
-      // requestTranscription (tenant scope, DRAFT-only, cost cap,
-      // credential precheck) — automation does NOT bypass them.
-      try {
-        const result = await requestTranscription(principal, clubId, {
-          courseVersionId: versionId,
-        });
-        if (!result.idempotent) {
-          await markQueued(clubId, result.jobId);
-          await enqueue({
-            kind: "TRAINING_TRANSCRIBE_VIDEO",
-            clubId,
-            payload: { jobId: result.jobId },
-            maxAttempts: 2,
-            idempotencyKey: `training-transcribe:${result.jobId}`,
-          });
-        }
-        report.transcript = {
-          state: result.idempotent ? "ALREADY_QUEUED" : "WOULD_ENQUEUE",
-          jobId: result.jobId,
-        };
-      } catch (err) {
-        if (err instanceof JobRejectedError) {
-          // Legitimate rejection (cost cap, credential absent, etc.)
-          // — surface for operator visibility but do NOT 4xx the
-          // orchestration report. The /preparation-status GET will
-          // reflect the actual DB state next poll.
-          logger.info("training.auto_prepare.transcribe_auto_enqueue.rejected", {
-            clubId,
-            courseVersionId: versionId,
-            rejectionCode: err.rejectionCode,
-          });
-          report.transcript = { state: "WOULD_ENQUEUE" };
-        } else {
-          throw err;
-        }
-      }
+      // EP-TRAIN-4Y-BE — report-only. Enqueueing lives in the
+      // preparation orchestrator (upload, transcription-complete,
+      // Continue preparation). This legacy route must never start
+      // GPU work: an upload now leaves a multi-use authorization on
+      // the version, and a lingering poller could otherwise spend it.
+      report.transcript = { state: "WOULD_ENQUEUE" };
     }
   }
 
@@ -247,60 +200,9 @@ export async function POST(
               : "ALREADY_QUEUED",
         runId: existingRun.id,
       };
-    } else if (!(await hasFreshProcessingAuthorization({
-      clubId,
-      courseVersionId: versionId,
-      operation: "GENERATE_FULL",
-    }))) {
-      // EP-TRAIN-4Y-BC §6 — durable authorization required. The BB
-      // 5-minute cooldown was insufficient against legacy-browser
-      // polling that persists past deploys. Only explicit user
-      // endpoints (/start-preparation, /authorize-recovery) can
-      // write a fresh authorization record; a GET or poll never does.
-      logger.info("training.auto_prepare.generation.refused_no_authorization", {
-        clubId, courseVersionId: versionId,
-      });
-      report.generation = { state: "WOULD_ENQUEUE" };
     } else {
-      // EP-TRAIN-4Y-V §5 — auto-trigger. Transcript is ready AND no
-      // run exists → enqueue the default-plan generation run NOW so
-      // the manager does not have to click a button. Idempotency is
-      // guaranteed by the (clubId, courseVersionId, transcriptBuildId,
-      // planIdentity) partial-unique index: repeated polls from the
-      // browser never create duplicate runs.
-      //
-      // The default plan (targetTotalQuestions=6) is used. The pilot
-      // 5+10 plan is NOT auto-triggered — pilot calls go through
-      // /generate with explicit overrides. When this auto-trigger
-      // wins the planIdentity race over an explicit pilot call, the
-      // pilot caller sees a DUPLICATE_LIVE_RUN rejection and must
-      // cancel the default run first.
-      try {
-        const result = await buildPlanAndRequestGeneration(principal, {
-          clubId,
-          courseVersionId: versionId,
-        });
-        report.generation = {
-          state: result.idempotent ? "ALREADY_QUEUED" : "WOULD_ENQUEUE",
-          runId: result.generationRunId,
-        };
-      } catch (err) {
-        if (err instanceof BuildAndEnqueueRejected) {
-          // Non-fatal: a legitimate rejection (missing transcript,
-          // version not draft, cost cap) is reported as WOULD_ENQUEUE
-          // for the UI's progress indicator, and the rejection code
-          // gets logged for operator diagnosis. We don't propagate
-          // the 4xx — the orchestration report is informational.
-          logger.info("training.auto_prepare.auto_trigger.rejected", {
-            clubId,
-            courseVersionId: versionId,
-            rejectionCode: err.rejectionCode,
-          });
-          report.generation = { state: "WOULD_ENQUEUE" };
-        } else {
-          throw err;
-        }
-      }
+      // EP-TRAIN-4Y-BE — report-only (see above).
+      report.generation = { state: "WOULD_ENQUEUE" };
     }
   }
 

@@ -37,6 +37,10 @@ kill_timeout = 60
   APP_URL = "https://staging.spectreautomation.com"
   NEXT_PUBLIC_APP_URL = "https://staging.spectreautomation.com"
   MAILBOX_MAX_ATTACHMENT_MB = "25"
+  # EP-TRAIN-4Y-BE — the transcription worker now chains into question
+  # generation, whose request precheck reads this non-secret flag. The
+  # real inference credentials already live on this app.
+  MODAL_HYBRID_ENABLED = "1"
   WORKER_POLL_MS = "1000"
   # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. Values
   # match the web app; both processes must resolve KMS + R2 identically.

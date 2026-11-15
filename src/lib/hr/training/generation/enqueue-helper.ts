@@ -143,11 +143,20 @@ export async function buildPlanAndRequestGeneration(
       courseVersionId: input.courseVersionId,
       resolvedTranscriptBuildId: build.resolvedTranscriptBuildId,
       sourceVideoSha256: version.videoSha256,
-      segments: segments.map((s) => ({ segmentIndex: s.segmentIndex, text: s.text })),
+      segments: segments.map((s) => ({
+        segmentIndex: s.segmentIndex,
+        text: s.text,
+        startSec: Number(s.startSec),
+        endSec: Number(s.endSec),
+      })),
       videoDurationSec: version.videoDurationSec,
       checkpointCount: effectiveCheckpointCount,
       finalCount: effectiveFinalCount,
-      checkpointGroupStrategy: input.checkpointGroupStrategy ?? "DEFAULT",
+      // A requested checkpoint count means that many checkpoint EVENTS
+      // (one question each), not that many questions packed into fewer
+      // events. Callers that want packing must ask for it explicitly.
+      checkpointGroupStrategy: input.checkpointGroupStrategy ?? "ONE_PER_GROUP",
+      chunkFinalAssessment: true,
       generatedByUserId: principal.id,
     });
   } else {

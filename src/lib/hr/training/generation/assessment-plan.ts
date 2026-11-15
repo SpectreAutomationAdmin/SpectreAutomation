@@ -352,8 +352,21 @@ export interface BuildPlanInput {
   /** Segment index + text for every persisted segment the plan
    *  builder is allowed to cite. Already filtered for tenant scope
    *  by the caller. */
-  readonly segments: readonly { readonly segmentIndex: number; readonly text: string }[];
+  readonly segments: readonly {
+    readonly segmentIndex: number;
+    readonly text: string;
+    /** Optional timing. When present, ONE_PER_GROUP checkpoints snap
+     *  to a segment boundary and bind to the objective actually
+     *  covered just before that moment. */
+    readonly startSec?: number;
+    readonly endSec?: number;
+  }[];
   readonly videoDurationSec: number | null;
+  /** Split a final assessment of more than 3 questions into chunks of
+   *  at most 3, each covering a contiguous part of the course. Keeps
+   *  every model call well inside its output limit and spreads the
+   *  questions across the whole video. */
+  readonly chunkFinalAssessment?: boolean;
   /** Operator-supplied target (clamped to 1-20). */
   readonly targetTotalQuestions?: number;
   readonly generatedByUserId?: string | null;
@@ -471,14 +484,43 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     : 30;
   if (checkpointTarget > 0 && groupCount > 0) {
     if (groupStrategy === "ONE_PER_GROUP") {
-      // N groups of exactly 1 question each at evenly spaced
-      // timestamps. Each group targets the single LO closest to its
-      // atSec (approximated by index).
+      // N checkpoint EVENTS of exactly 1 question each, evenly spaced.
+      // With segment timing the event snaps to the end of the nearest
+      // segment (the video pauses between sentences, not mid-word) and
+      // binds to the last objective fully covered before that moment,
+      // so the question is about what the employee has just watched.
+      const timed = eligibleSegments.filter(
+        (s): s is typeof s & { startSec: number; endSec: number } =>
+          typeof s.startSec === "number" && typeof s.endSec === "number",
+      );
+      const endSecBySegment = new Map(timed.map((s) => [s.segmentIndex, s.endSec]));
+      let previousAtSec = 0;
       for (let i = 0; i < groupCount; i++) {
-        const loAssignment = learningObjectives[Math.min(i, learningObjectives.length - 1)];
+        const idealSec = stepSec * (i + 1);
+        let atSec = Math.round(idealSec);
+        let loAssignment =
+          learningObjectives[
+            Math.min(
+              learningObjectives.length - 1,
+              Math.max(0, Math.floor(((i + 1) / (groupCount + 1)) * learningObjectives.length) - 1),
+            )
+          ];
+        if (timed.length > 0) {
+          let nearest = timed[0];
+          for (const s of timed) {
+            if (Math.abs(s.endSec - idealSec) < Math.abs(nearest.endSec - idealSec)) nearest = s;
+          }
+          if (nearest.endSec > previousAtSec) atSec = Math.round(nearest.endSec * 100) / 100;
+          for (const lo of learningObjectives) {
+            const lastSegmentId = lo.segmentIds[lo.segmentIds.length - 1];
+            const loEnd = endSecBySegment.get(lastSegmentId);
+            if (typeof loEnd === "number" && loEnd <= atSec) loAssignment = lo;
+          }
+        }
+        previousAtSec = atSec;
         proposedCheckpointGroups.push({
           id: `cg-${i + 1}`,
-          atSec: Math.round(stepSec * (i + 1)),
+          atSec,
           learningObjectiveIds: [loAssignment.id],
           targetQuestionCount: 1,
         });
@@ -509,6 +551,32 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     coverageLearningObjectiveIds: learningObjectives.map((lo) => lo.id),
   };
 
+  // Final-assessment chunks: contiguous slices of the objectives, at
+  // most 3 questions each, so coverage spans the whole course.
+  let proposedFinalAssessmentChunks: AssessmentPlanFinalAssessmentChunk[] | undefined;
+  if (input.chunkFinalAssessment === true && finalTarget > 3) {
+    const chunkCount = Math.ceil(finalTarget / 3);
+    const usableObjectives = learningObjectives.filter((lo) => lo.segmentIds.length > 0);
+    if (usableObjectives.length >= chunkCount) {
+      proposedFinalAssessmentChunks = [];
+      let remaining = finalTarget;
+      for (let c = 0; c < chunkCount; c++) {
+        const from = Math.floor((c * usableObjectives.length) / chunkCount);
+        const to = Math.floor(((c + 1) * usableObjectives.length) / chunkCount);
+        const slice = usableObjectives.slice(from, to);
+        const chunkTarget = Math.min(3, Math.ceil(remaining / (chunkCount - c)));
+        remaining -= chunkTarget;
+        proposedFinalAssessmentChunks.push({
+          id: `fa-${c + 1}`,
+          targetQuestionCount: chunkTarget,
+          coverageLearningObjectiveIds: slice.map((lo) => lo.id),
+          focusTopicLabel: `Part ${c + 1} of ${chunkCount}`,
+          eligibleSegmentIds: slice.flatMap((lo) => lo.segmentIds),
+        });
+      }
+    }
+  }
+
   const plan: AssessmentPlanV1 = {
     schemaVersion: ASSESSMENT_PLAN_SCHEMA_VERSION,
     courseVersionId: input.courseVersionId,
@@ -519,6 +587,7 @@ export function buildBaselineAssessmentPlan(input: BuildPlanInput): AssessmentPl
     eligibleSegmentIds,
     proposedCheckpointGroups,
     proposedFinalAssessment,
+    ...(proposedFinalAssessmentChunks ? { proposedFinalAssessmentChunks } : {}),
     totalTargetQuestionCount: target,
     sourceEvidenceRequirements: {
       mustCiteAtLeastOneSegmentPerQuestion: true,

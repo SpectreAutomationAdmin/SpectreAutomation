@@ -946,6 +946,27 @@ function classifyGenerationStage(input: GenerationStageInput): Stage {
     };
   }
 
+  // A plan that explicitly targets ZERO questions for this bucket (a
+  // single-bucket top-up) asks nothing of it in this run; an earlier
+  // run already satisfied it. Only an explicit 0 on a finished run
+  // qualifies — null (plan unreadable) stays indeterminate.
+  if (run?.executionStatus === "COMPLETED" && denominator === 0) {
+    return {
+      id: stageId,
+      label: STAGE_LABELS[stageId],
+      status: "COMPLETED",
+      progress: null,
+      startedAt: null,
+      completedAt: isoOrNull(run.completedAt),
+      lastActivityAt: isoOrNull(run.completedAt),
+      elapsedMs: null,
+      failureReason: null,
+      blockedReason: null,
+      canRecover: false,
+      measurementMethod: MEASUREMENT_METHOD[stageId],
+    };
+  }
+
   // Completed when numerator reaches denominator OR the run is COMPLETED
   // and we hit the plan's target for this bucket.
   if (effectiveDenominator && numerator >= effectiveDenominator) {

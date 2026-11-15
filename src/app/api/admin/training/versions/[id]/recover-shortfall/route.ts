@@ -34,6 +34,7 @@ import {
 } from "@/lib/hr/training/generation/destination-resolver";
 import { sizeForDuration, clampToBucket } from "@/lib/hr/training/generation/duration-sizing";
 import { hasFreshProcessingAuthorization } from "@/lib/hr/training/generation/processing-authorization";
+import { withPreparationLock } from "@/lib/hr/training/preparation-orchestrator";
 import { AppError, UnauthenticatedError } from "@/lib/errors";
 import { logger } from "@/lib/observability/logger";
 
@@ -145,12 +146,33 @@ export async function POST(
   }
 
   try {
-    const result = await buildPlanAndRequestGeneration(principal, {
-      clubId,
-      courseVersionId: versionId,
-      checkpointCount: shortfallCp,
-      finalCount: shortfallFa,
+    // Serialized with every other preparation trigger for this version,
+    // and refused while another run is live — two top-ups (two tabs,
+    // two managers) must never spend twice.
+    const result = await withPreparationLock(clubId, versionId, async () => {
+      const liveRun = await prisma.trainingQuestionAiGenerationRun.findFirst({
+        where: {
+          clubId,
+          courseVersionId: versionId,
+          executionStatus: { in: ["REQUESTED", "QUEUED", "RUNNING"] },
+        },
+        select: { id: true },
+      });
+      if (liveRun) return null;
+      return buildPlanAndRequestGeneration(principal, {
+        clubId,
+        courseVersionId: versionId,
+        checkpointCount: shortfallCp,
+        finalCount: shortfallFa,
+      });
     });
+    if (!result) {
+      return NextResponse.json({
+        ok: true,
+        outcome: "ALREADY_RUNNING",
+        message: "Questions are already being written for this course. Nothing else is needed.",
+      });
+    }
     logger.info("training.recover_shortfall.enqueued", {
       clubId, courseVersionId: versionId,
       target, produced: { checkpoint: producedCp, final: producedFa },
